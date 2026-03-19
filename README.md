@@ -1,13 +1,17 @@
-# Resonant
+<p align="center">
+  <img src="docs/banner.png" alt="Resonant" width="720" />
+</p>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Built with Claude](https://img.shields.io/badge/Built_with-Claude_Agent_SDK-6366f1.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6.svg)](https://www.typescriptlang.org/)
-[![SvelteKit](https://img.shields.io/badge/SvelteKit-2.0-ff3e00.svg)](https://svelte.dev/)
-[![Node.js](https://img.shields.io/badge/Node.js-20+-339933.svg)](https://nodejs.org/)
-[![Self Hosted](https://img.shields.io/badge/Self--Hosted-SQLite-003B57.svg)](https://www.sqlite.org/)
+<p align="center">
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" /></a>
+  <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Built_with-Claude_Agent_SDK-6366f1.svg" alt="Built with Claude" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178c6.svg" alt="TypeScript" /></a>
+  <a href="https://svelte.dev/"><img src="https://img.shields.io/badge/SvelteKit-2.0-ff3e00.svg" alt="SvelteKit" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-20+-339933.svg" alt="Node.js" /></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/Self--Hosted-SQLite-003B57.svg" alt="Self Hosted" /></a>
+</p>
 
-A relational AI companion framework built on Claude Code Agent SDK. Your AI remembers, reaches out, and grows — inside the security model you already trust.
+<p align="center"><em>A relational AI companion framework built on Claude Code Agent SDK.<br/>Your AI remembers, reaches out, and grows — inside the security model you already trust.</em></p>
 
 ## What makes this different
 
