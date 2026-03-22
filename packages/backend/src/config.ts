@@ -7,7 +7,7 @@ import yaml from 'js-yaml';
 // This is stable regardless of process.cwd(), which npm workspaces can change.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
+export const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
 
 export interface ResonantConfig {
   identity: {

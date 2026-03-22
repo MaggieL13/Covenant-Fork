@@ -1,12 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
-import { join, extname, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join, extname } from 'path';
 import crypto from 'crypto';
+import { PROJECT_ROOT } from '../config.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const FILES_DIR = join(__dirname, '../../data/files');
+const FILES_DIR = join(PROJECT_ROOT, 'data', 'files');
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 const ALLOWED_TYPES: Record<string, string> = {

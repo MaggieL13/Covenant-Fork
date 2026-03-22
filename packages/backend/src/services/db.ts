@@ -22,6 +22,8 @@ export function initDb(dbPath: string): Database.Database {
 
   // Enable WAL mode for better concurrency
   db.pragma('journal_mode = WAL');
+  // Busy timeout prevents SQLITE_BUSY errors under concurrent async access
+  db.pragma('busy_timeout = 5000');
 
   // Run migration
   const migrationPath = join(__dirname, '../../migrations/001_init.sql');

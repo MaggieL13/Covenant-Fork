@@ -1,27 +1,40 @@
 <script lang="ts">
   import '../app.css';
-  import { checkAuth, isAuthenticated, isChecking } from '$lib/stores/auth.svelte';
-  import { onMount } from 'svelte';
+  import { checkAuth, isAuthenticated, isChecking, isAuthRequired, stopAuthPolling } from '$lib/stores/auth.svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
 
   let { children } = $props();
+  let currentPath = $derived($page.url.pathname);
+  let isLoginPage = $derived(currentPath === '/login');
+
+  // Show children only when:
+  // - Auth check is done AND (authenticated OR on the login page OR auth not required)
+  let showChildren = $derived(
+    !isChecking() && (isAuthenticated() || isLoginPage || !isAuthRequired())
+  );
 
   onMount(async () => {
     await checkAuth();
 
     // If not authenticated and not on login page, redirect to login
-    if (!isAuthenticated() && window.location.pathname !== '/login') {
+    if (!isAuthenticated() && isAuthRequired() && !isLoginPage) {
       goto('/login');
     }
   });
+
+  onDestroy(() => {
+    stopAuthPolling();
+  });
 </script>
 
-{#if isChecking()}
+{#if showChildren}
+  {@render children()}
+{:else}
   <div class="loading-screen">
     <div class="spinner"></div>
   </div>
-{:else}
-  {@render children()}
 {/if}
 
 <style>

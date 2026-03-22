@@ -2,6 +2,22 @@ let authenticated = $state(false);
 let checking = $state(true);
 let authRequired = $state(true);
 
+// Backoff state for retry when server is unreachable
+let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
+const RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000];
+
+function getRetryDelay(): number {
+  return RETRY_DELAYS[Math.min(retryAttempt, RETRY_DELAYS.length - 1)];
+}
+
+function clearRetry(): void {
+  if (retryTimeout) {
+    clearTimeout(retryTimeout);
+    retryTimeout = null;
+  }
+}
+
 export async function checkAuth(): Promise<boolean> {
   checking = true;
 
@@ -17,10 +33,19 @@ export async function checkAuth(): Promise<boolean> {
     } else {
       authenticated = false;
     }
+    // Success — reset retry state
+    retryAttempt = 0;
+    clearRetry();
     return authenticated;
   } catch (err) {
-    console.error('Auth check failed:', err);
+    // Network error (server unreachable) — schedule retry with backoff
     authenticated = false;
+    retryAttempt++;
+    const delay = getRetryDelay();
+    clearRetry();
+    retryTimeout = setTimeout(() => {
+      checkAuth();
+    }, delay);
     return false;
   } finally {
     checking = false;
@@ -38,6 +63,8 @@ export async function login(password: string): Promise<{ success: boolean; error
 
     if (response.ok) {
       authenticated = true;
+      retryAttempt = 0;
+      clearRetry();
       return { success: true };
     } else {
       const data = await response.json();
@@ -60,6 +87,11 @@ export async function logout(): Promise<void> {
   } finally {
     authenticated = false;
   }
+}
+
+export function stopAuthPolling(): void {
+  clearRetry();
+  retryAttempt = 0;
 }
 
 export function isAuthenticated() {

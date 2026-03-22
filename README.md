@@ -62,7 +62,7 @@ Most AI chat apps are stateless wrappers around an API. Resonant is a **persiste
 
 > **New to this?** See [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) for a step-by-step guide with screenshots and troubleshooting.
 
-**Prerequisites:** [Node.js 20+](https://nodejs.org), [Claude Code](https://claude.ai/claude-code) (logged in)
+**Prerequisites:** [Node.js 20–24 LTS](https://nodejs.org) (Node 25+ is not supported — native addon crashes, see [#2](https://github.com/codependentai/resonant/issues/2)), [Claude Code](https://claude.ai/claude-code) (logged in)
 
 ```bash
 git clone https://github.com/codependentai/resonant.git
