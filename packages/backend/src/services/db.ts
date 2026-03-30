@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type {
@@ -26,10 +26,16 @@ export function initDb(dbPath: string): Database.Database {
   // Busy timeout prevents SQLITE_BUSY errors under concurrent async access
   db.pragma('busy_timeout = 5000');
 
-  // Run migration
+  // Run migrations
   const migrationPath = join(__dirname, '../../migrations/001_init.sql');
   const migrationSQL = readFileSync(migrationPath, 'utf-8');
   db.exec(migrationSQL);
+
+  const ccMigrationPath = join(__dirname, '../../migrations/002_command_center.sql');
+  if (existsSync(ccMigrationPath)) {
+    const ccMigrationSQL = readFileSync(ccMigrationPath, 'utf-8');
+    db.exec(ccMigrationSQL);
+  }
 
   // Insert default config if not exists
   const stmt = db.prepare('INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)');

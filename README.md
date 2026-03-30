@@ -108,6 +108,10 @@ agent:
 
 orchestrator:
   enabled: true                       # Autonomous scheduling
+
+command_center:
+  enabled: true                       # Life management system at /cc
+  currency_symbol: "$"                # For finances page
 ```
 
 Full reference: [examples/resonant.yaml](examples/resonant.yaml)
@@ -145,9 +149,28 @@ See [examples/themes/README.md](examples/themes/README.md) for the full variable
 - Message reactions
 - Reply-to context
 
+### Command Center (`/cc`)
+A built-in life management system your companion can access and manage from chat.
+
+- **Dashboard** — aggregate view of tasks, events, care, pets, countdowns, daily wins
+- **Planner** — tasks with projects, priorities, drag-and-drop, carry-forward
+- **Care Tracker** — config-driven wellness tracking (toggles, ratings, counters)
+- **Calendar** — events with recurrence
+- **Cycle Tracker** — period tracking with phase predictions
+- **Pet Care** — profiles, medications, vet events
+- **Lists** — shopping and general lists
+- **Finances** — expense tracking with configurable currency
+- **Stats** — trends for tasks, care, cycle, expenses
+- **12 MCP tools** — companion manages your life data from chat via `/mcp/cc`
+- All features configurable via `command_center:` in `resonant.yaml`
+
+### Slash Commands
+Type `/` in chat to browse commands. Auto-discovers installed skills. Includes UI commands (client-side) and SDK passthrough (agent-side).
+
 ### Voice
 - Voice recording with transcription (Groq Whisper)
 - Text-to-speech responses (ElevenLabs)
+- TTS read-aloud button on companion messages
 - Prosody analysis (Hume AI, optional)
 
 ### Agent Tools

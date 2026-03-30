@@ -63,6 +63,7 @@ import type { VoiceService } from '../services/voice.js';
 import type { TelegramService } from '../services/telegram/index.js';
 import type { PushService } from '../services/push.js';
 import rateLimit from 'express-rate-limit';
+import ccRoutes from './cc-routes.js';
 
 const router = Router();
 
@@ -853,6 +854,11 @@ router.post('/internal/embed-backfill', async (req, res) => {
 
 // --- Protected routes (auth required when password is set) ---
 router.use(authMiddleware);
+
+// --- Command Center ---
+if (getResonantConfig().command_center.enabled) {
+  router.use('/cc', ccRoutes);
+}
 
 // --- Preferences (resonant.yaml) ---
 

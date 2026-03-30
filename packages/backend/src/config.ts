@@ -64,6 +64,16 @@ export interface ResonantConfig {
       mcp_url: string;
     };
   };
+  command_center: {
+    enabled: boolean;
+    default_person: string;
+    currency_symbol: string;
+    care_categories: {
+      toggles: string[];
+      ratings: string[];
+      counters: { name: string; max: number }[];
+    };
+  };
   cors: {
     origins: string[];
   };
@@ -122,6 +132,16 @@ const DEFAULTS: ResonantConfig = {
     mind_cloud: {
       enabled: false,
       mcp_url: '',
+    },
+  },
+  command_center: {
+    enabled: false,
+    default_person: 'user',
+    currency_symbol: '$',
+    care_categories: {
+      toggles: ['breakfast', 'lunch', 'dinner', 'snacks', 'medication', 'movement', 'shower'],
+      ratings: ['sleep', 'energy', 'wellbeing', 'mood'],
+      counters: [{ name: 'water', max: 10 }],
     },
   },
   cors: {

@@ -124,26 +124,41 @@
     shouldAutoScroll = true;
   }
 
-  // Handle new thread creation
-  async function handleNewThread() {
-    const name = prompt('Enter thread name (leave blank for daily thread):');
-    if (name === null) return; // Cancelled
+  // New thread modal state
+  let newThreadOpen = $state(false);
+  let newThreadName = $state('');
+  let creatingThread = $state(false);
 
+  function handleNewThread() {
+    newThreadName = '';
+    newThreadOpen = true;
+  }
+
+  function closeNewThreadModal() {
+    if (creatingThread) return;
+    newThreadOpen = false;
+    newThreadName = '';
+  }
+
+  async function submitNewThread() {
+    if (creatingThread) return;
+    creatingThread = true;
     try {
       const response = await fetch('/api/threads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name || undefined })
+        body: JSON.stringify({ name: newThreadName.trim() || undefined }),
       });
-
       if (!response.ok) throw new Error('Failed to create thread');
-
       const data = await response.json();
       await loadThreads();
+      newThreadOpen = false;
+      newThreadName = '';
       await handleThreadSelect(data.thread.id);
     } catch (err) {
       console.error('Failed to create thread:', err);
-      alert('Failed to create thread');
+    } finally {
+      creatingThread = false;
     }
   }
 
@@ -272,9 +287,11 @@
       e.preventDefault();
       searchOpen = !searchOpen;
     }
-    if (e.key === 'Escape' && isStreamingNow) {
-      e.preventDefault();
-      sendStopGeneration();
+    if (e.key === 'Escape') {
+      if (newThreadOpen) { e.preventDefault(); closeNewThreadModal(); return; }
+      if (sidebarOpen) { e.preventDefault(); sidebarOpen = false; return; }
+      if (searchOpen) { e.preventDefault(); searchOpen = false; return; }
+      if (isStreamingNow) { e.preventDefault(); sendStopGeneration(); }
     }
   }
 
@@ -355,6 +372,11 @@
       </div>
 
       <div class="header-actions">
+        <a href="/cc" class="header-icon-btn" aria-label="Command Center" title="Command Center">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/>
+          </svg>
+        </a>
         <button class="header-icon-btn" onclick={toggleSearch} aria-label="Search messages (Ctrl+K)" title="Search (Ctrl+K)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
@@ -553,6 +575,38 @@
   <!-- Search overlay -->
   {#if searchOpen}
     <SearchPanel onresult={handleSearchResult} onclose={() => searchOpen = false} />
+  {/if}
+
+  <!-- New thread modal -->
+  {#if newThreadOpen}
+    <div class="modal-backdrop" role="presentation">
+      <button class="modal-backdrop-btn" onclick={closeNewThreadModal} aria-hidden="true" tabindex="-1"></button>
+      <div class="thread-modal" role="dialog" aria-modal="true" aria-label="New thread">
+        <div class="thread-modal-header">
+          <div>
+            <span class="thread-modal-eyebrow">New thread</span>
+            <h2 class="thread-modal-title">Start a conversation</h2>
+          </div>
+          <button class="thread-modal-close" onclick={closeNewThreadModal} aria-label="Close" disabled={creatingThread}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <input
+          class="thread-modal-input"
+          type="text"
+          placeholder="Leave blank for today's daily thread"
+          bind:value={newThreadName}
+          onkeydown={(e) => { if (e.key === 'Enter') submitNewThread(); }}
+          disabled={creatingThread}
+        />
+        <div class="thread-modal-actions">
+          <button class="thread-modal-btn cancel" onclick={closeNewThreadModal} disabled={creatingThread}>Cancel</button>
+          <button class="thread-modal-btn create" onclick={submitNewThread} disabled={creatingThread}>
+            {creatingThread ? 'Creating...' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -1047,4 +1101,121 @@
       flex-shrink: 0;
     }
   }
+
+  /* New thread modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-backdrop-btn {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    cursor: default;
+  }
+
+  .thread-modal {
+    position: relative;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    width: 90%;
+    max-width: 400px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .thread-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .thread-modal-eyebrow {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+
+  .thread-modal-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-top: 0.25rem;
+  }
+
+  .thread-modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+  }
+
+  .thread-modal-close:hover { color: var(--text-primary); }
+
+  .thread-modal-input {
+    height: 44px;
+    padding: 0 1rem;
+    background: var(--bg-input, var(--bg-tertiary));
+    border: 1px solid var(--border);
+    border-radius: 0.625rem;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-family: var(--font-body);
+    width: 100%;
+  }
+
+  .thread-modal-input:focus {
+    outline: none;
+    border-color: var(--gold-dim);
+  }
+
+  .thread-modal-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .thread-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .thread-modal-btn {
+    height: 40px;
+    padding: 0 1.25rem;
+    border-radius: 0.625rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+
+  .thread-modal-btn.cancel {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+
+  .thread-modal-btn.cancel:hover { border-color: var(--border-hover); color: var(--text-primary); }
+
+  .thread-modal-btn.create {
+    background: var(--gold-dim);
+    border: none;
+    color: var(--bg-primary);
+  }
+
+  .thread-modal-btn.create:hover { opacity: 0.9; }
+  .thread-modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

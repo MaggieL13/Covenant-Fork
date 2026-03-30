@@ -158,6 +158,38 @@ sc tg text "proactive message"
 
 ---
 
+## Command Center MCP Tools
+
+When `command_center.enabled` is true, 12 tools are available via the MCP endpoint at `/mcp/cc`. The companion uses these to manage life data from chat.
+
+| Tool | Actions | Description |
+|------|---------|-------------|
+| `cc_status` | — | Aggregated dashboard: tasks, events, care, cycle, pets, countdowns, wins |
+| `cc_task` | add, list, complete, update, delete | Task management with projects and priorities |
+| `cc_project` | add, list, update, delete | Project management with deadlines and colors |
+| `cc_care` | set, get, history | Wellness tracking (toggles, ratings, counters, notes) |
+| `cc_event` | add, list, update, delete | Calendar events with recurrence |
+| `cc_cycle` | status, history, predict, start_period, end_period, log | Cycle tracking with phase predictions |
+| `cc_pet` | add, list, update, log, med_add, med_given, upcoming | Pet care with medication schedules |
+| `cc_list` | create, view, list_all, add, check, delete_list, delete_item, clear | Shopping and general lists |
+| `cc_expense` | add, list, stats | Expense tracking with category breakdown |
+| `cc_countdown` | add, list, delete | Countdown timers to events |
+| `cc_daily_win` | — | Record one win per person per day |
+| `cc_presence` | get, set | Presence status with emoji and label |
+
+All tools accept JSON parameters via the MCP protocol. The companion's hooks system automatically includes CC status in its orientation context.
+
+---
+
+## Slash Commands
+
+Type `/` in the chat input to open the CommandPalette. Commands are auto-discovered from installed skills and built-in UI commands.
+
+- **UI commands** — executed client-side (e.g., theme toggle, navigation)
+- **SDK commands** — passed through to the agent as tool calls
+
+---
+
 ## Internal API
 
 All tools wrap localhost-only REST endpoints. These require no authentication — just the request must come from `127.0.0.1`.

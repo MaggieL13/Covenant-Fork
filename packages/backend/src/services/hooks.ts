@@ -97,7 +97,24 @@ export async function fetchLifeStatus(): Promise<string> {
   const config = getResonantConfig();
   const lifeApiUrl = config.integrations.life_api_url;
 
-  // If no life API configured, return empty
+  // If Command Center is enabled and no external life API, use local CC service
+  if (!lifeApiUrl && config.command_center.enabled) {
+    if (lifeStatusCache && (Date.now() - lifeStatusCache.fetchedAt) < LIFE_STATUS_CACHE_MS) {
+      return lifeStatusCache.text;
+    }
+    try {
+      const { getCcStatus } = await import('./cc.js');
+      const rawText = getCcStatus();
+      const condensed = condenseLifeStatus(rawText);
+      lifeStatusCache = { text: condensed, fetchedAt: Date.now() };
+      return condensed;
+    } catch (e) {
+      console.warn('[Hook] CC status error:', (e as Error).message);
+      return '';
+    }
+  }
+
+  // If no life API configured and no CC, return empty
   if (!lifeApiUrl) return '';
 
   // Return cached if fresh
@@ -236,7 +253,39 @@ async function fetchMoodHistory(): Promise<string | null> {
   const config = getResonantConfig();
   const lifeApiUrl = config.integrations.life_api_url;
 
-  // If no life API configured, skip
+  // If Command Center is enabled and no external life API, read from local DB
+  if (!lifeApiUrl && config.command_center.enabled) {
+    if (moodHistoryCache && (Date.now() - moodHistoryCache.fetchedAt) < MOOD_HISTORY_CACHE_MS) {
+      return moodHistoryCache.text;
+    }
+    try {
+      const { getCareEntries } = await import('./cc.js');
+      const userName = config.identity.user_name;
+      const today = new Date();
+      const parts: string[] = [];
+
+      for (const daysAgo of [2, 1]) {
+        const dt = new Date(today);
+        dt.setDate(dt.getDate() - daysAgo);
+        const dateStr = dt.toISOString().split('T')[0];
+        const entries = getCareEntries(dateStr);
+        const moodEntry = entries.find((e: any) => e.category === 'mood' && e.value);
+        if (moodEntry) {
+          const label = daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`;
+          parts.push(`${label}: ${userName}: mood ${moodEntry.value}/5`);
+        }
+      }
+
+      if (parts.length === 0) return null;
+      const text = `Mood trajectory: ${parts.join(' → ')}`;
+      moodHistoryCache = { text, fetchedAt: Date.now() };
+      return text;
+    } catch {
+      return null;
+    }
+  }
+
+  // If no life API configured and no CC, skip
   if (!lifeApiUrl) return null;
 
   if (moodHistoryCache && (Date.now() - moodHistoryCache.fetchedAt) < MOOD_HISTORY_CACHE_MS) {

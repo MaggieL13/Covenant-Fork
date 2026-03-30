@@ -104,6 +104,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // All API routes — auth middleware is applied selectively inside the router
 app.use('/api', apiRoutes);
 
+// Command Center MCP endpoint
+if (config.command_center.enabled) {
+  import('./routes/cc-mcp.js').then(m => app.use('/mcp/cc', m.default));
+}
+
 // Serve frontend static build (works in dev too if frontend is pre-built)
 const frontendPaths = [
   join(__dirname, '../../frontend/build'),         // From compiled dist/
