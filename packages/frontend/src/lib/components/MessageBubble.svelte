@@ -125,6 +125,70 @@
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
+  // Read aloud (on-demand TTS) — cache blob URLs by message ID across instances
+  const ttsCache = (globalThis as Record<string, unknown>).__ttsCache ??= new Map<string, string>();
+  let ttsState = $state<'idle' | 'loading' | 'playing'>('idle');
+  let ttsAudioEl: HTMLAudioElement | null = null;
+  const canReadAloud = $derived(message.role === 'companion' && contentType === 'text' && !isDeleted && message.content.length > 5);
+
+  async function toggleReadAloud() {
+    if (ttsState === 'playing' && ttsAudioEl) {
+      ttsAudioEl.pause();
+      ttsAudioEl = null;
+      ttsState = 'idle';
+      return;
+    }
+    if (ttsState === 'loading') return;
+
+    // Create and play a silent audio element NOW (during user gesture)
+    // so mobile browsers unlock playback. We swap in the real src once TTS loads.
+    const audio = new Audio();
+    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    try { await audio.play(); } catch { /* silent unlock attempt */ }
+    audio.pause();
+
+    ttsAudioEl = audio;
+    const cached = (ttsCache as Map<string, string>).get(message.id);
+
+    try {
+      let blobUrl: string;
+
+      if (cached) {
+        blobUrl = cached;
+      } else {
+        ttsState = 'loading';
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ text: message.content }),
+        });
+        if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
+        const blob = await res.blob();
+        if (blob.size === 0) throw new Error('TTS returned empty audio');
+        blobUrl = URL.createObjectURL(blob);
+        (ttsCache as Map<string, string>).set(message.id, blobUrl);
+      }
+
+      audio.onended = () => {
+        ttsState = 'idle';
+        ttsAudioEl = null;
+      };
+      audio.onerror = () => {
+        ttsState = 'idle';
+        ttsAudioEl = null;
+      };
+
+      audio.src = blobUrl;
+      await audio.play();
+      ttsState = 'playing';
+    } catch (err) {
+      console.error('[TTS] Read aloud failed:', err);
+      ttsState = 'idle';
+      ttsAudioEl = null;
+    }
+  }
+
   // Reactions
   interface Reaction { emoji: string; user: string; created_at: string }
   const reactions = $derived(() => {
@@ -395,6 +459,24 @@
 
     {#if !isDeleted && groupedReactions().length > 0}
       <div class="reactions-row">
+        {#if canReadAloud}
+          <button
+            class="read-aloud-btn"
+            class:loading={ttsState === 'loading'}
+            class:playing={ttsState === 'playing'}
+            onclick={toggleReadAloud}
+            disabled={ttsState === 'loading'}
+            title={ttsState === 'playing' ? 'Stop' : ttsState === 'loading' ? 'Generating...' : 'Read aloud'}
+          >
+            {#if ttsState === 'loading'}
+              <svg class="tts-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"/></svg>
+            {:else if ttsState === 'playing'}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            {:else}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            {/if}
+          </button>
+        {/if}
         {#each groupedReactions() as rxn (rxn.emoji)}
           <button
             class="reaction-chip"
@@ -421,6 +503,24 @@
       </div>
     {:else if !isDeleted && !isStreaming}
       <div class="reactions-row reactions-hover-only">
+        {#if canReadAloud}
+          <button
+            class="read-aloud-btn"
+            class:loading={ttsState === 'loading'}
+            class:playing={ttsState === 'playing'}
+            onclick={toggleReadAloud}
+            disabled={ttsState === 'loading'}
+            title={ttsState === 'playing' ? 'Stop' : ttsState === 'loading' ? 'Generating...' : 'Read aloud'}
+          >
+            {#if ttsState === 'loading'}
+              <svg class="tts-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"/></svg>
+            {:else if ttsState === 'playing'}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            {:else}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            {/if}
+          </button>
+        {/if}
         <div class="reaction-picker-wrapper">
           <button class="reaction-add" onclick={openReactionPicker} title="Add reaction">+</button>
           {#if pickerOpen}
@@ -794,6 +894,39 @@
 
   @keyframes toolSpin {
     to { transform: rotate(360deg); }
+  }
+
+  /* Read aloud button — inline with reaction chips */
+  .read-aloud-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    width: 26px;
+    padding: 0;
+    border-radius: var(--radius-sm, 0.25rem);
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .read-aloud-btn:hover:not(:disabled) {
+    color: var(--gold-dim);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .read-aloud-btn.playing {
+    color: var(--gold-dim);
+  }
+
+  .read-aloud-btn:disabled {
+    cursor: wait;
+  }
+
+  .tts-spinner {
+    animation: toolSpin 0.8s linear infinite;
   }
 
   /* Reactions */

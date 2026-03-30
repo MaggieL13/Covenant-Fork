@@ -962,6 +962,50 @@ router.put('/preferences', (req, res) => {
   }
 });
 
+// On-demand TTS — user clicks "read aloud" on a companion message
+router.post('/tts', async (req, res) => {
+  try {
+    const { text } = req.body as { text?: string };
+    if (!text || typeof text !== 'string') {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+
+    const voiceService = req.app.locals.voiceService as VoiceService | undefined;
+    if (!voiceService?.canTTS) {
+      res.status(503).json({ error: 'TTS not configured — set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in .env' });
+      return;
+    }
+
+    // Strip markdown for cleaner speech
+    const cleanText = text
+      .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')  // bold/italic
+      .replace(/`[^`]+`/g, '')                     // inline code
+      .replace(/```[\s\S]*?```/g, '')              // code blocks
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')     // links
+      .replace(/^#+\s*/gm, '')                     // headings
+      .replace(/^[-*]\s+/gm, '')                   // list markers
+      .replace(/\n{2,}/g, '\n')                    // excess newlines
+      .trim();
+
+    if (!cleanText) {
+      res.status(400).json({ error: 'No speakable text after stripping markup' });
+      return;
+    }
+
+    // Truncate to ~5000 chars (ElevenLabs limit / cost control)
+    const truncated = cleanText.length > 5000 ? cleanText.slice(0, 5000) : cleanText;
+    const audioBuffer = await voiceService.generateTTS(truncated);
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length.toString());
+    res.send(audioBuffer);
+  } catch (error) {
+    console.error('TTS error:', error);
+    res.status(500).json({ error: 'TTS generation failed' });
+  }
+});
+
 // Thread list with summary
 router.get('/threads', (req, res) => {
   try {
