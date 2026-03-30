@@ -105,9 +105,9 @@ export async function fetchLifeStatus(): Promise<string> {
     try {
       const { getCcStatus } = await import('./cc.js');
       const rawText = getCcStatus();
-      const condensed = condenseLifeStatus(rawText);
-      lifeStatusCache = { text: condensed, fetchedAt: Date.now() };
-      return condensed;
+      // getCcStatus() already returns compact format — no condensation needed
+      lifeStatusCache = { text: rawText, fetchedAt: Date.now() };
+      return rawText;
     } catch (e) {
       console.warn('[Hook] CC status error:', (e as Error).message);
       return '';
@@ -260,24 +260,27 @@ async function fetchMoodHistory(): Promise<string | null> {
     }
     try {
       const { getCareEntries } = await import('./cc.js');
-      const userName = config.identity.user_name;
       const today = new Date();
-      const parts: string[] = [];
+      const trajectory: string[] = [];
 
       for (const daysAgo of [2, 1]) {
         const dt = new Date(today);
         dt.setDate(dt.getDate() - daysAgo);
         const dateStr = dt.toISOString().split('T')[0];
         const entries = getCareEntries(dateStr);
-        const moodEntry = entries.find((e: any) => e.category === 'mood' && e.value);
-        if (moodEntry) {
+        const moodEntries = entries.filter((e: any) => e.category === 'mood' && e.value);
+        if (moodEntries.length > 0) {
           const label = daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`;
-          parts.push(`${label}: ${userName}: mood ${moodEntry.value}/5`);
+          const moodParts = moodEntries.map((m: any) => {
+            const name = (m.person || 'user').charAt(0).toUpperCase() + (m.person || 'user').slice(1);
+            return `${name}: ${m.value}${m.note ? ' ' + m.note : ''}`;
+          });
+          trajectory.push(`${label}: ${moodParts.join(', ')}`);
         }
       }
 
-      if (parts.length === 0) return null;
-      const text = `Mood trajectory: ${parts.join(' → ')}`;
+      if (trajectory.length === 0) return null;
+      const text = `Mood history: ${trajectory.join(' → ')}`;
       moodHistoryCache = { text, fetchedAt: Date.now() };
       return text;
     } catch {
@@ -1046,8 +1049,8 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     }
   } catch {}
 
-  // Life API status + mood history — fetch in parallel if configured
-  if (!ctx.isAutonomous && config.integrations.life_api_url) {
+  // Life API status + mood history — fetch in parallel if configured (or CC enabled)
+  if (!ctx.isAutonomous && (config.integrations.life_api_url || config.command_center.enabled)) {
     const [lifeStatus, moodHistory] = await Promise.all([
       fetchLifeStatus(),
       fetchMoodHistory(),
