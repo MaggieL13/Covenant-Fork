@@ -193,6 +193,21 @@ const TOOLS = [
     },
   },
   {
+    name: 'cc_scratchpad',
+    description: 'Persistent scratchpad — notes and tasks stay until removed. Actions: status (view all), add_note, add_task, add_event, remove_note, remove_task, clear_notes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['status', 'add_note', 'add_task', 'add_event', 'remove_note', 'remove_task', 'clear_notes'], description: 'Action' },
+        text: { type: 'string', description: 'Note/task text or event title (for add_note/add_task/add_event)' },
+        id: { type: 'string', description: 'Note or task ID (for remove_note/remove_task)' },
+        start_date: { type: 'string', description: 'Event date YYYY-MM-DD (for add_event, default: today)' },
+        start_time: { type: 'string', description: 'Event time HH:MM (for add_event)' },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'cc_presence',
     description: 'Get or set availability status.',
     inputSchema: {
@@ -382,6 +397,63 @@ function handleTool(name: string, args: any): string {
     case 'cc_daily_win':
       cc.upsertDailyWin({ text: args.text, who: args.who, date: args.date });
       return `Win logged for ${args.who || defaultPerson}: ${args.text}`;
+
+    case 'cc_scratchpad': {
+      const a = args.action;
+      const companionName = config.identity.companion_name.toLowerCase();
+      if (a === 'status') {
+        const data = cc.getScratchpad();
+        const lines: string[] = ['**Scratchpad**'];
+        if (data.events.length > 0) {
+          lines.push('**Today\'s events:**');
+          data.events.forEach((e: any) => lines.push(`  ${e.start_time || 'all day'} — ${e.title}${e.created_by ? ' (' + e.created_by + ')' : ''}`));
+        }
+        if (data.tasks.length > 0) {
+          lines.push('**Tasks:**');
+          data.tasks.forEach((t: any) => lines.push(`  [ ] ${t.text}${t.created_by ? ' (' + t.created_by + ')' : ''}`));
+        }
+        if (data.notes.length > 0) {
+          lines.push('**Notes:**');
+          data.notes.forEach((n: any) => lines.push(`  • ${n.text} (${n.created_by})`));
+        }
+        if (data.counts.events === 0 && data.counts.notes === 0 && data.counts.tasks === 0) {
+          lines.push('Nothing on the scratchpad yet.');
+        }
+        lines.push(`\n${data.counts.events} events today, ${data.counts.tasks} tasks, ${data.counts.notes} notes`);
+        return lines.join('\n');
+      }
+      if (a === 'add_note') {
+        if (!args.text) return 'Error: text is required for add_note.';
+        const note = cc.addScratchpadNote(args.text, companionName);
+        return `Note added: "${note.text}" (${note.id})`;
+      }
+      if (a === 'add_task') {
+        if (!args.text) return 'Error: text is required for add_task.';
+        const task = cc.addTask({ text: args.text, created_by: companionName });
+        return `Task added to scratchpad: "${task.text}" (${task.id})`;
+      }
+      if (a === 'add_event') {
+        if (!args.text) return 'Error: text is required for add_event.';
+        const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: config.identity.timezone });
+        const event = cc.addEvent({ title: args.text, start_date: args.start_date || todayDate, start_time: args.start_time, created_by: companionName });
+        return `Event added: "${event.title}" on ${event.start_date}${event.start_time ? ' at ' + event.start_time : ''} (${event.id})`;
+      }
+      if (a === 'remove_note') {
+        if (!args.id) return 'Error: id is required for remove_note.';
+        const ok = cc.deleteScratchpadNote(args.id);
+        return ok ? 'Note removed.' : 'Note not found.';
+      }
+      if (a === 'remove_task') {
+        if (!args.id) return 'Error: id is required for remove_task.';
+        cc.updateTask(args.id, { status: 'deleted' });
+        return 'Task removed.';
+      }
+      if (a === 'clear_notes') {
+        const count = cc.clearScratchpadNotes();
+        return `Cleared ${count} note(s).`;
+      }
+      return 'Unknown action. Use: status, add_note, add_task, remove_note, remove_task, clear_notes.';
+    }
 
     case 'cc_presence': {
       if (args.action === 'get') {

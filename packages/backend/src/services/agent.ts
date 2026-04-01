@@ -423,6 +423,8 @@ export class AgentService {
       includePartialMessages: true,
       thinking: { type: 'adaptive' },
       hooks: createHooks(hookContext),
+      // Plugin: native skill discovery from .claude/skills/
+      plugins: [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
       // Explicitly pass MCP servers — SDK isolation mode doesn't auto-discover .mcp.json
       ...(Object.keys(mcpServersFromConfig).length > 0 && { mcpServers: mcpServersFromConfig }),
     };

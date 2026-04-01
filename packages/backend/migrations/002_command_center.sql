@@ -188,3 +188,13 @@ CREATE TABLE IF NOT EXISTS daily_wins (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(date, who)
 );
+
+-- Scratchpad notes — persistent notes (no date scope, manual clear)
+CREATE TABLE IF NOT EXISTS scratchpad_notes (
+  id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  date TEXT NOT NULL,
+  created_by TEXT DEFAULT 'user',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

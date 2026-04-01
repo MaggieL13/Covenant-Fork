@@ -32,6 +32,7 @@ import type { TriggerContext } from './triggers.js';
 import { fetchLifeStatus } from './hooks.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
+import { runDigest } from './digest.js';
 
 // --- Orchestrator log ---
 
@@ -183,6 +184,7 @@ export class Orchestrator {
   private failsafeConcerned = DEFAULT_FAILSAFE_CONCERNED;
   private failsafeEmergency = DEFAULT_FAILSAFE_EMERGENCY;
   private pulseInterval: ReturnType<typeof setInterval> | null = null;
+  private digestInterval: ReturnType<typeof setInterval> | null = null;
   private pulseEnabled = false;
   private pulseFrequency = 15; // minutes
   private lastUserPresenceState: 'active' | 'idle' | 'offline' = 'offline';
@@ -327,8 +329,17 @@ export class Orchestrator {
       this.pulseInterval = setInterval(() => this.checkPulse(), this.pulseFrequency * 60 * 1000);
     }
 
+    // --- Scribe digest (every 30 minutes) ---
+    const digestEnabled = getConfigBool('digest.enabled', true);
+    if (digestEnabled) {
+      this.digestInterval = setInterval(() => {
+        runDigest(this.agent).catch(err => olog(`Digest error: ${err.message}`));
+      }, 30 * 60 * 1000);
+    }
+
     olog('Timers + Triggers: polling every 60s');
     olog(`Pulse: ${this.pulseEnabled ? `every ${this.pulseFrequency}m` : 'DISABLED'}`);
+    olog(`Scribe digest: ${digestEnabled ? 'every 30m' : 'DISABLED'}`);
   }
 
   stop(): void {
@@ -348,6 +359,10 @@ export class Orchestrator {
     if (this.pulseInterval) {
       clearInterval(this.pulseInterval);
       this.pulseInterval = null;
+    }
+    if (this.digestInterval) {
+      clearInterval(this.digestInterval);
+      this.digestInterval = null;
     }
   }
 

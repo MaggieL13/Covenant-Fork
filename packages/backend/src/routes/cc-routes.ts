@@ -312,6 +312,40 @@ router.post('/wins', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Scratchpad (daily plan)
+// ---------------------------------------------------------------------------
+
+router.get('/scratchpad', (_req, res) => {
+  res.json({ ok: true, ...cc.getScratchpad() });
+});
+
+router.post('/scratchpad/notes', (req, res) => {
+  const { text, created_by } = req.body;
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  const note = cc.addScratchpadNote(text, created_by);
+  res.json({ ok: true, note });
+});
+
+router.put('/scratchpad/notes/:id', (req, res) => {
+  try {
+    const note = cc.updateScratchpadNote(req.params.id, req.body.text);
+    res.json({ ok: true, note });
+  } catch (e: any) {
+    res.status(404).json({ ok: false, error: e.message });
+  }
+});
+
+router.delete('/scratchpad/notes/:id', (req, res) => {
+  const deleted = cc.deleteScratchpadNote(req.params.id);
+  res.json({ ok: true, deleted });
+});
+
+router.delete('/scratchpad/notes', (_req, res) => {
+  const cleared = cc.clearScratchpadNotes();
+  res.json({ ok: true, cleared });
+});
+
+// ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
 

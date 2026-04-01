@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import '../../resonant.css';
   import ResSkeleton from '$lib/components/ResSkeleton.svelte';
+  import DailyScratchpad from './DailyScratchpad.svelte';
   import { CC_API, todayStr } from '$lib/utils/cc';
 
   let loading = $state(true);
@@ -134,6 +135,8 @@
           <strong>{petAlerts.length}</strong>
         </a>
       </section>
+
+      <DailyScratchpad />
 
       <section class="feature-grid">
         {#if petAlerts.length > 0}
@@ -330,11 +333,13 @@
   }
 
   .home-shell {
-    min-height: 100dvh;
+    height: 100dvh;
     padding: calc(env(safe-area-inset-top, 0px) + 1rem) 1rem calc(env(safe-area-inset-bottom, 0px) + 1rem);
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .home-hero {
