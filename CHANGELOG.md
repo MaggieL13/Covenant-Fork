@@ -2,6 +2,32 @@
 
 All notable changes to Resonant will be documented in this file.
 
+## [2.1.0] - 2026-04-01
+
+### Scratchpad
+
+- **Daily scratchpad** on the Command Center home page — persistent notes, tasks, and events in one unified view
+- Quick-add with mode toggle (note/task/event), inline editing, task completion
+- `cc_scratchpad` MCP tool with actions: `status`, `add_note`, `add_task`, `add_event`, `remove_note`, `remove_task`, `clear_notes`
+- REST API endpoints under `/api/cc/scratchpad`
+- New `scratchpad_notes` database table (auto-migrated on startup)
+
+### The Scribe
+
+- Periodic conversation digest agent running every 30 minutes on Haiku
+- Produces daily markdown summaries in `data/digests/YYYY-MM-DD.md`
+- Extracts: topics, key quotes, decisions, open items, ideas, events/dates, projects touched, emotional arc
+- Uses configured `companion_name` and `user_name` for generalized prompts
+- Toggle with `digest.enabled` config key (enabled by default)
+
+### Other Changes
+
+- **Skills loading** — companion agent now discovers and loads skills from `.claude/skills/` directory automatically
+- **CC home scroll fix** — desktop view now scrolls past the scratchpad correctly
+- **13 MCP tools** — `cc_scratchpad` added to the Command Center tool set
+
+---
+
 ## [2.0.0] - 2026-03-30
 
 Resonant v2 is a major evolution — from a chat companion into a full companion ecosystem with life management, an overhauled UI, and deeper agent integration.
@@ -19,7 +45,7 @@ A built-in life management system your companion can access and manage from chat
 - **Lists** (`/cc/lists`) — Shopping and general lists with checkable items
 - **Finances** (`/cc/finances`) — Expense tracking with category breakdown and configurable currency
 - **Stats** (`/cc/stats`) — Trends dashboard for tasks, care, cycle, and expenses
-- **12 MCP tools** (`cc_status`, `cc_task`, `cc_project`, `cc_care`, `cc_event`, `cc_cycle`, `cc_pet`, `cc_list`, `cc_expense`, `cc_countdown`, `cc_daily_win`, `cc_presence`) accessible via `/mcp/cc`
+- **12 MCP tools** (`cc_status`, `cc_task`, `cc_project`, `cc_care`, `cc_event`, `cc_cycle`, `cc_pet`, `cc_list`, `cc_expense`, `cc_countdown`, `cc_daily_win`, `cc_presence`) accessible via `/mcp/cc` (13 as of v2.1.0)
 - **Hooks integration** — Companion context automatically includes Command Center status and mood history when enabled
 - **15 new database tables** with automatic migration on startup
 - Fully configurable: `command_center.enabled`, `default_person`, `currency_symbol`, `care_categories`

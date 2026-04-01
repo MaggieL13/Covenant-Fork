@@ -277,7 +277,7 @@ command_center:
 Once enabled, you get:
 - **Dashboard** at `/cc` — overview of your day
 - **Planner, Care, Calendar, Cycle, Pets, Lists, Finances, Stats** — accessible from the dashboard or the navigation menu
-- **12 MCP tools** — your companion can manage tasks, events, care entries, and more from chat (e.g., "add milk to the shopping list" or "how did I sleep this week?")
+- **13 MCP tools** — your companion can manage tasks, events, care entries, and more from chat (e.g., "add milk to the shopping list" or "how did I sleep this week?")
 - **Home icon** in the chat header links to the Command Center
 
 The database tables are created automatically on first startup.

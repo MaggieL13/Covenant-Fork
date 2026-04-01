@@ -161,7 +161,7 @@ A built-in life management system your companion can access and manage from chat
 - **Lists** — shopping and general lists
 - **Finances** — expense tracking with configurable currency
 - **Stats** — trends for tasks, care, cycle, expenses
-- **12 MCP tools** — companion manages your life data from chat via `/mcp/cc`
+- **13 MCP tools** — companion manages your life data from chat via `/mcp/cc`
 - All features configurable via `command_center:` in `resonant.yaml`
 
 ### Slash Commands

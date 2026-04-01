@@ -160,7 +160,7 @@ sc tg text "proactive message"
 
 ## Command Center MCP Tools
 
-When `command_center.enabled` is true, 12 tools are available via the MCP endpoint at `/mcp/cc`. The companion uses these to manage life data from chat.
+When `command_center.enabled` is true, 13 tools are available via the MCP endpoint at `/mcp/cc`. The companion uses these to manage life data from chat.
 
 | Tool | Actions | Description |
 |------|---------|-------------|
@@ -174,10 +174,34 @@ When `command_center.enabled` is true, 12 tools are available via the MCP endpoi
 | `cc_list` | create, view, list_all, add, check, delete_list, delete_item, clear | Shopping and general lists |
 | `cc_expense` | add, list, stats | Expense tracking with category breakdown |
 | `cc_countdown` | add, list, delete | Countdown timers to events |
+| `cc_scratchpad` | status, add_note, add_task, add_event, remove_note, remove_task, clear_notes | Persistent scratchpad — notes and tasks stay until removed |
 | `cc_daily_win` | — | Record one win per person per day |
 | `cc_presence` | get, set | Presence status with emoji and label |
 
 All tools accept JSON parameters via the MCP protocol. The companion's hooks system automatically includes CC status in its orientation context.
+
+---
+
+## The Scribe (Digest Agent)
+
+A background agent that runs every 30 minutes on Haiku, producing structured daily digests of conversation. Digests are saved to `data/digests/YYYY-MM-DD.md`.
+
+Each digest block extracts:
+- **Topics & Themes** — categorized by work, personal, health, creative, etc.
+- **Key Quotes** — attributed, significant moments
+- **Decisions Made** — what was resolved
+- **Open Items** — discussed but not actioned (the things that slip through cracks)
+- **Ideas & Plans** — "we should..." and "what if..." moments
+- **Events & Dates** — anything with a timeline
+- **Projects Touched** — what changed, shipped, or broke
+- **Emotional Arc** — observable mood shape of the conversation block
+
+### Configuration
+
+- Toggle: set `digest.enabled` to `false` in the config DB to disable
+- The Scribe skips runs when the companion is actively processing
+- Requires at least 5 new messages since the last digest
+- Uses `companion_name` and `user_name` from `resonant.yaml` for speaker labels
 
 ---
 
