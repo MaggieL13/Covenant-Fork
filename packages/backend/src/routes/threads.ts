@@ -12,6 +12,7 @@ import {
   getDb,
   pinThread,
   unpinThread,
+  getTodayThread,
 } from '../services/db.js';
 import { deleteFile } from '../services/files.js';
 import { registry } from '../services/ws.js';
@@ -71,13 +72,26 @@ router.get('/archived', (req, res) => {
   }
 });
 
-// Create named thread
+// Create named thread (blank name falls back to today's daily thread)
 router.post('/', (req, res) => {
   try {
     const { name } = req.body;
 
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ error: 'Thread name required' });
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      // Blank name — fall back to today's daily thread (get or create)
+      let thread = getTodayThread();
+      if (!thread) {
+        const now = new Date();
+        const todayName = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        thread = createThread({
+          id: crypto.randomUUID(),
+          name: todayName,
+          type: 'daily',
+          createdAt: now.toISOString(),
+          sessionType: 'v2',
+        });
+      }
+      res.json({ thread });
       return;
     }
 

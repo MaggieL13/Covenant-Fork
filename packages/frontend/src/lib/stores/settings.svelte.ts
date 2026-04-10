@@ -9,6 +9,7 @@ let failsafe = $state<{ enabled: boolean; gentle: number; concerned: number; eme
 let triggers = $state<TriggerStatus[]>([]);
 let orchestratorTasks = $state<OrchestratorTaskStatus[]>([]);
 let companionName = $state('Companion');
+let userName = $state('User');
 let loading = $state(false);
 
 // Load settings + orchestrator status + failsafe via REST
@@ -26,6 +27,7 @@ export async function loadSettings(): Promise<void> {
     if (prefsRes.ok) {
       const prefs = await prefsRes.json();
       if (prefs.identity?.companion_name) companionName = prefs.identity.companion_name;
+      if (prefs.identity?.user_name) userName = prefs.identity.user_name;
     }
 
     if (configRes.ok) {
@@ -181,4 +183,5 @@ export function getFailsafe() { return failsafe; }
 export function getTriggers() { return triggers; }
 export function getOrchestratorTasks() { return orchestratorTasks; }
 export function getCompanionName() { return companionName; }
+export function getUserName() { return userName; }
 export function isLoading() { return loading; }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { getCompanionName, getUserName } from '../stores/settings.svelte';
+
   let {
     onresult,
     onclose,
@@ -6,6 +8,9 @@
     onresult?: (result: { messageId: string; threadId: string }) => void;
     onclose?: () => void;
   }>();
+
+  const companionDisplayName = $derived(getCompanionName());
+  const userDisplayName = $derived(getUserName());
 
   interface SearchHit {
     messageId: string;
@@ -110,7 +115,7 @@
         {#each results as hit (hit.messageId)}
           <button class="search-result" onclick={() => handleResultClick(hit)}>
             <div class="result-header">
-              <span class="result-role" class:simon={hit.role === 'companion'}>{hit.role === 'companion' ? 'Simon' : 'Mary'}</span>
+              <span class="result-role" class:simon={hit.role === 'companion'}>{hit.role === 'companion' ? companionDisplayName : userDisplayName}</span>
               <span class="result-thread">{hit.threadName}</span>
               <span class="result-time">{formatTime(hit.createdAt)}</span>
             </div>

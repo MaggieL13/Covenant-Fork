@@ -1,6 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord } from './db.js';
+import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -141,6 +141,23 @@ function buildMcpServersForQuery(
   }
 
   return filtered;
+}
+
+// ---------------------------------------------------------------------------
+// Model resolution — checks DB config, YAML config, env, then defaults
+// ---------------------------------------------------------------------------
+function getConfiguredModel(isAutonomous: boolean): string {
+  const dbKey = isAutonomous ? 'agent.model_autonomous' : 'agent.model';
+  const dbValue = getDbConfig(dbKey);
+  if (dbValue) return dbValue;
+
+  const cfg = getResonantConfig();
+  const yamlValue = isAutonomous ? cfg.agent.model_autonomous : cfg.agent.model;
+  if (yamlValue) return yamlValue;
+
+  if (process.env.AGENT_MODEL) return process.env.AGENT_MODEL;
+
+  return 'claude-sonnet-4-6';
 }
 
 // Presence state
@@ -488,9 +505,8 @@ export class AgentService {
     // Build query options — V1 API (full config support)
     // Two-tier model: autonomous wakes use cheaper model (configurable)
     // Interactive queries use primary model (configurable)
-    const model = isAutonomous
-      ? cfg.agent.model_autonomous
-      : (cfg.agent.model || process.env.AGENT_MODEL || 'claude-sonnet-4-6');
+    // Priority: DB config > YAML config > env var > default
+    const model = getConfiguredModel(isAutonomous);
     const options: Options = {
       model,
       systemPrompt: claudeMdContent

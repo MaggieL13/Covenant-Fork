@@ -30,10 +30,22 @@
   let newPassword = $state('');
 
   const MODELS = [
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+    { id: 'claude-opus-4-6', label: 'Opus 4.6' },
+    { id: 'claude-opus-4-5-20250414', label: 'Opus 4.5' },
+    { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+    { id: 'claude-sonnet-4-5-20250414', label: 'Sonnet 4.5' },
+    { id: 'claude-haiku-4-5-20250414', label: 'Haiku 4.5' },
   ];
+
+  async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 10000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   const COMMON_TIMEZONES = [
     'UTC',
@@ -45,7 +57,7 @@
 
   async function loadPrefs() {
     try {
-      const res = await fetch('/api/preferences');
+      const res = await fetchWithTimeout('/api/preferences');
       if (!res.ok) throw new Error('Failed to load');
       prefs = await res.json();
       // Populate drafts
@@ -59,7 +71,11 @@
       discordEnabled = prefs!.discord.enabled;
       telegramEnabled = prefs!.telegram.enabled;
     } catch (e) {
-      error = 'Failed to load preferences';
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        error = 'Loading preferences timed out';
+      } else {
+        error = 'Failed to load preferences';
+      }
     } finally {
       loading = false;
     }
@@ -81,7 +97,7 @@
       if (newPassword) {
         updates.auth = { password: newPassword };
       }
-      const res = await fetch('/api/preferences', {
+      const res = await fetchWithTimeout('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -93,8 +109,12 @@
       } else {
         error = data.error || 'Failed to save';
       }
-    } catch {
-      error = 'Failed to save preferences';
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        error = 'Loading preferences timed out';
+      } else {
+        error = 'Failed to save preferences';
+      }
     } finally {
       saving = false;
     }

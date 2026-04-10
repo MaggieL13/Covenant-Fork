@@ -143,7 +143,7 @@ const DEFAULTS: ResonantConfig = {
     },
   },
   command_center: {
-    enabled: false,
+    enabled: true,
     default_person: 'user',
     currency_symbol: '$',
     care_categories: {

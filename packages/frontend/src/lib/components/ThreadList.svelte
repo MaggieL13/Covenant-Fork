@@ -5,12 +5,16 @@
     threads = [],
     activeThreadId = null,
     onselect,
-    oncreate
+    oncreate,
+    ondelete,
+    loadThreads,
   } = $props<{
     threads: ThreadSummary[];
     activeThreadId: string | null;
     onselect?: (threadId: string) => void;
     oncreate?: () => void;
+    ondelete?: (threadId: string) => void;
+    loadThreads?: () => Promise<void> | void;
   }>();
 
   let showArchived = $state(false);
@@ -193,7 +197,18 @@
   async function confirmDelete(threadId: string) {
     try {
       const response = await fetch(`/api/threads/${threadId}`, { method: 'DELETE' });
-      if (!response.ok) console.error('Failed to delete thread');
+      if (response.ok) {
+        // Auto-select next thread if the deleted one was active
+        if (activeThreadId === threadId) {
+          const nextId = getNextThreadIdAfterDelete(threadId);
+          if (nextId) onselect?.(nextId);
+        }
+        // Notify parent and refresh thread list
+        ondelete?.(threadId);
+        await loadThreads?.();
+      } else {
+        console.error('Failed to delete thread');
+      }
     } catch (err) {
       console.error('Failed to delete thread:', err);
     }
@@ -244,7 +259,31 @@
     e.stopPropagation();
     contextMenuThread = contextMenuThread === threadId ? null : threadId;
   }
+
+  function handleDocumentClick(e: MouseEvent) {
+    if (!contextMenuThread) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.context-menu')) return;
+    contextMenuThread = null;
+  }
+
+  function handleDocumentKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && contextMenuThread) {
+      contextMenuThread = null;
+    }
+  }
+
+  function getNextThreadIdAfterDelete(deletedId: string): string | null {
+    const idx = threads.findIndex((t: ThreadSummary) => t.id === deletedId);
+    if (idx === -1) return threads.length > 0 ? threads[0].id : null;
+    // Prefer the next thread, fall back to previous
+    if (idx < threads.length - 1) return threads[idx + 1].id;
+    if (idx > 0) return threads[idx - 1].id;
+    return null;
+  }
 </script>
+
+<svelte:document onclick={handleDocumentClick} onkeydown={handleDocumentKeydown} />
 
 {#snippet threadItem(thread: ThreadSummary)}
   {#if renamingThread === thread.id}
