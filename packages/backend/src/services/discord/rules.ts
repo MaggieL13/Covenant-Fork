@@ -2,12 +2,9 @@
 // First boot: loads from data/discord-rules.json, then persists to DB
 
 import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { getConfig, setConfig } from '../db.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { PROJECT_ROOT } from '../../config.js';
 
 export interface ServerRule {
   id: string;
@@ -47,7 +44,7 @@ export interface RulesData {
 }
 
 // Load rules from data directory (fallback for first boot)
-const RULES_PATH = join(__dirname, '../../../data/discord-rules.json');
+const RULES_PATH = join(PROJECT_ROOT, 'data', 'discord-rules.json');
 
 function loadRulesFromFile(): RulesData {
   try {

@@ -15,7 +15,7 @@ import { createServer } from 'http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync } from 'fs';
-import { loadConfig } from './config.js';
+import { loadConfig, PROJECT_ROOT } from './config.js';
 import { initDb, deleteExpiredSessions } from './services/db.js';
 import { loadVectorCache } from './services/vector-cache.js';
 import { createWebSocketServer, setVoiceService, setGatewayServices, registry } from './services/ws.js';
@@ -122,10 +122,12 @@ if (config.command_center.enabled) {
   import('./routes/cc-mcp.js').then(m => app.use('/mcp/cc', m.default));
 }
 
-// Serve frontend static build (works in dev too if frontend is pre-built)
+// Serve frontend static build — use PROJECT_ROOT for stable path resolution
+const FRONTEND_ROOT = join(PROJECT_ROOT, 'packages', 'frontend', 'build');
 const frontendPaths = [
-  join(__dirname, '../../frontend/build'),         // From compiled dist/
-  join(__dirname, '../../../packages/frontend/build'), // From src/ via tsx
+  FRONTEND_ROOT,                                       // From PROJECT_ROOT (preferred)
+  join(__dirname, '../../frontend/build'),              // Fallback: from compiled dist/
+  join(__dirname, '../../../packages/frontend/build'),  // Fallback: from src/ via tsx
 ];
 const frontendBuildPath = frontendPaths.find(p => existsSync(p));
 if (frontendBuildPath) {
