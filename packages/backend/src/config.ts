@@ -44,6 +44,9 @@ export interface ResonantConfig {
   hooks: {
     context_injection: boolean;
     safe_write_prefixes: string[];
+    platform_context_max_tokens: number;
+    cc_mcp_server_name: string;
+    mind_mcp_server_name: string;
   };
   voice: {
     enabled: boolean;
@@ -52,6 +55,7 @@ export interface ResonantConfig {
   discord: {
     enabled: boolean;
     owner_user_id: string;
+    history_limit: number;
   };
   telegram: {
     enabled: boolean;
@@ -114,6 +118,9 @@ const DEFAULTS: ResonantConfig = {
   hooks: {
     context_injection: true,
     safe_write_prefixes: [],
+    platform_context_max_tokens: 500,
+    cc_mcp_server_name: '',
+    mind_mcp_server_name: '',
   },
   voice: {
     enabled: false,
@@ -122,6 +129,7 @@ const DEFAULTS: ResonantConfig = {
   discord: {
     enabled: false,
     owner_user_id: '',
+    history_limit: 10,
   },
   telegram: {
     enabled: false,

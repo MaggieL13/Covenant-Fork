@@ -62,6 +62,87 @@ function ensureInit() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Dynamic MCP loading — keyword-gated to reduce token overhead (~2,000 tokens)
+// ---------------------------------------------------------------------------
+
+const CC_MCP_KEYWORDS = [
+  'task', 'tasks', 'care', 'cycle', 'pet', 'pets',
+  'expense', 'expenses', 'calendar', 'mood', 'wellness',
+  'scratchpad', 'countdown', 'win', 'daily win',
+  'list', 'lists', 'finance', 'finances', 'budget',
+  'event', 'events', 'period', 'planner', 'project',
+];
+
+const MIND_MCP_KEYWORDS = [
+  'remember', 'forget', 'memory', 'memories',
+  'feel', 'feeling', 'mood', 'dream', 'journal', 'identity',
+  'who am i', 'surface', 'orient', 'ground',
+  'tension', 'resolve', 'sit with', 'pattern', 'emotion',
+];
+
+function matchesKeyword(content: string, keywords: string[]): boolean {
+  const normalized = content.toLowerCase();
+  return keywords.some(kw => {
+    const pattern = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return pattern.test(normalized);
+  });
+}
+
+function shouldIncludeCcMcp(content: string, isAutonomous: boolean): boolean {
+  if (isAutonomous) return true;
+  return matchesKeyword(content, CC_MCP_KEYWORDS);
+}
+
+function shouldIncludeMindMcp(content: string, isAutonomous: boolean, isFirstMessage: boolean): boolean {
+  if (isAutonomous) return true;
+  if (isFirstMessage) return true;
+  return matchesKeyword(content, MIND_MCP_KEYWORDS);
+}
+
+function isCcMcpServer(name: string, serverConfig: McpServerConfig, ccServerName: string): boolean {
+  if (ccServerName && name === ccServerName) return true;
+  // Check if the URL ends with /mcp/cc
+  if ('url' in serverConfig && typeof serverConfig.url === 'string') {
+    return serverConfig.url.endsWith('/mcp/cc');
+  }
+  return false;
+}
+
+function isMindMcpServer(name: string, _serverConfig: McpServerConfig, mindServerName: string): boolean {
+  if (mindServerName && name === mindServerName) return true;
+  return name.toLowerCase().includes('mind');
+}
+
+function buildMcpServersForQuery(
+  allServers: Record<string, McpServerConfig>,
+  content: string,
+  isAutonomous: boolean,
+  isFirstMessage: boolean,
+): Record<string, McpServerConfig> {
+  const config = getResonantConfig();
+  const ccServerName = config.hooks.cc_mcp_server_name || '';
+  const mindServerName = config.hooks.mind_mcp_server_name || '';
+
+  const includeCc = shouldIncludeCcMcp(content, isAutonomous);
+  const includeMind = shouldIncludeMindMcp(content, isAutonomous, isFirstMessage);
+
+  const filtered: Record<string, McpServerConfig> = {};
+  for (const [name, serverConfig] of Object.entries(allServers)) {
+    if (!includeCc && isCcMcpServer(name, serverConfig, ccServerName)) {
+      console.log(`[MCP] Skipping CC MCP "${name}" (no keyword match)`);
+      continue;
+    }
+    if (!includeMind && isMindMcpServer(name, serverConfig, mindServerName)) {
+      console.log(`[MCP] Skipping Mind MCP "${name}" (no keyword match)`);
+      continue;
+    }
+    filtered[name] = serverConfig;
+  }
+
+  return filtered;
+}
+
 // Presence state
 let presenceStatus: 'active' | 'dormant' | 'waking' | 'offline' = 'offline';
 
@@ -426,7 +507,10 @@ export class AgentService {
       // Plugin: native skill discovery from .claude/skills/
       plugins: [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
       // Explicitly pass MCP servers — SDK isolation mode doesn't auto-discover .mcp.json
-      ...(Object.keys(mcpServersFromConfig).length > 0 && { mcpServers: mcpServersFromConfig }),
+      // Dynamic loading: CC and Mind MCP servers are keyword-gated to reduce token overhead
+      ...(Object.keys(mcpServersFromConfig).length > 0 && {
+        mcpServers: buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage),
+      }),
     };
 
     // Resume existing session if available
@@ -457,7 +541,7 @@ export class AgentService {
       // Build orientation context (thread, time, gap, status, vault)
       // Prepended to prompt because SessionStart hooks don't fire in V1 query()
       // Static content (CHAT TOOLS, skills, vault path) only on first message of session
-      const orientation = await buildOrientationContext(hookContext, isFirstMessage);
+      const orientation = await buildOrientationContext(hookContext, isFirstMessage, content);
       const enrichedPrompt = `[Context]\n${orientation}\n[/Context]\n\n${content}`;
 
       // Abort controller for stop_generation support

@@ -199,11 +199,12 @@ export class DiscordService {
 
       console.log(`[Discord] Processing from ${firstMessage.author.username} in ${channelId}`);
 
-      // Pre-fetch channel history (25 messages)
+      // Pre-fetch channel history (configurable, default 10)
       try {
         const channel = lastMessage.channel;
         if ('messages' in channel) {
-          const history = await (channel as TextChannel).messages.fetch({ limit: 25 });
+          const historyLimit = getResonantConfig().discord.history_limit ?? 10;
+          const history = await (channel as TextChannel).messages.fetch({ limit: historyLimit });
           batch.channelHistory = formatChannelHistory([...history.values()].reverse());
         }
       } catch (err) {

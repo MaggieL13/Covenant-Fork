@@ -100,6 +100,77 @@ export const EMOTIONAL_MARKERS: Record<string, string[]> = {
 // Skills scanning is now in ./skills.ts
 
 // ---------------------------------------------------------------------------
+// Tool reference injection keywords — only inject the large CHAT TOOLS block
+// when the user's message is likely to need it
+// ---------------------------------------------------------------------------
+
+const TOOL_REFERENCE_KEYWORDS = [
+  'slash command', 'slash commands', 'command palette', 'chat tools',
+  'tool reference', 'tool help', 'semantic search', 'canvas',
+  'share file', 'share files', 'routine', 'routines', 'failsafe',
+  'pulse', 'timer', 'timers', 'impulse', 'impulses', 'watcher',
+  'watchers', 'react to', 'voice note', 'search', 'backfill', 'embed',
+];
+
+function shouldInjectToolReference(ctx: HookContext, userMessage: string): boolean {
+  // Autonomous wakes always get tools
+  if (ctx.isAutonomous) return true;
+  // Slash commands
+  if (userMessage.trimStart().startsWith('/')) return true;
+  // First message in thread — check message count
+  try {
+    const msgs = getMessages({ threadId: ctx.threadId, limit: 2 });
+    if (msgs.length <= 1) return true;
+  } catch {}
+  // Keyword match (case-insensitive)
+  const lower = userMessage.toLowerCase();
+  return TOOL_REFERENCE_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ---------------------------------------------------------------------------
+// Token estimation and platform context constraining
+// ---------------------------------------------------------------------------
+
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function constrainPlatformContext(platformContext: string, maxTokens: number): string {
+  if (!platformContext) return platformContext;
+  if (maxTokens <= 0) return '';
+  if (estimateTokenCount(platformContext) <= maxTokens) return platformContext;
+
+  // Find history marker to preserve metadata, truncate transcript
+  const historyMarker = '=== RECENT CHANNEL HISTORY';
+  const markerIndex = platformContext.indexOf(historyMarker);
+  if (markerIndex === -1) {
+    // No history section, just truncate
+    const maxChars = maxTokens * 4;
+    return platformContext.slice(0, maxChars) + '\n[...truncated]';
+  }
+
+  const prefix = platformContext.slice(0, markerIndex).trimEnd();
+  const historySection = platformContext.slice(markerIndex);
+  const markerLineEnd = historySection.indexOf('\n');
+  const markerLine = markerLineEnd >= 0 ? historySection.slice(0, markerLineEnd) : historySection;
+  const transcript = markerLineEnd >= 0 ? historySection.slice(markerLineEnd + 1) : '';
+
+  const base = prefix ? `${prefix}\n\n${markerLine}` : markerLine;
+  if (estimateTokenCount(base) >= maxTokens || !transcript.trim()) return base;
+
+  // Keep newest messages that fit
+  const transcriptLines = transcript.split('\n').filter(l => l.length > 0);
+  const keptLines: string[] = [];
+  for (let i = transcriptLines.length - 1; i >= 0; i--) {
+    const candidate = `${base}\n${[transcriptLines[i], ...keptLines].join('\n')}`;
+    if (estimateTokenCount(candidate) > maxTokens) break;
+    keptLines.unshift(transcriptLines[i]);
+  }
+
+  return keptLines.length > 0 ? `${base}\n${keptLines.join('\n')}` : base;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -649,7 +720,7 @@ function formatTimeGap(minutes: number): string {
 // (SessionStart hooks don't fire in V1 query(), so we inject directly)
 // ---------------------------------------------------------------------------
 
-export async function buildOrientationContext(ctx: HookContext, includeStatic = true): Promise<string> {
+export async function buildOrientationContext(ctx: HookContext, includeStatic = true, userMessage = ''): Promise<string> {
   const config = getResonantConfig();
   const userName = config.identity.user_name;
   const companionName = config.identity.companion_name;
@@ -733,10 +804,10 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     }
   }
 
-  // Chat tools — injected EVERY message (companion loses these after compaction otherwise)
+  // Chat tools — conditionally injected (~750 tokens saved on casual messages)
   const agentCwd = config.agent.cwd.replace(/\\/g, '/');
   const cliPath = join(agentCwd, 'tools', 'sc.mjs');
-  if (existsSync(cliPath)) {
+  if (existsSync(cliPath) && shouldInjectToolReference(ctx, userMessage)) {
     const SC = `node ${cliPath.replace(/\\/g, '/')}`;
     parts.push([
       `CHAT TOOLS (run via Bash \u2014 threadId auto-injected):`,
@@ -832,9 +903,13 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     }
   } catch {}
 
-  // Append platform-specific context (channel history, etc.)
-  if (ctx.platformContext) {
-    parts.push(ctx.platformContext);
+  // Append platform-specific context (channel history, etc.) — bounded by token budget
+  const boundedPlatformContext = constrainPlatformContext(
+    ctx.platformContext || '',
+    config.hooks?.platform_context_max_tokens ?? 500,
+  );
+  if (boundedPlatformContext) {
+    parts.push(boundedPlatformContext);
   }
 
   console.log(`[Orientation] ${ctx.isAutonomous ? 'autonomous' : 'interactive'}, platform=${ctx.platform}, thread="${ctx.threadName}", time=${timeStr}`);
