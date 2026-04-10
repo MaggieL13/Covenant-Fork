@@ -10,18 +10,20 @@ let triggers = $state<TriggerStatus[]>([]);
 let orchestratorTasks = $state<OrchestratorTaskStatus[]>([]);
 let companionName = $state('Companion');
 let userName = $state('User');
+let commandCenterEnabled = $state(true);
 let loading = $state(false);
 
 // Load settings + orchestrator status + failsafe via REST
 export async function loadSettings(): Promise<void> {
   loading = true;
   try {
-    const [configRes, orchRes, failsafeRes, triggersRes, prefsRes] = await Promise.all([
+    const [configRes, orchRes, failsafeRes, triggersRes, prefsRes, identityRes] = await Promise.all([
       fetch('/api/settings', { credentials: 'include' }),
       fetch('/api/orchestrator/status', { credentials: 'include' }),
       fetch('/api/orchestrator/failsafe', { credentials: 'include' }),
       fetch('/api/orchestrator/triggers', { credentials: 'include' }),
       fetch('/api/preferences', { credentials: 'include' }),
+      fetch('/api/identity', { credentials: 'include' }),
     ]);
 
     if (prefsRes.ok) {
@@ -51,6 +53,11 @@ export async function loadSettings(): Promise<void> {
     if (triggersRes.ok) {
       const data = await triggersRes.json();
       triggers = data.triggers || [];
+    }
+
+    if (identityRes.ok) {
+      const data = await identityRes.json();
+      commandCenterEnabled = data.command_center_enabled ?? true;
     }
   } catch (err) {
     console.error('Failed to load settings:', err);
@@ -184,4 +191,5 @@ export function getTriggers() { return triggers; }
 export function getOrchestratorTasks() { return orchestratorTasks; }
 export function getCompanionName() { return companionName; }
 export function getUserName() { return userName; }
+export function isCommandCenterEnabled(): boolean { return commandCenterEnabled; }
 export function isLoading() { return loading; }

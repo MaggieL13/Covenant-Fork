@@ -40,7 +40,7 @@
     getLastCommandResult,
     clearCommandResult,
   } from '$lib/stores/websocket.svelte';
-  import { loadSettings, getCompanionName } from '$lib/stores/settings.svelte';
+  import { loadSettings, getCompanionName, isCommandCenterEnabled } from '$lib/stores/settings.svelte';
   import type { Message } from '@resonant/shared';
 
   // Reactive state from stores
@@ -418,11 +418,13 @@
       </div>
 
       <div class="header-actions">
+        {#if isCommandCenterEnabled()}
         <a href="/cc" class="header-icon-btn" aria-label="Command Center" title="Command Center">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/>
           </svg>
         </a>
+        {/if}
         <button class="header-icon-btn" onclick={toggleSearch} aria-label="Search messages (Ctrl+K)" title="Search (Ctrl+K)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>

@@ -76,6 +76,7 @@ router.get('/identity', (req, res) => {
     companion_name: config.identity.companion_name,
     user_name: config.identity.user_name,
     timezone: config.identity.timezone,
+    command_center_enabled: config.command_center?.enabled !== false,
   });
 });
 
