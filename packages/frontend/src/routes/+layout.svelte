@@ -8,18 +8,33 @@
   let { children } = $props();
   let currentPath = $derived($page.url.pathname);
   let isLoginPage = $derived(currentPath === '/login');
+  let isSetupPage = $derived(currentPath.startsWith('/setup'));
 
   // Show children only when:
-  // - Auth check is done AND (authenticated OR on the login page OR auth not required)
+  // - Auth check is done AND (authenticated OR on the login/setup page OR auth not required)
   let showChildren = $derived(
-    !isChecking() && (isAuthenticated() || isLoginPage || !isAuthRequired())
+    !isChecking() && (isAuthenticated() || isLoginPage || isSetupPage || !isAuthRequired())
   );
 
   onMount(async () => {
+    // Check if first-run setup is needed (before auth, since there's no password yet)
+    try {
+      const setupRes = await fetch('/api/setup/status');
+      if (setupRes.ok) {
+        const setupData = await setupRes.json();
+        if (setupData.needsSetup && !window.location.pathname.startsWith('/setup')) {
+          goto('/setup');
+          return;
+        }
+      }
+    } catch {
+      // Server not reachable — continue with normal auth flow
+    }
+
     await checkAuth();
 
-    // If not authenticated and not on login page, redirect to login
-    if (!isAuthenticated() && isAuthRequired() && !isLoginPage) {
+    // If not authenticated and not on login or setup page, redirect to login
+    if (!isAuthenticated() && isAuthRequired() && !isLoginPage && !isSetupPage) {
       goto('/login');
     }
   });
