@@ -73,26 +73,31 @@ npm install
 
 This downloads everything Resonant needs. It takes a minute or two.
 
-## Step 5: Run the Setup Wizard
+## Step 5: Build and Start
 
 ```bash
-node scripts/setup.mjs
+npm run build
+npm start
 ```
 
-The wizard asks you four questions:
+Open **http://localhost:3002** in your browser. Since this is your first time, you'll see the setup wizard:
 
-1. **What should your companion be called?** — Give it a name. "Echo" is the default.
-2. **What is your name?** — Your name, so the companion knows who it's talking to.
-3. **Set a password?** — Leave blank if you're only accessing it from your own computer. Set one if you'll access it over your network.
-4. **Your timezone?** — It auto-detects. Press Enter to accept or type a different one.
+1. **Meet Your Companion** — Choose a name for your companion, enter your name, set your timezone, and optionally set a password.
+2. **Give Them a Soul** — Describe their personality using the guided prompts, or switch to the raw editor for full markdown control.
+3. **You're All Set!** — Review your choices and click "Start Chatting."
 
-The wizard creates all the configuration files you need.
+The wizard creates all configuration files automatically. No need to edit anything by hand.
 
-## Step 6: Customize Your Companion's Personality
+> **Note:** The legacy terminal setup wizard is still available via `node scripts/setup.mjs` if you prefer command-line configuration.
 
-Open the file called `CLAUDE.md` in the resonant folder. This is your companion's personality — its instructions for how to behave, what to remember, and how to interact with you.
+## Customizing Your Companion
 
-The default is a simple friendly personality. Edit it to make it yours. For example:
+You can edit your companion's personality anytime:
+
+- **From the browser:** Go to Settings → Personality. Use the guided editor or switch to raw markdown mode.
+- **From a file:** Edit `CLAUDE.md` in the resonant folder directly. Changes take effect on the next message.
+
+For example, a personality file might look like:
 
 ```markdown
 # Luna — My Companion
@@ -106,30 +111,7 @@ When I'm stressed, you don't try to fix things — you just listen.
 When I'm excited about something, you match my energy.
 ```
 
-Save the file. Your companion reads this every time it responds.
-
-## Step 7: Build and Start
-
-```bash
-npm run build
-npm start
-```
-
-You should see:
-```
-Server running at http://127.0.0.1:3002
-Companion: Echo | User: Alex
-```
-
-## Step 8: Open the App
-
-Open your browser and go to:
-
-```
-http://localhost:3002
-```
-
-You'll see the chat interface. Type a message and hit Enter. Your companion will respond.
+Your companion reads `CLAUDE.md` every time it responds.
 
 ## What the Files Do
 
@@ -146,6 +128,8 @@ resonant/
 │   └── resonant.db        ← Your conversation history (SQLite database)
 └── ecosystem.config.cjs   ← PM2 config for running as a background service
 ```
+
+> **Tip:** Most of these files can be managed from the browser via Settings. You don't need to edit them manually unless you want to.
 
 **Files you should customize:**
 - `CLAUDE.md` — personality and behavior
@@ -261,7 +245,9 @@ This only needs to be done once. After that, `npm run build` and `npm start` wor
 
 ## Command Center
 
-Resonant includes a built-in life management system at `/cc`. Enable it in `resonant.yaml`:
+The Command Center is enabled by default. To disable it, set `command_center.enabled: false` in `resonant.yaml` and restart. The navigation link, routes, and MCP tools are all cleanly removed.
+
+You can customize it in `resonant.yaml`:
 
 ```yaml
 command_center:

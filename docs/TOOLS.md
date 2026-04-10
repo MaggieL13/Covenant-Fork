@@ -8,6 +8,32 @@ All commands auto-detect the current thread from `.resonant-thread` (written per
 
 ---
 
+## Configuration
+
+These settings in `resonant.yaml` control tool behavior:
+
+```yaml
+discord:
+  history_limit: 10          # Messages included in channel history (default: 10, was 25)
+
+hooks:
+  platform_context_max_tokens: 500   # Token budget for platform context
+  cc_mcp_server_name: ""             # Override CC MCP server detection
+  mind_mcp_server_name: ""           # Override Mind MCP server detection
+```
+
+### Dynamic MCP Loading
+
+MCP servers are loaded dynamically based on message content:
+
+- **Command Center MCP** — loaded when message contains keywords like "task", "calendar", "pet", "expense", etc.
+- **Mind MCP** — loaded on first message in a thread, autonomous wakes, or when message contains keywords like "remember", "memory", "feel", etc.
+- **All other MCP servers** — always loaded
+
+This uses word-boundary matching (`\bpet\b`) to prevent false positives like "compete" matching "pet".
+
+---
+
 ## Chat Tools
 
 ### Share Files

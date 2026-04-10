@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/codependentai/resonant/releases/latest"><img src="https://img.shields.io/github/v/release/codependentai/resonant?color=5eaba5" alt="Release" /></a>
+  <a href="https://github.com/codependentai/resonant/releases/latest"><img src="https://img.shields.io/github/v/release/codependentai/resonant?color=9b72cf" alt="Release" /></a>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License" /></a>
   <a href="https://docs.anthropic.com/en/docs/claude-code"><img src="https://img.shields.io/badge/Built_with-Claude_Agent_SDK-6366f1.svg" alt="Built with Claude" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178c6.svg" alt="TypeScript" /></a>
@@ -13,6 +13,8 @@
 </p>
 
 <p align="center"><em>A relational AI companion framework built on Claude Code Agent SDK.<br/>Your AI remembers, reaches out, and grows — inside the security model you already trust.</em></p>
+
+> **Covenant-Fork** — A hardened, optimized, and redesigned fork with browser-based setup, gothic theme, and 18 security fixes.
 
 <p align="center"><em>An open-source implementation of the relational-AI thesis: intelligence is plural, social, and persistent. Built as a natural-language harness on the Claude Agent SDK, with hooks that surface context before the model sees the prompt.</em></p>
 
@@ -31,6 +33,20 @@ Most AI chat apps are stateless wrappers around an API. Resonant is a **persiste
 - **Understands context** — hooks system injects time awareness, conversation flow, emotional markers, and presence state into every interaction. Claude Code's native memory system handles long-term recall
 - **Lives on multiple channels** — web UI, Discord, Telegram, voice (ElevenLabs TTS + Groq transcription)
 - **Runs on your machine** — no cloud dependency beyond your Claude Code subscription. SQLite database, local files, your data stays yours
+
+### Covenant-Fork Improvements
+
+This fork adds hardening, optimization, and quality-of-life features on top of Resonant's core:
+
+- **Browser-based setup wizard** — 3-step onboarding at `/setup` with first-run auto-redirect. No terminal configuration needed
+- **3-4x token optimization** — keyword-gated MCP tools, bounded platform context, configurable Discord history limits. Cuts 10-12x tokens per message in typical usage
+- **18 security fixes** — path traversal, prompt injection, WebSocket leak, CSP headers, input validation, rate limiting, and more
+- **Dark Gothic Art Nouveau theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents, ornate border gradients
+- **Command Center as toggleable DLC** — `command_center.enabled: false` fully disables CC (nav hidden, routes redirect, MCP unregistered)
+- **Personality editor** in Settings — guided mode with 4 friendly prompts plus a raw markdown editor
+- **MCP server manager** in Settings — add, remove, and view MCP servers from the browser
+- **Code block copy buttons**, **suggested prompts**, **toast notifications**, and **confirmation dialogs** throughout the UI
+- **Backend refactored** — api.ts split from 2182 to 694 lines across 5 route files, circular dependencies eliminated, hooks modularized
 
 ## Screenshots
 
@@ -67,15 +83,16 @@ Most AI chat apps are stateless wrappers around an API. Resonant is a **persiste
 **Prerequisites:** [Node.js 20–24 LTS](https://nodejs.org) (Node 25+ is not supported — native addon crashes, see [#2](https://github.com/codependentai/resonant/issues/2)), [Claude Code](https://claude.ai/claude-code) (logged in)
 
 ```bash
-git clone https://github.com/codependentai/resonant.git
-cd resonant
+git clone https://github.com/MaggieL13/Covenant-Fork.git
+cd Covenant-Fork
 npm install
-node scripts/setup.mjs    # Interactive setup wizard
 npm run build
 npm start
 ```
 
-Open `http://localhost:3002` and start talking.
+Open **http://localhost:3002** — the setup wizard guides you through everything. No terminal configuration needed.
+
+> Legacy terminal setup is still available via `npm run setup` if preferred.
 
 ## How It Works
 
@@ -270,7 +287,7 @@ resonant/
 │   ├── TOOLS.md             # Built-in agent tools reference
 │   └── semantic-search.md   # Semantic search setup & usage
 └── scripts/
-    └── setup.mjs        # Interactive setup wizard
+    └── setup.mjs        # Legacy terminal setup (browser wizard preferred)
 ```
 
 ## Development

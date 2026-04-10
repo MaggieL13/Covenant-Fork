@@ -2,6 +2,17 @@
 
 Resonant's hook system is what makes your companion context-aware. On every message, the system builds an orientation context that gets prepended to your prompt — giving your companion awareness of time, conversation state, your presence, and anything else you configure.
 
+## Architecture
+
+The hook system is modularized across several services:
+
+| File | Purpose |
+|------|---------|
+| `services/hooks.ts` | Core hook callbacks (PreToolUse, PostToolUse, SessionStart, etc.) and orientation context building |
+| `services/life-status.ts` | Life API integration — fetchLifeStatus(), condenseLifeStatus(), fetchMoodHistory() |
+| `services/skills.ts` | Skill discovery — scanSkills(), scanSkillSummaries() |
+| `services/registry.ts` | WebSocket connection registry (ConnectionRegistry class) |
+
 ## How It Works
 
 When you send a message, before it reaches Claude:
@@ -80,6 +91,17 @@ These fire automatically on every query:
 - **Session handoff** — notes from the previous session are carried forward
 - **Trigger awareness** — active watchers and impulses are listed
 - **Skill discovery** — scans `.claude/skills/` for available skills
+
+### Token Optimizations
+
+The orientation context is optimized to reduce token usage:
+
+- **Chat tools reference** (~750 tokens) — only injected on autonomous wakes, first messages, slash commands, or when keywords are detected
+- **Platform context** — bounded to `hooks.platform_context_max_tokens` (default 500 tokens), truncates oldest messages first
+- **CC MCP tools** (~2000 tokens) — dynamically loaded only when message contains relevant keywords (task, calendar, pet, etc.)
+- **Mind MCP tools** — loaded on first message, autonomous wakes, or keyword match
+
+These optimizations reduce per-message overhead from ~4,600 tokens to ~1,400 tokens (3-4x reduction).
 
 ## Configuring Safe Write Prefixes
 

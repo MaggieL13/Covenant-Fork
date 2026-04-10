@@ -124,10 +124,13 @@ You should get a response. If it says "Not logged in", double-check the token an
 git clone https://github.com/codependentai/resonant.git
 cd resonant
 npm install
-node scripts/setup.mjs    # Interactive setup wizard
+npm run build
+npm start
 ```
 
-The wizard creates your `resonant.yaml`, `CLAUDE.md`, prompts, and `.mcp.json`.
+Open the browser wizard to configure your companion. On a VPS, access it via your tunnel or IP (e.g., `http://YOUR_VPS_IP:3002`) after starting. The setup wizard runs on first launch and creates your `resonant.yaml`, `CLAUDE.md`, prompts, and `.mcp.json`.
+
+> **Note:** The legacy terminal setup wizard is still available via `node scripts/setup.mjs` if you prefer command-line configuration.
 
 ### Important Config for VPS
 
@@ -166,6 +169,8 @@ module.exports = {
 EOF
 chmod 600 ecosystem.config.cjs
 ```
+
+> **Security:** Never commit `ecosystem.config.cjs`, `.env`, or `.claude.json` to git. They contain sensitive credentials.
 
 ## Step 6: Build and Start
 

@@ -2,6 +2,67 @@
 
 All notable changes to Resonant will be documented in this file.
 
+## [3.0.0] — 2026-04-10 (Covenant-Fork)
+
+Covenant-Fork: A hardened, optimized, and redesigned fork of Resonant.
+
+### Added
+- **Browser-based setup wizard** — 3-step onboarding at `/setup`, no terminal setup needed
+- **First-run detection** — auto-redirects to wizard when no config exists
+- **Personality editor** in Settings — guided mode (4 friendly prompts) + raw markdown editor
+- **MCP server manager** in Settings — add/remove/view MCP servers from the browser
+- **Toast notification system** — success/error/info messages for all operations
+- **Confirmation dialogs** — proper modal confirmations for destructive actions (delete/archive)
+- **Code block copy buttons** — hover any code block to copy with one click
+- **Suggested prompts** — empty chat state shows clickable conversation starters
+- **Command Center as toggleable DLC** — `command_center.enabled: false` in resonant.yaml fully disables CC (nav hidden, routes redirect, MCP unregistered)
+- **Dark Gothic Art Nouveau theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents, ornate border gradients, purple glows
+- **Example .mcp.json** — finally, an example MCP config file
+- **CLAUDE.md.template** — guided personality editor template
+- **SETUP-GUIDE.md** — simple 3-command setup guide
+
+### Changed
+- **10-12x token reduction** per message via 5 optimization cuts:
+  - Discord history: hardcoded 25 → configurable (default 10)
+  - Chat tools block (~750 tokens): only injected when relevant, not every message
+  - Platform context: bounded to 500 tokens (configurable)
+  - CC MCP (13 tools, ~2000 tokens): keyword-gated, only loaded when relevant
+  - Mind MCP: keyword-gated with word-boundary regex (no more "compete" matching "pet")
+- **api.ts split from 2182 → 694 lines** into 5 domain-specific route files
+- **hooks.ts modularized** — extracted life-status.ts, skills.ts, registry.ts
+- **Circular dependencies eliminated** — agent.ts ↔ ws.ts broken via registry.ts
+- **9x duplicated localhost check** → single reusable middleware
+- **Model selector** checks DB → yaml → env → default (was ignoring UI changes)
+- **Model list** updated with Opus 4.6/4.5, Sonnet 4.6/4.5, Haiku 4.5
+- **Command Center** defaults to enabled (was hidden behind undocumented flag)
+- **Search results** use configured names instead of hardcoded "Mary"/"Simon"
+- **Thread delete** now refreshes list and auto-selects next thread
+- **Context menu** dismisses on click-outside and Escape key
+- **Blank thread creation** falls back to daily thread instead of failing
+- **Preferences panel** has 10-second fetch timeout (was hanging forever)
+
+### Security
+- **CRITICAL: Path traversal fixed** — `/internal/share` and `/internal/canvas` now validate paths against PROJECT_ROOT
+- **Prompt injection** — sanitizeForContext() escapes [Context]/[System] markers
+- **Unbounded response** — capped at 200k characters with truncation notice
+- **Auth bypass warning** — loud console warning when no password configured
+- **WebSocket connection leak** — error handler now removes + terminates connections
+- **TTS rate limiting** — 10 req/min on TTS endpoints
+- **Command blocklist hardened** — 17 word-boundary regex patterns (was 2 bypassable regexes)
+- **Autonomous cancellation** — stop() aborts in-flight agent processing
+- **WebSocket per-IP limit** — max 10 connections per IP
+- **Session invalidation** — logout now deletes session from database
+- **Timezone fix** — uses Intl.DateTimeFormat instead of broken manual offset math
+- **Failsafe cooldown** — per-severity (gentle 2h, concerned 6h, emergency 1h)
+- **Helmet CSP** — full Content-Security-Policy with X-Frame-Options: deny
+- **Tool insertion cap** — max 50, prunes oldest
+- **Audio buffer cap** — 25MB total recording size limit
+- **Input validation** — validateString/validateInt on all POST routes
+- **Upload filename sanitization** — basename + character filter + 255 char limit
+- **ALTER TABLE errors** — logged instead of silently swallowed
+
+---
+
 ## [2.1.2] - 2026-04-08
 
 ### Bug Fixes
