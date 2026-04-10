@@ -5,7 +5,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { AgentService } from './agent.js';
 import type { PushService } from './push.js';
-import { registry } from './ws.js';
+import { registry } from './registry.js';
 import {
   createThread,
   createMessage,
@@ -29,7 +29,7 @@ import {
 import type { Trigger, TriggerCondition } from './db.js';
 import { evaluateConditions } from './triggers.js';
 import type { TriggerContext } from './triggers.js';
-import { fetchLifeStatus } from './hooks.js';
+import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';

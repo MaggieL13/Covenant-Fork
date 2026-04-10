@@ -1,6 +1,6 @@
 import webpush from 'web-push';
 import { listPushSubscriptions, removePushSubscription, touchPushSubscription } from './db.js';
-import { registry } from './ws.js';
+import { registry } from './registry.js';
 
 export interface PushPayload {
   title: string;

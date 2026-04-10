@@ -4,7 +4,7 @@
 import crypto from 'crypto';
 import { saveFile } from './files.js';
 import { createMessage, updateThreadActivity } from './db.js';
-import { registry } from './ws.js';
+import { registry } from './registry.js';
 import { getResonantConfig } from '../config.js';
 
 const GROQ_WHISPER_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';

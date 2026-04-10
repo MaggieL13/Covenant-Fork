@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import crypto from 'crypto';
 import type { CommandRegistryEntry, ServerMessage } from '@resonant/shared';
-import { scanSkills } from './hooks.js';
+import { scanSkills } from './skills.js';
 import {
   getDb,
   getThread,

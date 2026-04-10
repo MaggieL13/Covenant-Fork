@@ -1,7 +1,7 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
 import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord } from './db.js';
-import { registry } from './ws.js';
+import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
 import type { PushService } from './push.js';

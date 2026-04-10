@@ -6,13 +6,13 @@ import { tmpdir } from 'os';
 // Mock heavy dependencies to avoid side effects
 vi.mock('./agent.js', () => ({ AgentService: vi.fn() }));
 vi.mock('./push.js', () => ({}));
-vi.mock('./ws.js', () => ({ registry: { getCount: vi.fn().mockReturnValue(0) } }));
+vi.mock('./registry.js', () => ({ registry: { getCount: vi.fn().mockReturnValue(0) } }));
 vi.mock('./db.js', () => ({
   getConfigBool: vi.fn().mockReturnValue(true),
   getConfigNumber: vi.fn().mockReturnValue(120),
   getConfig: vi.fn().mockReturnValue(null),
 }));
-vi.mock('./hooks.js', () => ({ fetchLifeStatus: vi.fn().mockResolvedValue('') }));
+vi.mock('./life-status.js', () => ({ fetchLifeStatus: vi.fn().mockResolvedValue('') }));
 vi.mock('./triggers.js', () => ({ evaluateConditions: vi.fn().mockReturnValue(true) }));
 vi.mock('./digest.js', () => ({ runDigest: vi.fn() }));
 vi.mock('../config.js', () => ({
