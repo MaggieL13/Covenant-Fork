@@ -9,6 +9,7 @@
   import AudioAutoPlayer from '$lib/components/AudioAutoPlayer.svelte';
   import ContextIndicator from '$lib/components/ContextIndicator.svelte';
   import ModelSelector from '$lib/components/ModelSelector.svelte';
+  import { showToast } from '$lib/stores/toast.svelte';
   import Canvas from '$lib/components/Canvas.svelte';
   import CanvasList from '$lib/components/CanvasList.svelte';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
@@ -188,12 +189,34 @@
   }
 
   // Handle batched send — text and/or files all go as one message → one agent query
-  function handleBatchSend(
+  async function handleBatchSend(
     content: string,
     files: Array<{ fileId: string; filename: string; mimeType: string; size: number; contentType: 'image' | 'audio' | 'file'; url: string }>,
     prosody?: Record<string, number>
   ) {
-    if (!activeThreadId) return;
+    if (!activeThreadId) {
+      // Auto-create a thread instead of silently dropping the message
+      try {
+        const res = await fetch('/api/threads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ name: '' }),
+        });
+        if (res.ok) {
+          const thread = await res.json();
+          await loadThread(thread.id);
+          // Small delay to let the thread activate
+          await new Promise(r => setTimeout(r, 100));
+        } else {
+          showToast('Failed to create thread', 'error');
+          return;
+        }
+      } catch {
+        showToast('Failed to create thread', 'error');
+        return;
+      }
+    }
 
     if (files.length === 0) {
       // Text only
@@ -242,12 +265,34 @@
     replyTo = null;
   }
 
-  // Send a suggested prompt
-  function sendSuggested(text: string) {
-    if (!activeThreadId) return;
+  // Send a suggested prompt — auto-create thread if none selected
+  async function sendSuggested(text: string) {
+    let threadId = activeThreadId;
+    if (!threadId) {
+      try {
+        const res = await fetch('/api/threads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ name: '' }),
+        });
+        if (res.ok) {
+          const thread = await res.json();
+          await loadThread(thread.id);
+          threadId = thread.id;
+          await new Promise(r => setTimeout(r, 100));
+        } else {
+          showToast('Failed to create thread', 'error');
+          return;
+        }
+      } catch {
+        showToast('Failed to create thread', 'error');
+        return;
+      }
+    }
     send({
       type: 'message',
-      threadId: activeThreadId,
+      threadId: threadId!,
       content: text,
       contentType: 'text',
     });
