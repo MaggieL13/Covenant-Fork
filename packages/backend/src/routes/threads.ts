@@ -75,7 +75,8 @@ router.get('/archived', (req, res) => {
 // Create named thread (blank name falls back to today's daily thread)
 router.post('/', (req, res) => {
   try {
-    const { name } = req.body;
+    const rawName = req.body.name;
+    const name = typeof rawName === 'string' ? rawName.slice(0, 200) : rawName;
 
     if (!name || typeof name !== 'string' || !name.trim()) {
       // Blank name — fall back to today's daily thread (get or create)
@@ -249,7 +250,8 @@ router.delete('/:id', (req, res) => {
 router.patch('/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const rawName = req.body.name;
+    const name = typeof rawName === 'string' ? rawName.slice(0, 200) : rawName;
 
     if (!name || typeof name !== 'string') {
       res.status(400).json({ error: 'Thread name required' });

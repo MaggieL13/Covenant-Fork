@@ -11,6 +11,7 @@ import type { ServerMessage } from '@resonant/shared';
 export interface ExtendedWebSocket extends WebSocket {
   isAlive: boolean;
   userId: string;
+  remoteIp: string;
   voiceModeEnabled: boolean;
   audioChunks: Buffer[];
   isRecording: boolean;
@@ -31,24 +32,42 @@ export class ConnectionRegistry {
   private connections = new Map<string, Set<ExtendedWebSocket>>();
   private _lastUserActivity: Date = new Date();
   private _lastUserWebActivity: Date = new Date(0);
+  private connectionsByIp = new Map<string, number>();
+  private readonly MAX_CONNECTIONS_PER_IP = 10;
 
-  add(userId: string, ws: ExtendedWebSocket): void {
+  canAcceptConnection(ip: string): boolean {
+    const current = this.connectionsByIp.get(ip) || 0;
+    return current < this.MAX_CONNECTIONS_PER_IP;
+  }
+
+  add(userId: string, ws: ExtendedWebSocket, ip?: string): void {
     if (!this.connections.has(userId)) {
       this.connections.set(userId, new Set());
     }
     this.connections.get(userId)!.add(ws);
+    if (ip) {
+      this.connectionsByIp.set(ip, (this.connectionsByIp.get(ip) || 0) + 1);
+    }
     if (userId === 'user') {
       this._lastUserActivity = new Date();
       this._lastUserWebActivity = new Date();
     }
   }
 
-  remove(userId: string, ws: ExtendedWebSocket): void {
+  remove(userId: string, ws: ExtendedWebSocket, ip?: string): void {
     const userConnections = this.connections.get(userId);
     if (userConnections) {
       userConnections.delete(ws);
       if (userConnections.size === 0) {
         this.connections.delete(userId);
+      }
+    }
+    if (ip) {
+      const current = this.connectionsByIp.get(ip) || 0;
+      if (current <= 1) {
+        this.connectionsByIp.delete(ip);
+      } else {
+        this.connectionsByIp.set(ip, current - 1);
       }
     }
   }

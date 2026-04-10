@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { readFileSync, existsSync } from 'fs';
-import { basename } from 'path';
+import { basename, resolve, normalize } from 'path';
+import rateLimit from 'express-rate-limit';
+import { PROJECT_ROOT } from '../config.js';
 import {
   listThreads,
   getThread,
@@ -36,14 +38,45 @@ import type { Orchestrator } from '../services/orchestrator.js';
 import type { VoiceService } from '../services/voice.js';
 import type { TelegramService } from '../services/telegram/index.js';
 
+// --- Input validation helpers ---
+
+function validateString(val: unknown, maxLen: number = 10000): string | null {
+  if (typeof val !== 'string') return null;
+  return val.slice(0, maxLen);
+}
+
+function validateInt(val: unknown, min: number = 0, max: number = Number.MAX_SAFE_INTEGER): number | null {
+  const n = typeof val === 'string' ? parseInt(val, 10) : Number(val);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return Math.floor(n);
+}
+
 const router = Router();
 
 // Apply localhost guard to ALL internal routes
 router.use(requireLocalhost);
 
+// --- Security: Path containment validation ---
+function isPathAllowed(filePath: string): boolean {
+  if (filePath.includes('\0')) return false;
+  const resolvedPath = resolve(filePath);
+  const safePrefixes = [PROJECT_ROOT, resolve(PROJECT_ROOT, '..')];
+  return safePrefixes.some(prefix => resolvedPath.startsWith(prefix + '/') || resolvedPath.startsWith(prefix + '\\'));
+}
+
+// --- Rate limiter for TTS endpoint ---
+const ttsRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'TTS rate limit exceeded. Try again in a minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // TTS endpoint — companion sends voice notes via curl from localhost
-router.post('/tts', async (req, res) => {
-  const { text, threadId: explicitThreadId } = req.body;
+router.post('/tts', ttsRateLimiter, async (req, res) => {
+  const text = validateString(req.body.text, 10000);
+  const explicitThreadId = validateString(req.body.threadId, 200);
   if (!text) {
     res.status(400).json({ error: 'text is required' });
     return;
@@ -87,6 +120,16 @@ router.post('/share', (req, res) => {
   const { path: filePath, threadId: explicitThreadId, caption } = req.body;
   if (!filePath || typeof filePath !== 'string') {
     res.status(400).json({ error: 'path is required' });
+    return;
+  }
+
+  if (filePath.includes('\0')) {
+    res.status(400).json({ error: 'Invalid file path' });
+    return;
+  }
+
+  if (!isPathAllowed(filePath)) {
+    res.status(403).json({ error: 'Path outside allowed directory' });
     return;
   }
 
@@ -162,6 +205,7 @@ router.post('/telegram-send', async (req, res) => {
         break;
 
       case 'photo': {
+        if (filePath && !isPathAllowed(filePath)) { res.status(403).json({ error: 'Path outside allowed directory' }); return; }
         const source = url || (filePath && existsSync(filePath) ? readFileSync(filePath) : null);
         if (!source) { res.status(400).json({ error: 'url or valid path required' }); return; }
         await telegramService.sendPhotoToOwner(source, caption);
@@ -169,6 +213,7 @@ router.post('/telegram-send', async (req, res) => {
       }
 
       case 'document': {
+        if (filePath && !isPathAllowed(filePath)) { res.status(403).json({ error: 'Path outside allowed directory' }); return; }
         const docSource = url || (filePath && existsSync(filePath) ? readFileSync(filePath) : null);
         if (!docSource) { res.status(400).json({ error: 'url or valid path required' }); return; }
         await telegramService.sendDocumentToOwner(docSource, filename || basename(filePath || 'file'), caption);
@@ -176,6 +221,7 @@ router.post('/telegram-send', async (req, res) => {
       }
 
       case 'animation': {
+        if (filePath && !isPathAllowed(filePath)) { res.status(403).json({ error: 'Path outside allowed directory' }); return; }
         const animSource = url || (filePath && existsSync(filePath) ? readFileSync(filePath) : null);
         if (!animSource) { res.status(400).json({ error: 'url or valid path required' }); return; }
         await telegramService.sendAnimationToOwner(animSource, caption);
@@ -214,6 +260,14 @@ router.post('/canvas', (req, res) => {
   // Resolve content: filePath takes priority over inline content
   let resolvedContent = content || '';
   if (filePath && typeof filePath === 'string') {
+    if (filePath.includes('\0')) {
+      res.status(400).json({ error: 'Invalid file path' });
+      return;
+    }
+    if (!isPathAllowed(filePath)) {
+      res.status(403).json({ error: 'Path outside allowed directory' });
+      return;
+    }
     if (!existsSync(filePath)) {
       res.status(404).json({ error: 'File not found on disk' });
       return;
@@ -360,7 +414,11 @@ router.post('/timer', (req, res) => {
   try {
     switch (action) {
       case 'create': {
-        const { label, fireAt, threadId, context, prompt } = req.body;
+        const label = validateString(req.body.label, 500);
+        const fireAt = validateString(req.body.fireAt, 100);
+        const threadId = validateString(req.body.threadId, 200);
+        const context = validateString(req.body.context, 5000);
+        const prompt = validateString(req.body.prompt, 10000);
         if (!label || !fireAt || !threadId) {
           res.status(400).json({ error: 'label, fireAt, and threadId required' });
           return;
@@ -383,10 +441,10 @@ router.post('/timer', (req, res) => {
         const timer = createTimer({
           id: crypto.randomUUID(),
           label,
-          context,
+          context: context ?? undefined,
           fireAt: fireDate.toISOString(),
           threadId,
-          prompt,
+          prompt: prompt ?? undefined,
           createdAt: new Date().toISOString(),
         });
 
@@ -428,7 +486,12 @@ router.post('/trigger', (req, res) => {
   try {
     switch (action) {
       case 'create': {
-        const { kind, label, conditions, prompt, threadId, cooldownMinutes } = req.body;
+        const kind = validateString(req.body.kind, 50);
+        const label = validateString(req.body.label, 500);
+        const { conditions } = req.body;
+        const prompt = validateString(req.body.prompt, 10000);
+        const threadId = validateString(req.body.threadId, 200);
+        const cooldownMinutes = req.body.cooldownMinutes;
         if (!kind || !label || !conditions) {
           res.status(400).json({ error: 'kind, label, and conditions required' });
           return;
@@ -456,8 +519,8 @@ router.post('/trigger', (req, res) => {
           kind,
           label,
           conditions: conditions as TriggerCondition[],
-          prompt,
-          threadId,
+          prompt: prompt ?? undefined,
+          threadId: threadId ?? undefined,
           cooldownMinutes: cooldownMinutes ? parseInt(cooldownMinutes, 10) : undefined,
           createdAt: new Date().toISOString(),
         });

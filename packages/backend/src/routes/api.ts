@@ -2,7 +2,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, resolve } from 'path';
+import { basename, join, resolve } from 'path';
 import yaml from 'js-yaml';
 import {
   getAllConfig,
@@ -269,7 +269,9 @@ router.post('/files', uploadRateLimiter, upload.single('file'), (req, res) => {
       return;
     }
 
-    const fileMeta = saveFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+    const rawName = req.file.originalname || 'unnamed';
+    const safeName = basename(rawName).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
+    const fileMeta = saveFile(req.file.buffer, safeName, req.file.mimetype);
     res.json(fileMeta);
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Upload failed';

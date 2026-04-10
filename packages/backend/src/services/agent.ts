@@ -478,7 +478,9 @@ export class AgentService {
     const streamMsgId = crypto.randomUUID();
 
     // Response and tool tracking (declared early so hookContext can reference)
+    const MAX_RESPONSE_LENGTH = 200_000; // ~50k tokens
     let fullResponse = '';
+    let responseTruncated = false;
     const toolInsertions: ToolInsertion[] = [];
     const thinkingBlocks: ThinkingInsertion[] = [];
     let currentThinkingAccum = '';
@@ -631,14 +633,21 @@ export class AgentService {
           if (assistantMsg.message?.content) {
             for (const block of assistantMsg.message.content) {
               if (block.type === 'text' && block.text) {
-                if (fullResponse) fullResponse += '\n\n' + block.text;
-                else fullResponse = block.text;
+                if (!responseTruncated) {
+                  if (fullResponse) fullResponse += '\n\n' + block.text;
+                  else fullResponse = block.text;
 
-                registry.broadcast({
-                  type: 'stream_token',
-                  messageId: streamMsgId,
-                  token: fullResponse,
-                });
+                  if (fullResponse.length > MAX_RESPONSE_LENGTH) {
+                    fullResponse = fullResponse.slice(0, MAX_RESPONSE_LENGTH) + '\n[Response truncated due to length]';
+                    responseTruncated = true;
+                  }
+
+                  registry.broadcast({
+                    type: 'stream_token',
+                    messageId: streamMsgId,
+                    token: fullResponse,
+                  });
+                }
               }
               // Thinking blocks are captured from stream_event, not here (avoids duplicates)
             }

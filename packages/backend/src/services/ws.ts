@@ -60,6 +60,7 @@ function getAllowedOrigins(): string[] {
 
 const MAX_TEXT_MESSAGE_SIZE = 10 * 1024; // 10KB for text messages
 const MAX_VOICE_MESSAGE_SIZE = 512 * 1024; // 512KB for voice audio chunks
+const MAX_AUDIO_BUFFER_SIZE = 25 * 1024 * 1024; // 25MB total accumulated audio
 const COOKIE_NAME = 'resonant_session';
 
 // ExtendedWebSocket is now imported from ./registry.js
@@ -119,6 +120,11 @@ export function createWebSocketServer(server: HTTPServer, agentService?: AgentSe
   const config = getResonantConfig();
   const appPassword = config.auth.password;
 
+  if (!appPassword) {
+    console.warn('\u26a0\ufe0f  WARNING: No auth password configured \u2014 WebSocket connections are unauthenticated.');
+    console.warn('   Set auth.password in resonant.yaml or APP_PASSWORD env var for production.');
+  }
+
   // Handle upgrade
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
     const origin = request.headers.origin;
@@ -174,9 +180,18 @@ export function createWebSocketServer(server: HTTPServer, agentService?: AgentSe
 
   // Connection handler
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
+    const ip = request.socket.remoteAddress || '';
+
+    // Per-IP connection limit
+    if (!registry.canAcceptConnection(ip)) {
+      ws.close(1008, 'Too many connections from this IP');
+      return;
+    }
+
     const extWs = ws as ExtendedWebSocket;
     extWs.isAlive = true;
     extWs.userId = 'user';
+    extWs.remoteIp = ip;
     extWs.voiceModeEnabled = false;
     extWs.audioChunks = [];
     extWs.isRecording = false;
@@ -188,7 +203,7 @@ export function createWebSocketServer(server: HTTPServer, agentService?: AgentSe
     extWs.messageWindowStart = Date.now();
     extWs.prosodyAbort = null;
 
-    registry.add(extWs.userId, extWs);
+    registry.add(extWs.userId, extWs, ip);
 
     // Send connected message with thread list and status
     const threads = listThreads({ includeArchived: false });
@@ -412,11 +427,13 @@ export function createWebSocketServer(server: HTTPServer, agentService?: AgentSe
         extWs.prosodyAbort.abort();
         extWs.prosodyAbort = null;
       }
-      registry.remove(extWs.userId, extWs);
+      registry.remove(extWs.userId, extWs, extWs.remoteIp);
     });
 
-    extWs.on('error', (error) => {
-      console.error('WebSocket error:', error);
+    extWs.on('error', (err) => {
+      console.error('WebSocket error:', err instanceof Error ? err.message : err);
+      registry.remove(extWs.userId, extWs, extWs.remoteIp);
+      try { extWs.terminate(); } catch {}
     });
   });
 
@@ -740,6 +757,16 @@ function handleVoiceAudio(
 ): void {
   if (!ws.isRecording) return;
   const chunk = Buffer.from(msg.data, 'base64');
+
+  // Check total accumulated audio size before appending
+  const currentSize = ws.audioChunks.reduce((sum, c) => sum + c.length, 0);
+  if (currentSize + chunk.length > MAX_AUDIO_BUFFER_SIZE) {
+    sendError(ws, 'audio_too_large', `Audio recording exceeds ${MAX_AUDIO_BUFFER_SIZE / (1024 * 1024)}MB limit`);
+    ws.isRecording = false;
+    ws.audioChunks = [];
+    return;
+  }
+
   ws.audioChunks.push(chunk);
 }
 

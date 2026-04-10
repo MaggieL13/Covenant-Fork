@@ -23,6 +23,16 @@ import { basename, join } from 'path';
 // Re-export ConnectionRegistry type from types
 import type { ConnectionRegistry } from '../types.js';
 
+// --- Security: Prompt injection sanitization ---
+function sanitizeForContext(text: string): string {
+  // Escape markers that could break out of context blocks
+  return text
+    .replace(/\[Context\]/gi, '[Ctx]')
+    .replace(/\[\/Context\]/gi, '[/Ctx]')
+    .replace(/\[System\]/gi, '[Sys]')
+    .replace(/\[Instructions\]/gi, '[Instr]');
+}
+
 // Extracted modules
 import { fetchLifeStatus, fetchMoodHistory } from './life-status.js';
 import { scanSkills, scanSkillSummaries } from './skills.js';
@@ -64,17 +74,26 @@ export interface HookContext {
 
 /** @internal Exported for testing */
 export const DESTRUCTIVE_BASH_PATTERNS = [
-  /rm\s+-rf\s+[\/~]/i,
-  /format\s+[a-z]:/i,
-  /DROP\s+TABLE/i,
-  /DROP\s+DATABASE/i,
-  /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;/,        // fork bomb
-  /git\s+push\s+.*--force.*\s+main/i,
-  /git\s+push\s+.*--force.*\s+master/i,
-  /curl\s+.*\|\s*bash/i,
-  /wget\s+.*\|\s*bash/i,
-  /mkfs\./i,
-  /dd\s+if=.*of=\/dev/i,
+  /\brm\s+(-[a-zA-Z]*[rRfF][a-zA-Z]*\s+)*[\/~]/i,     // rm -rf / or rm -r -f ~/
+  /\brm\s+--(?:recursive|force)\b/i,                     // rm --recursive / --force
+  /\bformat\s+[a-z]:/i,                                  // format C:
+  /\bmkfs\b/i,                                           // mkfs
+  /\bdd\s+.*\bof=\/dev\//i,                              // dd of=/dev/sda
+  /\b(?:curl|wget)\s+.*\|\s*(?:ba)?sh\b/i,              // curl | sh, curl | bash
+  /\b(?:curl|wget)\s+.*\|\s*sudo\b/i,                   // curl | sudo
+  /\bchmod\s+(?:-R\s+)?[0-7]*777\b/i,                   // chmod 777
+  /\bchown\s+(?:-R\s+)?root\b/i,                        // chown root
+  /\bDROP\s+(?:TABLE|DATABASE)\b/i,                      // DROP TABLE/DATABASE
+  /\bTRUNCATE\s+TABLE\b/i,                               // TRUNCATE TABLE
+  /\bDELETE\s+FROM\s+\w+\s*;?\s*$/i,                    // DELETE without WHERE
+  /\b(?:shutdown|reboot|halt|poweroff)\b/i,              // system shutdown
+  />\s*\/dev\/sd[a-z]/i,                                 // redirect to disk device
+  /\bsystemctl\s+(?:stop|disable|mask)\b/i,             // disable services
+  /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;/,                     // fork bomb
+  /git\s+push\s+.*--force.*\s+main/i,                   // force push main
+  /git\s+push\s+.*--force.*\s+master/i,                 // force push master
+  /\beval\s.*\brm\b/i,                                  // eval "rm ..."
+  /\b(?:python|node|ruby|perl)\s+-e\s+.*(?:unlink|remove|delete)/i, // scripted deletion
 ];
 
 const IMAGE_GEN_TOOLS = new Set([
@@ -495,6 +514,12 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
       input: inputSummary || undefined,
     });
 
+    // Cap tool insertions to prevent unbounded memory growth
+    const MAX_TOOL_INSERTIONS = 50;
+    if (ctx.toolInsertions.length > MAX_TOOL_INSERTIONS) {
+      ctx.toolInsertions = ctx.toolInsertions.slice(-MAX_TOOL_INSERTIONS);
+    }
+
     // Broadcast tool_use to frontend (include textOffset for live interleaving)
     ctx.registry.broadcast({
       type: 'tool_use',
@@ -737,7 +762,7 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   const parts: string[] = [CHANNEL_CONTEXTS[ctx.platform] || CHANNEL_CONTEXTS.web];
 
   // Thread context + time — always present
-  parts.push(`Thread: "${ctx.threadName}" (${ctx.threadType})`);
+  parts.push(`Thread: "${sanitizeForContext(ctx.threadName)}" (${ctx.threadType})`);
   parts.push(`Time: ${timeStr} ${timezone} \u2014 ${dateStr}`);
 
   // Last session handoff
@@ -904,8 +929,9 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   } catch {}
 
   // Append platform-specific context (channel history, etc.) — bounded by token budget
+  // Sanitize to prevent prompt injection via user-provided content
   const boundedPlatformContext = constrainPlatformContext(
-    ctx.platformContext || '',
+    sanitizeForContext(ctx.platformContext || ''),
     config.hooks?.platform_context_max_tokens ?? 500,
   );
   if (boundedPlatformContext) {

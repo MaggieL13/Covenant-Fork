@@ -5,11 +5,14 @@ import {
   createWebSession,
   getWebSession,
   deleteExpiredSessions,
+  deleteWebSession,
 } from '../services/db.js';
 import { getResonantConfig } from '../config.js';
 
 const COOKIE_NAME = 'resonant_session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+let authWarningLogged = false;
 
 export function getCookieName(): string {
   return COOKIE_NAME;
@@ -18,6 +21,11 @@ export function getCookieName(): string {
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const config = getResonantConfig();
   if (!config.auth.password) {
+    if (!authWarningLogged) {
+      console.warn('\u26a0\ufe0f  WARNING: No auth password configured \u2014 all requests are unauthenticated.');
+      console.warn('   Set auth.password in resonant.yaml or APP_PASSWORD env var for production.');
+      authWarningLogged = true;
+    }
     next();
     return;
   }
@@ -106,6 +114,16 @@ export function loginHandler(req: Request, res: Response): void {
 }
 
 export function logoutHandler(req: Request, res: Response): void {
+  // Invalidate the session in the database before clearing the cookie
+  const cookieHeader = req.headers.cookie;
+  if (cookieHeader) {
+    const cookies = parseCookie(cookieHeader);
+    const sessionToken = cookies[COOKIE_NAME];
+    if (sessionToken) {
+      try { deleteWebSession(sessionToken); } catch {}
+    }
+  }
+
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',

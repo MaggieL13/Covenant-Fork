@@ -81,15 +81,21 @@ export function initDb(dbPath: string): Database.Database {
   // Safe to run multiple times (uses IF NOT EXISTS / catches already-exists)
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN platform TEXT DEFAULT 'web'`);
-  } catch {
-    // Column already exists — fine
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+      console.warn('Migration warning:', msg);
+    }
   }
 
   // Thread pinning migration
   try {
     db.exec(`ALTER TABLE threads ADD COLUMN pinned_at TEXT DEFAULT NULL`);
-  } catch {
-    // Column already exists — fine
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+      console.warn('Migration warning:', msg);
+    }
   }
 
   db.exec(`
@@ -122,7 +128,13 @@ export function initDb(dbPath: string): Database.Database {
     try {
       db.prepare("INSERT INTO session_history (id, thread_id, session_id, session_type, started_at, end_reason) VALUES ('__test', '__test', '__test', 'v1', '2026-01-01', 'resumed')").run();
       db.prepare("DELETE FROM session_history WHERE id = '__test'").run();
-    } catch { needsRecreate = true; }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+        console.warn('Migration warning:', msg);
+      }
+      needsRecreate = true;
+    }
     if (needsRecreate) {
       db.exec('DROP TABLE session_history');
       db.exec(`
@@ -185,21 +197,39 @@ export function getThread(id: string): Thread | null {
   return row ? (row as unknown as Thread) : null;
 }
 
+function getLocalDateString(timezone?: string): string {
+  try {
+    const tz = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return new Date().toLocaleDateString('en-CA', { timeZone: tz }); // Returns YYYY-MM-DD
+  } catch {
+    return new Date().toISOString().split('T')[0];
+  }
+}
+
 export function getTodayThread(): Thread | null {
-  // Compute today's date in configured timezone
+  // Compute today's date in configured timezone using Intl (handles DST correctly)
   const config = getResonantConfig();
   const timezone = config.identity.timezone;
-  const now = new Date();
-  const localDate = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD
+  const localDate = getLocalDateString(timezone);
 
-  // Determine timezone's UTC offset
-  const localHour = parseInt(now.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false }));
-  const utcHour = now.getUTCHours();
-  const offsetHours = ((localHour - utcHour) + 24) % 24;
+  // Determine timezone's UTC offset using Intl for correct DST handling
+  const now = new Date();
+  const utcStr = now.toLocaleString('en-GB', { timeZone: 'UTC', hour: '2-digit', hour12: false, minute: '2-digit' });
+  const localStr = now.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false, minute: '2-digit' });
+  const [utcH, utcM] = utcStr.split(':').map(Number);
+  const [localH, localM] = localStr.split(':').map(Number);
+  const utcMinutes = utcH * 60 + utcM;
+  const localMinutes = localH * 60 + localM;
+  let offsetMinutes = localMinutes - utcMinutes;
+  // Normalize to [-720, +840] range
+  if (offsetMinutes > 840) offsetMinutes -= 1440;
+  if (offsetMinutes < -720) offsetMinutes += 1440;
+  const offsetHours = Math.round(offsetMinutes / 60);
 
   // Query with offset applied to created_at so SQLite compares in local time
   // ORDER BY + LIMIT 1 ensures deterministic result if multiple daily threads exist
-  const modifier = `+${offsetHours} hours`;
+  const sign = offsetHours >= 0 ? '+' : '';
+  const modifier = `${sign}${offsetHours} hours`;
   const stmt = getDb().prepare(`
     SELECT * FROM threads
     WHERE type = 'daily'
@@ -678,6 +708,10 @@ export function getWebSession(token: string): WebSession | null {
 export function deleteExpiredSessions(): void {
   const stmt = getDb().prepare('DELETE FROM web_sessions WHERE expires_at < ?');
   stmt.run(new Date().toISOString());
+}
+
+export function deleteWebSession(token: string): void {
+  getDb().prepare('DELETE FROM web_sessions WHERE token = ?').run(token);
 }
 
 // Config operations

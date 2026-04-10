@@ -82,17 +82,19 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       connectSrc,
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:", "https:"],
       mediaSrc: ["'self'", "blob:"],
       fontSrc: ["'self'"],
+      frameSrc: ["'none'"],
       frameAncestors: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
       workerSrc: ["'self'"],
     }
   },
+  xFrameOptions: { action: 'deny' },
   crossOriginOpenerPolicy: { policy: 'same-origin' },
   crossOriginResourcePolicy: { policy: 'same-origin' },
 }));

@@ -180,7 +180,18 @@ export class Orchestrator {
   private tasks = new Map<string, ManagedTask>();
   private failsafeInterval: ReturnType<typeof setInterval> | null = null;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
-  private lastFailsafeAction: Date = new Date(0);
+  private lastFailsafeActions: Record<string, Date> = {
+    gentle: new Date(0),
+    concerned: new Date(0),
+    emergency: new Date(0),
+  };
+
+  private readonly FAILSAFE_COOLDOWNS: Record<string, number> = {
+    gentle: 2 * 60 * 60 * 1000,     // 2 hours
+    concerned: 6 * 60 * 60 * 1000,  // 6 hours
+    emergency: 1 * 60 * 60 * 1000,  // 1 hour (urgent, shorter)
+  };
+
   private failsafeEnabled = true;
   private failsafeGentle = DEFAULT_FAILSAFE_GENTLE;
   private failsafeConcerned = DEFAULT_FAILSAFE_CONCERNED;
@@ -346,6 +357,12 @@ export class Orchestrator {
 
   stop(): void {
     olog('Stopping...');
+
+    // Cancel any in-flight autonomous agent processing
+    if (this.agent?.isProcessing?.()) {
+      this.agent.stopGeneration?.();
+    }
+
     for (const [, managed] of this.tasks) {
       managed.task.stop();
     }
@@ -720,25 +737,29 @@ export class Orchestrator {
 
     const minutesSince = registry.minutesSinceLastUserActivity();
 
-    // Don't re-trigger failsafe within 2 hours of last action
-    const minutesSinceLastAction = (now.getTime() - this.lastFailsafeAction.getTime()) / 60000;
-    if (minutesSinceLastAction < 120) return;
+    // Helper to check per-severity cooldown
+    const canFire = (severity: string): boolean => {
+      const last = this.lastFailsafeActions[severity];
+      const cooldown = this.FAILSAFE_COOLDOWNS[severity];
+      if (!last || !cooldown) return true;
+      return (now.getTime() - last.getTime()) >= cooldown;
+    };
 
-    // Tiered escalation using configurable thresholds
-    if (minutesSince > this.failsafeEmergency) {
+    // Tiered escalation using configurable thresholds and per-severity cooldowns
+    if (minutesSince > this.failsafeEmergency && canFire('emergency')) {
       // 24+ hours — emergency
       olog(`FAILSAFE EMERGENCY — ${Math.round(minutesSince / 60)}h since contact`);
-      this.lastFailsafeAction = now;
+      this.lastFailsafeActions.emergency = now;
       this.handleWake('failsafe_emergency');
-    } else if (minutesSince > this.failsafeConcerned) {
+    } else if (minutesSince > this.failsafeConcerned && canFire('concerned')) {
       // 12+ hours — concerned
       olog(`FAILSAFE CONCERNED — ${Math.round(minutesSince / 60)}h since contact`);
-      this.lastFailsafeAction = now;
+      this.lastFailsafeActions.concerned = now;
       this.handleWake('failsafe_concerned');
-    } else if (minutesSince > this.failsafeGentle) {
+    } else if (minutesSince > this.failsafeGentle && canFire('gentle')) {
       // 2+ hours — gentle check-in
       olog(`FAILSAFE gentle — ${Math.round(minutesSince)}min since contact`);
-      this.lastFailsafeAction = now;
+      this.lastFailsafeActions.gentle = now;
       this.handleWake('failsafe_gentle');
     }
   }
