@@ -37,10 +37,6 @@ function sanitizeForContext(text: string): string {
 import { fetchLifeStatus, fetchMoodHistory } from './life-status.js';
 import { scanSkills, scanSkillSummaries } from './skills.js';
 
-// Re-export for backwards compatibility
-export { fetchLifeStatus } from './life-status.js';
-export { scanSkills, type SkillInfo } from './skills.js';
-
 // ---------------------------------------------------------------------------
 // HookContext — built per query, passed to factory
 // ---------------------------------------------------------------------------

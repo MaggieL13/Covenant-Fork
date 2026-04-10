@@ -87,7 +87,7 @@ function threadsToSummaries(threads: Thread[]): ThreadSummary[] {
     type: t.type,
     unread_count: t.unread_count,
     last_activity_at: t.last_activity_at,
-    last_message_preview: null, // TODO: fetch last message content
+    last_message_preview: null,
     pinned_at: t.pinned_at ?? null,
   }));
 }
