@@ -24,6 +24,8 @@
       if (setupRes.ok) {
         const setupData = await setupRes.json();
         if (setupData.needsSetup && !window.location.pathname.startsWith('/setup')) {
+          // Still need to run checkAuth so showChildren can resolve
+          await checkAuth();
           goto('/setup');
           return;
         }
