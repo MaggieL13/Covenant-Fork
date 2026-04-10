@@ -230,10 +230,16 @@
                   class="sp-item-text clickable"
                   onclick={() => startEdit(item)}
                 >
-                  {item.text}
+                  {#each item.text.split('\n') as line, i}
+                    {#if i > 0}<br />{/if}{line}
+                  {/each}
                 </button>
               {:else}
-                <span class="sp-item-text">{item.text}</span>
+                <span class="sp-item-text">
+                  {#each item.text.split('\n') as line, i}
+                    {#if i > 0}<br />{/if}{line}
+                  {/each}
+                </span>
               {/if}
               {#if item.project_name}
                 <span class="sp-project">{item.project_name}</span>
@@ -444,6 +450,7 @@
     font-size: 0.875rem;
     color: var(--text-primary);
     overflow-wrap: anywhere;
+    white-space: pre-wrap;
     /* Reset button defaults when sp-item-text is a <button> */
     background: none;
     border: none;
