@@ -498,23 +498,23 @@ GROQ_API_KEY=your_groq_key</pre>
 
       {#if personalityRawMode}
         <textarea bind:value={personalityContent} class="raw-editor" rows="16"
-          placeholder="Write personality in markdown..." />
+          placeholder="Write personality in markdown..."></textarea>
       {:else}
         <div class="field">
           <label class="field-label" for="pref-personality">What's their personality like?</label>
-          <textarea id="pref-personality" class="field-textarea" bind:value={guidedPersonality} rows="3" placeholder="e.g. Warm, nerdy, a bit sarcastic..." />
+          <textarea id="pref-personality" class="field-textarea" bind:value={guidedPersonality} rows="3" placeholder="e.g. Warm, nerdy, a bit sarcastic..."></textarea>
         </div>
         <div class="field">
           <label class="field-label" for="pref-commstyle">How do they talk?</label>
-          <textarea id="pref-commstyle" class="field-textarea" bind:value={guidedCommStyle} rows="3" placeholder="e.g. Casual, uses emojis..." />
+          <textarea id="pref-commstyle" class="field-textarea" bind:value={guidedCommStyle} rows="3" placeholder="e.g. Casual, uses emojis..."></textarea>
         </div>
         <div class="field">
           <label class="field-label" for="pref-interests">What are they interested in?</label>
-          <textarea id="pref-interests" class="field-textarea" bind:value={guidedInterests} rows="3" placeholder="e.g. Coding, music, cooking..." />
+          <textarea id="pref-interests" class="field-textarea" bind:value={guidedInterests} rows="3" placeholder="e.g. Coding, music, cooking..."></textarea>
         </div>
         <div class="field">
           <label class="field-label" for="pref-userctx">What should they know about you?</label>
-          <textarea id="pref-userctx" class="field-textarea" bind:value={guidedUserContext} rows="3" placeholder="e.g. Developer, has a cat named Pixel..." />
+          <textarea id="pref-userctx" class="field-textarea" bind:value={guidedUserContext} rows="3" placeholder="e.g. Developer, has a cat named Pixel..."></textarea>
         </div>
       {/if}
 
