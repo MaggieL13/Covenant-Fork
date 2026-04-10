@@ -1,5 +1,14 @@
 # Covenant-Fork Setup Guide 💜
 
+## Prerequisites (one time only):
+
+1. **Node.js** — Download from [nodejs.org](https://nodejs.org) (LTS version)
+2. **Claude Code** — Install and log in:
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
 ## First Time? Do This:
 
 ```bash
