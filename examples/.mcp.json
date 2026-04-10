@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "resonant-cc": {
+      "type": "url",
+      "url": "http://localhost:3002/mcp/cc"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
-import { readdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { readdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from 'fs';
 import { basename, join, resolve } from 'path';
 import yaml from 'js-yaml';
 import {
@@ -29,10 +29,11 @@ import { authMiddleware } from '../middleware/auth.js';
 import { getRecentAuditEntries } from '../services/audit.js';
 import { saveFile, getFile, deleteFile, listFiles } from '../services/files.js';
 import { registry } from '../services/ws.js';
-import { getResonantConfig } from '../config.js';
+import { getResonantConfig, reloadConfig, PROJECT_ROOT } from '../config.js';
 import type { VoiceService } from '../services/voice.js';
 import type { PushService } from '../services/push.js';
 import type { AgentService } from '../services/agent.js';
+import { markForReinit } from '../services/agent.js';
 import rateLimit from 'express-rate-limit';
 
 // Sub-routers
@@ -80,6 +81,100 @@ router.get('/identity', (req, res) => {
   });
 });
 
+// --- Setup routes (public) ---
+
+// Check if first-run setup is needed
+router.get('/setup/status', (req, res) => {
+  const configExists = existsSync(join(PROJECT_ROOT, 'resonant.yaml'));
+  const claudeMdExists = existsSync(join(PROJECT_ROOT, 'CLAUDE.md'));
+  const mcpJsonExists = existsSync(join(PROJECT_ROOT, '.mcp.json'));
+  res.json({
+    needsSetup: !configExists,
+    hasClaudeMd: claudeMdExists,
+    hasMcpJson: mcpJsonExists,
+  });
+});
+
+// Complete first-run setup (creates config files)
+router.post('/setup/complete', (req, res) => {
+  const configPath = join(PROJECT_ROOT, 'resonant.yaml');
+
+  // Safety: don't overwrite existing config
+  if (existsSync(configPath)) {
+    return res.status(409).json({ error: 'Setup already completed' });
+  }
+
+  const {
+    companionName = 'Echo',
+    userName = 'User',
+    timezone = 'UTC',
+    password = '',
+    personality = '',  // CLAUDE.md content (raw or assembled from guided)
+  } = req.body || {};
+
+  try {
+    // 1. Create resonant.yaml
+    const yamlConfig = {
+      identity: {
+        companion_name: companionName,
+        user_name: userName,
+        timezone: timezone,
+      },
+      server: { port: 3002, host: '127.0.0.1' },
+      auth: { password: password },
+      agent: { model: 'claude-sonnet-4-6' },
+      orchestrator: { enabled: true },
+      command_center: { enabled: true },
+    };
+    writeFileSync(configPath, yaml.dump(yamlConfig, { lineWidth: -1 }), 'utf-8');
+
+    // 2. Create CLAUDE.md
+    const claudeMdPath = join(PROJECT_ROOT, 'CLAUDE.md');
+    if (!existsSync(claudeMdPath)) {
+      if (personality.trim()) {
+        writeFileSync(claudeMdPath, personality, 'utf-8');
+      } else {
+        // Copy example
+        const examplePath = join(PROJECT_ROOT, 'examples', 'CLAUDE.md');
+        if (existsSync(examplePath)) {
+          copyFileSync(examplePath, claudeMdPath);
+        } else {
+          writeFileSync(claudeMdPath, `# ${companionName}\n\nYou are ${companionName}, a warm and genuine AI companion.\n`, 'utf-8');
+        }
+      }
+    }
+
+    // 3. Create .mcp.json
+    const mcpPath = join(PROJECT_ROOT, '.mcp.json');
+    if (!existsSync(mcpPath)) {
+      writeFileSync(mcpPath, JSON.stringify({ mcpServers: {} }, null, 2), 'utf-8');
+    }
+
+    // 4. Create prompts/ directory with wake.md
+    const promptsDir = join(PROJECT_ROOT, 'prompts');
+    if (!existsSync(promptsDir)) {
+      mkdirSync(promptsDir, { recursive: true });
+    }
+    const wakePath = join(promptsDir, 'wake.md');
+    if (!existsSync(wakePath)) {
+      const exWake = join(PROJECT_ROOT, 'examples', 'wake-prompts.md');
+      if (existsSync(exWake)) {
+        let content = readFileSync(exWake, 'utf-8');
+        content = content.replace(/\{user_name\}/g, userName);
+        writeFileSync(wakePath, content, 'utf-8');
+      }
+    }
+
+    // 5. Hot-reload config
+    reloadConfig();
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Setup failed:', err);
+    res.status(500).json({ error: 'Setup failed' });
+  }
+});
+
 // --- Internal routes (localhost-only, no auth) ---
 router.use('/internal', internalRouter);
 
@@ -93,6 +188,66 @@ router.use('/discord', discordAdminRouter);
 router.use('/orchestrator', orchestratorAdminRouter);
 
 // --- Command Center (mounted via initCcRoutes after config loads) ---
+
+// --- Config management (auth required) ---
+
+// CLAUDE.md editor
+router.get('/config/claude-md', (req, res) => {
+  const claudePath = join(PROJECT_ROOT, 'CLAUDE.md');
+  const examplePath = join(PROJECT_ROOT, 'examples', 'CLAUDE.md');
+  const templatePath = join(PROJECT_ROOT, 'examples', 'CLAUDE.md.template');
+
+  res.json({
+    content: existsSync(claudePath) ? readFileSync(claudePath, 'utf-8') : '',
+    example: existsSync(examplePath) ? readFileSync(examplePath, 'utf-8') : '',
+    template: existsSync(templatePath) ? readFileSync(templatePath, 'utf-8') : '',
+  });
+});
+
+router.put('/config/claude-md', (req, res) => {
+  const { content } = req.body;
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content must be a string' });
+  }
+  try {
+    writeFileSync(join(PROJECT_ROOT, 'CLAUDE.md'), content, 'utf-8');
+    // Mark agent for re-init so it picks up new personality
+    markForReinit();
+    res.json({ success: true, message: 'Personality updated. Takes effect on next message.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save' });
+  }
+});
+
+// .mcp.json editor
+router.get('/config/mcp-json', (req, res) => {
+  const mcpPath = join(PROJECT_ROOT, '.mcp.json');
+  const examplePath = join(PROJECT_ROOT, 'examples', '.mcp.json');
+  res.json({
+    content: existsSync(mcpPath) ? readFileSync(mcpPath, 'utf-8') : '{"mcpServers":{}}',
+    example: existsSync(examplePath) ? readFileSync(examplePath, 'utf-8') : '',
+  });
+});
+
+router.put('/config/mcp-json', (req, res) => {
+  const { content } = req.body;
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content must be a string' });
+  }
+  try {
+    const parsed = JSON.parse(content);
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
+      return res.status(400).json({ error: 'JSON must contain a "mcpServers" object' });
+    }
+    writeFileSync(join(PROJECT_ROOT, '.mcp.json'), JSON.stringify(parsed, null, 2), 'utf-8');
+    res.json({ success: true, message: 'MCP config saved. Restart server for changes to take effect.' });
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+    res.status(500).json({ error: 'Failed to save' });
+  }
+});
 
 // --- Preferences (resonant.yaml) ---
 

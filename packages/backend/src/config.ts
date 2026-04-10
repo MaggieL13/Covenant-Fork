@@ -222,6 +222,11 @@ export function loadConfig(configPath?: string): ResonantConfig {
   return merged;
 }
 
+export function reloadConfig(): ResonantConfig {
+  _config = null;
+  return loadConfig();
+}
+
 export function getResonantConfig(): ResonantConfig {
   if (!_config) throw new Error('Config not loaded. Call loadConfig() first.');
   return _config;

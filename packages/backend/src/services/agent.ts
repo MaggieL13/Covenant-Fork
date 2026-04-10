@@ -12,12 +12,19 @@ import { join, dirname } from 'path';
 
 // Lazy-init: config isn't available at import time — defer until first use
 let _initialized = false;
+let needsReinit = false;
 let claudeMdContent = '';
 let AGENT_CWD = '';
 const mcpServersFromConfig: Record<string, McpServerConfig> = {};
 
+/** Mark the agent for re-initialization (e.g. after CLAUDE.md changes) */
+export function markForReinit(): void {
+  needsReinit = true;
+}
+
 function ensureInit() {
-  if (_initialized) return;
+  if (_initialized && !needsReinit) return;
+  needsReinit = false;
   _initialized = true;
   const config = getResonantConfig();
   AGENT_CWD = config.agent.cwd;
