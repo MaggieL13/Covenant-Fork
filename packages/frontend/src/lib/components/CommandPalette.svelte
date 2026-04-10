@@ -188,7 +188,7 @@
 
   .palette-item:hover,
   .palette-item.selected {
-    background: var(--gold-glow, rgba(94, 171, 165, 0.1));
+    background: var(--gold-glow, rgba(155, 114, 207, 0.1));
   }
 
   .palette-icon {

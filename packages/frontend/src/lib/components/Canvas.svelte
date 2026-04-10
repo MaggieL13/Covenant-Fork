@@ -200,7 +200,7 @@
     border-radius: var(--radius-card);
     overflow: hidden;
     background:
-      radial-gradient(circle at top left, rgba(94, 171, 165, 0.08), transparent 30%),
+      radial-gradient(circle at top left, rgba(155, 114, 207, 0.08), transparent 30%),
       linear-gradient(180deg, var(--bg-hover), transparent 18%),
       var(--bg-secondary);
     box-shadow: inset 0 1px 0 var(--border);
@@ -250,7 +250,7 @@
     font-size: 0.6875rem;
     padding: 0.22rem 0.55rem;
     border-radius: 1rem;
-    background: rgba(94, 171, 165, 0.12);
+    background: rgba(155, 114, 207, 0.12);
     color: var(--accent);
     white-space: nowrap;
     text-transform: uppercase;
@@ -426,7 +426,7 @@
       border-radius: 0;
       box-shadow: none;
       background:
-        radial-gradient(circle at top left, rgba(94, 171, 165, 0.1), transparent 32%),
+        radial-gradient(circle at top left, rgba(155, 114, 207, 0.1), transparent 32%),
         linear-gradient(180deg, var(--bg-hover), transparent 18%),
         var(--bg-primary);
     }

@@ -355,7 +355,7 @@
   .sp-mode-btn.active {
     color: var(--accent);
     border-color: var(--accent);
-    background: rgba(94, 171, 165, 0.08);
+    background: rgba(155, 114, 207, 0.08);
   }
 
   .sp-timeline {

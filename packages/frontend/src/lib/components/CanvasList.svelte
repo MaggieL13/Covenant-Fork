@@ -384,7 +384,7 @@
 
     .canvas-dropdown.embedded .canvas-item.active {
       border-left-width: 1px;
-      box-shadow: inset 0 0 0 1px rgba(94, 171, 165, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(155, 114, 207, 0.28);
     }
   }
 </style>

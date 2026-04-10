@@ -514,8 +514,8 @@
   }
 
   .input-bar:focus-within {
-    border-color: rgba(94, 171, 165, 0.35);
-    box-shadow: 0 0 0 1px rgba(94, 171, 165, 0.18), 0 16px 40px rgba(0, 0, 0, 0.18);
+    border-color: rgba(155, 114, 207, 0.35);
+    box-shadow: 0 0 0 1px rgba(155, 114, 207, 0.18), 0 16px 40px rgba(0, 0, 0, 0.18);
   }
 
   .attach-button {

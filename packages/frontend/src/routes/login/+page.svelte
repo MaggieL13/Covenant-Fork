@@ -100,7 +100,7 @@
     background: var(--bg-hover);
   }
 
-  /* Subtle radial warmth — candlelight from center */
+  /* Ethereal violet glow — sanctum entrance */
   .login-page::before {
     content: '';
     position: absolute;
@@ -110,6 +110,19 @@
     width: 600px;
     height: 400px;
     background: radial-gradient(ellipse, var(--gold-ember) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  /* Secondary subtle glow for depth */
+  .login-page::after {
+    content: '';
+    position: absolute;
+    bottom: 10%;
+    left: 50%;
+    transform: translate(-50%, 0);
+    width: 400px;
+    height: 200px;
+    background: radial-gradient(ellipse, rgba(120, 80, 180, 0.04) 0%, transparent 70%);
     pointer-events: none;
   }
 
@@ -129,8 +142,9 @@
     font-size: 2.5rem;
     font-weight: 400;
     color: var(--gold);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     text-align: center;
+    text-shadow: 0 0 40px rgba(155, 114, 207, 0.15);
   }
 
   form {
@@ -155,8 +169,8 @@
 
   input:focus {
     outline: none;
-    border-color: var(--gold-dim);
-    box-shadow: 0 0 0 2px var(--gold-ember);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(155, 114, 207, 0.2), 0 0 20px rgba(155, 114, 207, 0.1);
   }
 
   input:disabled {
@@ -192,6 +206,7 @@
   .enter-button:hover:not(:disabled) {
     background: var(--gold-ember);
     border-color: var(--gold);
+    box-shadow: 0 0 20px rgba(155, 114, 207, 0.15);
   }
 
   .enter-button:disabled {

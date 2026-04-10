@@ -326,7 +326,7 @@
     overflow-y: auto;
   }
 
-  /* Subtle radial glow — warm purple from center */
+  /* Subtle radial glow — violet from center */
   .setup-page::before {
     content: '';
     position: fixed;
@@ -335,16 +335,23 @@
     transform: translate(-50%, -50%);
     width: 700px;
     height: 500px;
-    background: radial-gradient(ellipse, rgba(139, 92, 246, 0.06) 0%, transparent 70%);
+    background: radial-gradient(ellipse, var(--gold-ember) 0%, transparent 70%);
     pointer-events: none;
   }
 
-  /* ─── Card ─── */
+  /* ─── Card — gothic sanctum feel ─── */
   .setup-card {
     width: 100%;
     max-width: 560px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
+    border-image: linear-gradient(
+      135deg,
+      rgba(155, 114, 207, 0.3),
+      rgba(155, 114, 207, 0.05) 30%,
+      rgba(155, 114, 207, 0.05) 70%,
+      rgba(155, 114, 207, 0.3)
+    ) 1;
     border-radius: var(--radius-card);
     padding: var(--space-8) var(--space-6);
     position: relative;
@@ -385,15 +392,15 @@
   }
 
   .dot.active {
-    border-color: #8b5cf6;
-    background: rgba(139, 92, 246, 0.15);
-    color: #c4b5fd;
-    box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+    border-color: var(--accent);
+    background: var(--gold-glow);
+    color: var(--accent-hover);
+    box-shadow: 0 0 12px rgba(155, 114, 207, 0.2);
   }
 
   .dot.done {
-    border-color: #8b5cf6;
-    background: #8b5cf6;
+    border-color: var(--accent);
+    background: var(--accent);
     color: #fff;
     cursor: pointer;
   }
@@ -462,8 +469,8 @@
   .field select:focus,
   .field textarea:focus {
     outline: none;
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(155, 114, 207, 0.2), 0 0 20px rgba(155, 114, 207, 0.1);
   }
 
   .field input::placeholder,
@@ -537,8 +544,8 @@
 
   .raw-editor:focus {
     outline: none;
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(155, 114, 207, 0.2), 0 0 20px rgba(155, 114, 207, 0.1);
   }
 
   .raw-editor::placeholder {
@@ -569,12 +576,14 @@
 
   .btn.primary {
     width: 100%;
-    background: #8b5cf6;
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
     color: #fff;
+    border: 1px solid rgba(155, 114, 207, 0.3);
   }
 
   .btn.primary:hover:not(:disabled) {
-    background: #7c3aed;
+    background: linear-gradient(135deg, #9b72cf, #8b5cf6);
+    box-shadow: 0 0 20px rgba(155, 114, 207, 0.3);
   }
 
   .btn.secondary {

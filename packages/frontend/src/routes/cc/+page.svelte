@@ -351,7 +351,7 @@
     border: 1px solid var(--border);
     border-radius: 1.5rem;
     background:
-      radial-gradient(circle at top left, rgba(94, 171, 165, 0.12), transparent 28%),
+      radial-gradient(circle at top left, rgba(155, 114, 207, 0.12), transparent 28%),
       var(--bg-secondary);
     box-shadow: var(--shadow-md);
   }
@@ -493,8 +493,8 @@
   }
 
   .feature-card--accent {
-    border-color: rgba(94, 171, 165, 0.22);
-    background: rgba(94, 171, 165, 0.08);
+    border-color: rgba(155, 114, 207, 0.22);
+    background: rgba(155, 114, 207, 0.08);
   }
 
   .section-head {

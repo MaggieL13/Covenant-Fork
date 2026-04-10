@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=packages/backend"],
+      "port": 3002
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace=packages/frontend"],
+      "port": 5173
+    }
+  ]
+}

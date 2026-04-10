@@ -173,7 +173,7 @@
     justify-content: center;
     padding: 1.25rem;
     background:
-      radial-gradient(circle at top left, rgba(94, 171, 165, 0.14), transparent 24%),
+      radial-gradient(circle at top left, rgba(155, 114, 207, 0.14), transparent 24%),
       rgba(0, 0, 0, 0.5);
   }
 
@@ -264,7 +264,7 @@
   .settings-nav-item.active {
     color: var(--text-primary);
     background: var(--gold-ember);
-    border-color: rgba(94, 171, 165, 0.25);
+    border-color: rgba(155, 114, 207, 0.25);
   }
 
   .settings-nav-label {
@@ -502,8 +502,8 @@
     }
 
     .settings-nav-item.active {
-      background: rgba(94, 171, 165, 0.22);
-      border-color: rgba(94, 171, 165, 0.3);
+      background: rgba(155, 114, 207, 0.22);
+      border-color: rgba(155, 114, 207, 0.3);
       color: var(--text-primary);
     }
 
