@@ -82,7 +82,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       connectSrc,
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:", "https:"],
       mediaSrc: ["'self'", "blob:"],
