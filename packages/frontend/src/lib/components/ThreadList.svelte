@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { ThreadSummary } from '@resonant/shared';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import { showToast } from '$lib/stores/toast.svelte';
 
   let {
     threads = [],
@@ -143,10 +145,14 @@
       const response = await fetch(`/api/threads/${threadId}/archive`, { method: 'POST' });
       if (response.ok) {
         contextMenuThread = null;
+        showToast('Thread archived', 'success');
         window.location.reload();
+      } else {
+        showToast('Failed to archive thread', 'error');
       }
     } catch (err) {
       console.error('Failed to archive thread:', err);
+      showToast('Failed to archive thread', 'error');
     }
   }
 
@@ -167,9 +173,15 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: renameValue.trim() }),
       });
-      if (!response.ok) console.error('Failed to rename thread');
+      if (response.ok) {
+        showToast('Thread renamed', 'success');
+      } else {
+        console.error('Failed to rename thread');
+        showToast('Failed to rename thread', 'error');
+      }
     } catch (err) {
       console.error('Failed to rename thread:', err);
+      showToast('Failed to rename thread', 'error');
     }
     renamingThread = null;
   }
@@ -206,11 +218,14 @@
         // Notify parent and refresh thread list
         ondelete?.(threadId);
         await loadThreads?.();
+        showToast('Thread deleted', 'success');
       } else {
         console.error('Failed to delete thread');
+        showToast('Failed to delete thread', 'error');
       }
     } catch (err) {
       console.error('Failed to delete thread:', err);
+      showToast('Failed to delete thread', 'error');
     }
     deleteConfirm = null;
   }
@@ -297,14 +312,6 @@
         onblur={() => commitRename(thread.id)}
         autofocus
       />
-    </div>
-  {:else if deleteConfirm === thread.id}
-    <div class="delete-confirm">
-      <span class="delete-text">Delete thread and all messages?</span>
-      <div class="delete-actions">
-        <button class="delete-btn" onclick={() => confirmDelete(thread.id)}>Delete</button>
-        <button class="cancel-btn" onclick={cancelDelete}>Cancel</button>
-      </div>
     </div>
   {:else}
     <button
@@ -441,6 +448,17 @@
     </div>
   {/if}
 </aside>
+
+<ConfirmDialog
+  open={deleteConfirm !== null}
+  title="Delete this thread?"
+  message="This can't be undone."
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  destructive={true}
+  onconfirm={() => { if (deleteConfirm) confirmDelete(deleteConfirm); }}
+  oncancel={cancelDelete}
+/>
 
 <style>
   .thread-list {
@@ -602,7 +620,7 @@
   }
 
   .thread-item.active {
-    background: linear-gradient(90deg, rgba(94, 171, 165, 0.12), var(--bg-hover));
+    background: linear-gradient(90deg, rgba(155, 114, 207, 0.12), var(--bg-hover));
     color: var(--text-primary);
   }
 
@@ -682,52 +700,7 @@
     border-color: var(--accent);
   }
 
-  .delete-confirm {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem;
-    background: rgba(239, 68, 68, 0.05);
-    border-left: 2px solid #ef4444;
-  }
-
-  .delete-text {
-    font-size: 0.8125rem;
-    color: var(--text-secondary);
-  }
-
-  .delete-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .delete-btn {
-    padding: 0.375rem 0.75rem;
-    background: #ef4444;
-    color: white;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-  }
-
-  .delete-btn:hover {
-    background: #dc2626;
-  }
-
-  .cancel-btn {
-    padding: 0.375rem 0.75rem;
-    background: transparent;
-    color: var(--text-muted);
-    font-size: 0.8125rem;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-  }
-
-  .cancel-btn:hover {
-    color: var(--text-secondary);
-    background: var(--bg-tertiary);
-  }
+  /* Delete confirm styles removed — now using ConfirmDialog component */
 
   .thread-actions {
     display: flex;

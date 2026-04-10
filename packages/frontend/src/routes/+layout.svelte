@@ -4,6 +4,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
+  import Toast from '$lib/components/Toast.svelte';
 
   let { children } = $props();
   let currentPath = $derived($page.url.pathname);
@@ -51,6 +52,8 @@
     <div class="spinner"></div>
   </div>
 {/if}
+
+<Toast />
 
 <style>
   .loading-screen {

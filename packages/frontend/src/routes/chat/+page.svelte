@@ -242,6 +242,18 @@
     replyTo = null;
   }
 
+  // Send a suggested prompt
+  function sendSuggested(text: string) {
+    if (!activeThreadId) return;
+    send({
+      type: 'message',
+      threadId: activeThreadId,
+      content: text,
+      contentType: 'text',
+    });
+    shouldAutoScroll = true;
+  }
+
   // Check if should auto-scroll + load older messages on scroll to top
   function checkAutoScroll() {
     if (!messagesContainer) return;
@@ -528,7 +540,20 @@
         {/if}
         {#if messages.length === 0}
           <div class="empty-state">
-            <p>No messages yet. Start a conversation!</p>
+            <div class="empty-icon">&#128172;</div>
+            <h3 class="empty-title">Start a conversation</h3>
+            <p class="empty-subtitle">Say hello, ask a question, or try one of these:</p>
+            <div class="suggested-prompts">
+              <button class="prompt-chip" onclick={() => sendSuggested('How are you today?')}>
+                How are you today?
+              </button>
+              <button class="prompt-chip" onclick={() => sendSuggested('Tell me something interesting')}>
+                Tell me something interesting
+              </button>
+              <button class="prompt-chip" onclick={() => sendSuggested('What can you help me with?')}>
+                What can you help me with?
+              </button>
+            </div>
           </div>
         {:else}
           {#each messages as message (message.id)}
@@ -853,8 +878,8 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
-    background: rgba(245, 197, 66, 0.08);
-    border-bottom: 1px solid rgba(245, 197, 66, 0.2);
+    background: rgba(155, 114, 207, 0.08);
+    border-bottom: 1px solid rgba(155, 114, 207, 0.2);
     color: var(--gold-dim);
     font-size: 0.8125rem;
     flex-shrink: 0;
@@ -871,8 +896,8 @@
   }
 
   @keyframes compactingPulse {
-    0%, 100% { background: rgba(245, 197, 66, 0.08); }
-    50% { background: rgba(245, 197, 66, 0.16); }
+    0%, 100% { background: rgba(155, 114, 207, 0.08); }
+    50% { background: rgba(155, 114, 207, 0.16); }
   }
 
   .rate-limit-banner {
@@ -893,8 +918,8 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
-    background: var(--gold-glow, rgba(94, 171, 165, 0.1));
-    border-bottom: 1px solid rgba(94, 171, 165, 0.2);
+    background: var(--gold-glow, rgba(155, 114, 207, 0.1));
+    border-bottom: 1px solid rgba(155, 114, 207, 0.2);
     color: var(--gold);
     font-size: 0.8125rem;
     flex-shrink: 0;
@@ -970,13 +995,59 @@
 
   .empty-state {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     flex: 1;
-    color: var(--text-muted);
+    gap: 0.5rem;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .empty-icon {
+    font-size: 3rem;
+    line-height: 1;
+    margin-bottom: 0.25rem;
+    opacity: 0.7;
+  }
+
+  .empty-title {
     font-family: var(--font-heading);
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+
+  .empty-subtitle {
     font-size: 0.875rem;
-    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+  }
+
+  .suggested-prompts {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    max-width: 480px;
+  }
+
+  .prompt-chip {
+    padding: 0.5rem 1rem;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .prompt-chip:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
   }
 
   .message-wrapper {
@@ -990,7 +1061,7 @@
   }
 
   @keyframes highlightFlash {
-    0% { background: rgba(245, 197, 66, 0.2); }
+    0% { background: rgba(155, 114, 207, 0.2); }
     100% { background: transparent; }
   }
 

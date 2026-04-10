@@ -249,6 +249,33 @@
     }
   });
 
+  // Code block copy buttons
+  let messageContentEl: HTMLDivElement | undefined = $state();
+
+  $effect(() => {
+    if (!messageContentEl) return;
+    const codeBlocks = messageContentEl.querySelectorAll('pre');
+    codeBlocks.forEach((pre) => {
+      if (pre.querySelector('.copy-btn')) return;
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = 'Copy';
+      btn.onclick = async () => {
+        const code = pre.querySelector('code')?.textContent || pre.textContent || '';
+        try {
+          await navigator.clipboard.writeText(code);
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        } catch {
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        }
+      };
+      pre.style.position = 'relative';
+      pre.appendChild(btn);
+    });
+  });
+
   // Read receipt indicator
   const readStatus = $derived(() => {
     if (message.role !== 'user') return null;
@@ -304,7 +331,7 @@
       </div>
     {/if}
 
-    <div class="message-content">
+    <div class="message-content" bind:this={messageContentEl}>
       {#if isDeleted}
         <span class="deleted-text">This message was deleted</span>
       {:else if contentType === 'image'}
@@ -670,6 +697,32 @@
     word-wrap: break-word;
     overflow-wrap: break-word;
     min-width: 0;
+  }
+
+  .message-content :global(.copy-btn) {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.25rem 0.625rem;
+    font-size: 0.6875rem;
+    font-family: var(--font-body);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-muted, #888);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+    z-index: 1;
+  }
+
+  .message-content :global(pre:hover .copy-btn) {
+    opacity: 1;
+  }
+
+  .message-content :global(.copy-btn:hover) {
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--text-primary, #e0e0e0);
   }
 
   .deleted-text {
