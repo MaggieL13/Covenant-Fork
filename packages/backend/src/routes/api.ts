@@ -253,6 +253,11 @@ router.put('/config/mcp-json', (req, res) => {
 
 function findConfigPath(): string | null {
   for (const name of ['resonant.yaml', 'resonant.yml']) {
+    const p = join(PROJECT_ROOT, name);
+    if (existsSync(p)) return p;
+  }
+  // Fallback: check cwd (for backwards compatibility)
+  for (const name of ['resonant.yaml', 'resonant.yml']) {
     const p = resolve(name);
     if (existsSync(p)) return p;
   }
@@ -263,7 +268,7 @@ router.get('/preferences', (req, res) => {
   try {
     const configPath = findConfigPath();
     if (!configPath) {
-      res.json({ error: 'No config file found' });
+      res.status(404).json({ error: 'No config file found. Run the setup wizard first.' });
       return;
     }
     const raw = readFileSync(configPath, 'utf-8');
