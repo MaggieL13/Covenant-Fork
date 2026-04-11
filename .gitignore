@@ -22,3 +22,4 @@ package-lock.json
 Thumbs.db
 screenshots/
 !docs/screenshots/
+docs/DESIGN-SPEC.md
