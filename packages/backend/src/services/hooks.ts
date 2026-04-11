@@ -1016,7 +1016,8 @@ function buildSessionEnd(ctx: HookContext): HookCallback {
 function buildStop(ctx: HookContext): HookCallback {
   return safeHook('Stop', async (input: HookInput) => {
     const hook = input as StopHookInput;
-    console.log(`[Session] Stop (hook_active: ${hook.stop_hook_active})`);
+    if (hook.stop_hook_active) console.log(`[Session] Stop (hook interrupted)`);
+    // Normal stop (hook_active: false) is expected — don't log
     return { continue: true };
   });
 }

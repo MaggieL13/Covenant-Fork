@@ -231,9 +231,13 @@ router.delete('/:id', (req, res) => {
 
     const fileIds = deleteThread(id);
 
-    // Clean up files on disk
+    // Clean up files on disk (best-effort — thread is already deleted)
     for (const fileId of fileIds) {
-      deleteFile(fileId);
+      try {
+        deleteFile(fileId);
+      } catch (err) {
+        console.warn(`Failed to delete orphaned file ${fileId}:`, err);
+      }
     }
 
     // Broadcast deletion to all connected clients

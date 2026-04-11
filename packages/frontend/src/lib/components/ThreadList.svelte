@@ -145,10 +145,16 @@
       const response = await fetch(`/api/threads/${threadId}/archive`, { method: 'POST' });
       if (response.ok) {
         contextMenuThread = null;
+        // If this was the active thread, select the next one
+        if (activeThreadId === threadId) {
+          const nextId = getNextThreadIdAfterDelete(threadId);
+          if (nextId) onselect?.(nextId);
+        }
+        await loadThreads?.();
         showToast('Thread archived', 'success');
-        window.location.reload();
       } else {
-        showToast('Failed to archive thread', 'error');
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || 'Failed to archive thread', 'error');
       }
     } catch (err) {
       console.error('Failed to archive thread:', err);
@@ -220,8 +226,9 @@
         await loadThreads?.();
         showToast('Thread deleted', 'success');
       } else {
-        console.error('Failed to delete thread');
-        showToast('Failed to delete thread', 'error');
+        const data = await response.json().catch(() => ({}));
+        console.error('Failed to delete thread:', response.status, data.error);
+        showToast(data.error || 'Failed to delete thread', 'error');
       }
     } catch (err) {
       console.error('Failed to delete thread:', err);
@@ -253,19 +260,27 @@
 
   async function handlePin(threadId: string) {
     try {
-      await fetch(`/api/threads/${threadId}/pin`, { method: 'POST' });
+      const response = await fetch(`/api/threads/${threadId}/pin`, { method: 'POST' });
       contextMenuThread = null;
+      if (!response.ok) {
+        showToast('Failed to pin thread', 'error');
+      }
     } catch (err) {
       console.error('Failed to pin thread:', err);
+      showToast('Failed to pin thread', 'error');
     }
   }
 
   async function handleUnpin(threadId: string) {
     try {
-      await fetch(`/api/threads/${threadId}/unpin`, { method: 'POST' });
+      const response = await fetch(`/api/threads/${threadId}/unpin`, { method: 'POST' });
       contextMenuThread = null;
+      if (!response.ok) {
+        showToast('Failed to unpin thread', 'error');
+      }
     } catch (err) {
       console.error('Failed to unpin thread:', err);
+      showToast('Failed to unpin thread', 'error');
     }
   }
 

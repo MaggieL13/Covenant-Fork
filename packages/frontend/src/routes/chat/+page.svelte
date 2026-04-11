@@ -194,7 +194,7 @@
     files: Array<{ fileId: string; filename: string; mimeType: string; size: number; contentType: 'image' | 'audio' | 'file'; url: string }>,
     prosody?: Record<string, number>
   ) {
-    let threadId = activeThreadId;
+    let threadId: string | null = activeThreadId;
     if (!threadId) {
       // Auto-create a thread instead of silently dropping the message
       try {
@@ -205,9 +205,9 @@
           body: JSON.stringify({ name: '' }),
         });
         if (res.ok) {
-          const thread = await res.json();
-          await loadThread(thread.id);
-          threadId = thread.id;
+          const data = await res.json();
+          await loadThread(data.thread.id);
+          threadId = data.thread.id;
         } else {
           showToast('Failed to create thread', 'error');
           return;
@@ -218,11 +218,14 @@
       }
     }
 
+    // After the guard above, threadId is guaranteed non-null (all null paths return early)
+    const resolvedThreadId = threadId!;
+
     if (files.length === 0) {
       // Text only
       send({
         type: 'message',
-        threadId,
+        threadId: resolvedThreadId,
         content,
         contentType: 'text',
         replyToId: replyTo?.id,
@@ -233,7 +236,7 @@
       // and fires one combined agent query
       send({
         type: 'message',
-        threadId,
+        threadId: resolvedThreadId,
         content: content || '',
         contentType: 'text',
         replyToId: replyTo?.id,
@@ -277,9 +280,9 @@
           body: JSON.stringify({ name: '' }),
         });
         if (res.ok) {
-          const thread = await res.json();
-          await loadThread(thread.id);
-          threadId = thread.id;
+          const data = await res.json();
+          await loadThread(data.thread.id);
+          threadId = data.thread.id;
           await new Promise(r => setTimeout(r, 100));
         } else {
           showToast('Failed to create thread', 'error');
