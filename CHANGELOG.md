@@ -2,6 +2,31 @@
 
 All notable changes to Resonant will be documented in this file.
 
+## [3.0.1] — 2026-04-11 (Covenant-Fork)
+
+Full codebase audit with bug fixes, error handling improvements, and consistency cleanup.
+
+### Fixed
+- **Thread auto-create sent to `threads/undefined`** — response parsing mismatch: backend returns `{ thread: { id } }` but frontend read `.id` on the wrapper object
+- **Thread delete crashed with `SQLITE_CONSTRAINT_FOREIGNKEY`** — cascade delete was missing `message_embeddings` table cleanup before deleting messages
+- **Thread archive/delete didn't update sidebar** — `loadThreads` and `ondelete` props were never passed to the ThreadList component
+- **Thread list didn't appear after auto-create** — missing `loadThreads()` + `handleThreadSelect()` calls after thread creation
+- **Archive triggered full page reload** — replaced `window.location.reload()` with state-based thread removal
+- **Pin/unpin failed silently** — added response checking and error toasts
+- **Model selector showed wrong model** — hardcoded fallback was Opus 4.6, but backend default is Sonnet 4.6. Now seeds from preferences on load
+- **Model IDs were invalid** — used fake date suffixes (`20250414`) that don't exist in the API. Switched to aliases (`claude-opus-4-5`, etc.)
+- **Model selection didn't sync between chat header and settings** — chat selector wrote to DB only, settings wrote to YAML only. Now both write to both
+- **`[Session] Stop (hook_active: false)` log spam** — normal SDK lifecycle event, not an error. Suppressed unless a hook actually interrupts
+- **File deletion after thread delete had no error handling** — added try/catch with warning log to prevent crashes from orphaned files
+- **Delete/archive error toasts were generic** — now parse response body and show actual backend error message
+
+### Changed
+- **Model list extracted to shared module** — `packages/frontend/src/lib/models.ts` replaces duplicate arrays in ModelSelector and PreferencesPanel
+- **Pre-existing type errors fixed** — `threadId` narrowing in `handleBatchSend` (string | null → non-null assertion after guard)
+- **DESIGN-SPEC.md removed from tracking** — it's just purple
+
+---
+
 ## [3.0.0] — 2026-04-10 (Covenant-Fork)
 
 Covenant-Fork: A hardened, optimized, and redesigned fork of Resonant.
@@ -16,7 +41,7 @@ Covenant-Fork: A hardened, optimized, and redesigned fork of Resonant.
 - **Code block copy buttons** — hover any code block to copy with one click
 - **Suggested prompts** — empty chat state shows clickable conversation starters
 - **Command Center as toggleable DLC** — `command_center.enabled: false` in resonant.yaml fully disables CC (nav hidden, routes redirect, MCP unregistered)
-- **Dark Gothic Art Nouveau theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents, ornate border gradients, purple glows
+- **Custom dark theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents
 - **Example .mcp.json** — finally, an example MCP config file
 - **CLAUDE.md.template** — guided personality editor template
 - **SETUP-GUIDE.md** — simple 3-command setup guide

@@ -52,8 +52,8 @@ The following are architectural decisions, not oversights:
 ## Development setup
 
 ```bash
-git clone https://github.com/codependentai/resonant.git
-cd resonant
+git clone https://github.com/MaggieL13/Covenant-Fork.git
+cd Covenant-Fork
 npm install
 node scripts/setup.mjs
 npm run build

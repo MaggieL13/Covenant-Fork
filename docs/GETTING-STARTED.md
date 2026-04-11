@@ -59,8 +59,8 @@ This opens your browser. Sign in with your Anthropic account. Once you see "Succ
 ## Step 3: Download Resonant
 
 ```bash
-git clone https://github.com/codependentai/resonant.git
-cd resonant
+git clone https://github.com/MaggieL13/Covenant-Fork.git
+cd Covenant-Fork
 ```
 
 If you don't have git, you can also download the ZIP from GitHub and extract it.
@@ -232,7 +232,7 @@ This only needs to be done once. After that, `npm run build` and `npm start` wor
 
 **"Cannot find module" errors**
 - Run `npm install` again
-- Make sure you're in the resonant directory
+- Make sure you're in the Covenant-Fork directory
 
 **The companion doesn't respond**
 - Check the terminal/logs for errors

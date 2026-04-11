@@ -14,7 +14,7 @@
 
 <p align="center"><em>A relational AI companion framework built on Claude Code Agent SDK.<br/>Your AI remembers, reaches out, and grows — inside the security model you already trust.</em></p>
 
-> **Covenant-Fork** — A hardened, optimized, and redesigned fork with browser-based setup, gothic theme, and 18 security fixes.
+> **Covenant-Fork** — A hardened, optimized, and redesigned fork with browser-based setup, custom dark theme, and 18 security fixes.
 
 <p align="center"><em>An open-source implementation of the relational-AI thesis: intelligence is plural, social, and persistent. Built as a natural-language harness on the Claude Agent SDK, with hooks that surface context before the model sees the prompt.</em></p>
 
@@ -41,7 +41,7 @@ This fork adds hardening, optimization, and quality-of-life features on top of R
 - **Browser-based setup wizard** — 3-step onboarding at `/setup` with first-run auto-redirect. No terminal configuration needed
 - **3-4x token optimization** — keyword-gated MCP tools, bounded platform context, configurable Discord history limits. Cuts 10-12x tokens per message in typical usage
 - **18 security fixes** — path traversal, prompt injection, WebSocket leak, CSP headers, input validation, rate limiting, and more
-- **Dark Gothic Art Nouveau theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents, ornate border gradients
+- **Custom dark theme** — Cinzel serif headings, deep blackberry backgrounds, violet accents
 - **Command Center as toggleable DLC** — `command_center.enabled: false` fully disables CC (nav hidden, routes redirect, MCP unregistered)
 - **Personality editor** in Settings — guided mode with 4 friendly prompts plus a raw markdown editor
 - **MCP server manager** in Settings — add, remove, and view MCP servers from the browser
@@ -283,7 +283,6 @@ resonant/
 │   └── sc.mjs           # Agent CLI (reactions, search, timers, etc.)
 ├── docs/
 │   ├── SETUP-GUIDE.md       # 💜 Quick setup guide (Covenant-Fork)
-│   ├── DESIGN-SPEC.md       # 💜 Gothic UI branding spec (Covenant-Fork)
 │   ├── HOOKS.md             # Context injection implementation reference
 │   ├── MEMORY_ARCHITECTURE.md # Memory model, tiering, design philosophy
 │   ├── TOOLS.md             # Built-in agent tools reference

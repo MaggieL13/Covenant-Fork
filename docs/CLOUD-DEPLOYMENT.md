@@ -121,8 +121,8 @@ You should get a response. If it says "Not logged in", double-check the token an
 ## Step 5: Clone and Configure Resonant
 
 ```bash
-git clone https://github.com/codependentai/resonant.git
-cd resonant
+git clone https://github.com/MaggieL13/Covenant-Fork.git
+cd Covenant-Fork
 npm install
 npm run build
 npm start
