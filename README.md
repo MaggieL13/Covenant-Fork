@@ -282,6 +282,8 @@ resonant/
 ├── tools/
 │   └── sc.mjs           # Agent CLI (reactions, search, timers, etc.)
 ├── docs/
+│   ├── SETUP-GUIDE.md       # 💜 Quick setup guide (Covenant-Fork)
+│   ├── DESIGN-SPEC.md       # 💜 Gothic UI branding spec (Covenant-Fork)
 │   ├── HOOKS.md             # Context injection implementation reference
 │   ├── MEMORY_ARCHITECTURE.md # Memory model, tiering, design philosophy
 │   ├── TOOLS.md             # Built-in agent tools reference
