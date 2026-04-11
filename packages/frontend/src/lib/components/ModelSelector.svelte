@@ -3,8 +3,8 @@
   import { MODELS } from '$lib/models';
 
   let config = $derived(getConfig());
-  let currentModel = $derived(config['agent.model'] || 'claude-opus-4-6');
-  let currentLabel = $derived(MODELS.find(m => m.id === currentModel)?.label || 'Opus');
+  let currentModel = $derived(config['agent.model'] || 'claude-sonnet-4-6');
+  let currentLabel = $derived(MODELS.find(m => m.id === currentModel)?.label || 'Sonnet 4.6');
 
   let open = $state(false);
 

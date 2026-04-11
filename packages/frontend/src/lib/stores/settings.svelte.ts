@@ -26,15 +26,21 @@ export async function loadSettings(): Promise<void> {
       fetch('/api/identity', { credentials: 'include' }),
     ]);
 
+    let prefs: Record<string, any> | null = null;
     if (prefsRes.ok) {
-      const prefs = await prefsRes.json();
-      if (prefs.identity?.companion_name) companionName = prefs.identity.companion_name;
-      if (prefs.identity?.user_name) userName = prefs.identity.user_name;
+      prefs = await prefsRes.json();
+      if (prefs?.identity?.companion_name) companionName = prefs.identity.companion_name;
+      if (prefs?.identity?.user_name) userName = prefs.identity.user_name;
     }
 
     if (configRes.ok) {
       const data = await configRes.json();
       config = data.config || {};
+      // If DB config doesn't have agent.model, seed from preferences (YAML/env/default)
+      // so the ModelSelector header pill shows the real active model
+      if (!config['agent.model'] && prefs?.agent?.model) {
+        config = { ...config, 'agent.model': prefs.agent.model };
+      }
     }
 
     if (orchRes.ok) {
