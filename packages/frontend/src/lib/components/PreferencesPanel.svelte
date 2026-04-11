@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { updateSetting } from '$lib/stores/settings.svelte';
+  import { updateSetting, getConfig } from '$lib/stores/settings.svelte';
 
   interface Preferences {
     identity: { companion_name: string; user_name: string; timezone: string };
@@ -89,7 +89,9 @@
       companionName = prefs!.identity.companion_name;
       userName = prefs!.identity.user_name;
       timezone = prefs!.identity.timezone;
-      model = prefs!.agent.model;
+      // DB config (set by chat header selector) takes priority over YAML
+      const dbConfig = getConfig();
+      model = dbConfig['agent.model'] || prefs!.agent.model;
       modelAutonomous = prefs!.agent.model_autonomous;
       orchestratorEnabled = prefs!.orchestrator.enabled;
       voiceEnabled = prefs!.voice.enabled;
