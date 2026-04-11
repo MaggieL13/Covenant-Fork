@@ -309,6 +309,7 @@ export function deleteThread(threadId: string): string[] {
   }
 
   // Cascading delete in a transaction
+  // Order matters: delete children before parents (embeddings → messages → threads)
   const deleteAll = db.transaction(() => {
     db.prepare('DELETE FROM triggers WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM timers WHERE thread_id = ?').run(threadId);
@@ -316,6 +317,8 @@ export function deleteThread(threadId: string): string[] {
     db.prepare('DELETE FROM outbound_queue WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM audit_log WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM session_history WHERE thread_id = ?').run(threadId);
+    // Delete embeddings before messages (FK: message_embeddings.message_id → messages.id)
+    db.prepare('DELETE FROM message_embeddings WHERE message_id IN (SELECT id FROM messages WHERE thread_id = ?)').run(threadId);
     db.prepare('DELETE FROM messages WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM threads WHERE id = ?').run(threadId);
   });

@@ -450,6 +450,8 @@
       activeThreadId={activeThreadId}
       onselect={handleThreadSelect}
       oncreate={handleNewThread}
+      ondelete={(id) => { threads = threads.filter(t => t.id !== id); }}
+      loadThreads={loadThreads}
     />
   </div>
 
