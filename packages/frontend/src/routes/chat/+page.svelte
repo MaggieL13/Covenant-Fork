@@ -194,7 +194,8 @@
     files: Array<{ fileId: string; filename: string; mimeType: string; size: number; contentType: 'image' | 'audio' | 'file'; url: string }>,
     prosody?: Record<string, number>
   ) {
-    if (!activeThreadId) {
+    let threadId = activeThreadId;
+    if (!threadId) {
       // Auto-create a thread instead of silently dropping the message
       try {
         const res = await fetch('/api/threads', {
@@ -206,8 +207,7 @@
         if (res.ok) {
           const thread = await res.json();
           await loadThread(thread.id);
-          // Small delay to let the thread activate
-          await new Promise(r => setTimeout(r, 100));
+          threadId = thread.id;
         } else {
           showToast('Failed to create thread', 'error');
           return;
@@ -222,7 +222,7 @@
       // Text only
       send({
         type: 'message',
-        threadId: activeThreadId,
+        threadId,
         content,
         contentType: 'text',
         replyToId: replyTo?.id,
@@ -233,7 +233,7 @@
       // and fires one combined agent query
       send({
         type: 'message',
-        threadId: activeThreadId,
+        threadId,
         content: content || '',
         contentType: 'text',
         replyToId: replyTo?.id,
