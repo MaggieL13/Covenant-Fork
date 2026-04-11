@@ -15,7 +15,14 @@
   async function selectModel(modelId: string) {
     open = false;
     if (modelId === currentModel) return;
+    // Write to both DB config (for backend getConfiguredModel) and YAML (for PreferencesPanel)
     await updateSetting('agent.model', modelId);
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ agent: { model: modelId } }),
+    }).catch(() => {}); // best-effort — DB is the authoritative source
   }
 
   function handleWindowClick(e: MouseEvent) {

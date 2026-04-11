@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { updateSetting } from '$lib/stores/settings.svelte';
 
   interface Preferences {
     identity: { companion_name: string; user_name: string; timezone: string };
@@ -130,6 +131,8 @@
       if (res.ok) {
         message = data.message || 'Saved';
         newPassword = '';
+        // Sync model to DB config so the chat header pill updates
+        updateSetting('agent.model', model);
       } else {
         error = data.error || 'Failed to save';
       }
