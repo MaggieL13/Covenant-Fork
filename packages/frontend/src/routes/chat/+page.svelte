@@ -206,7 +206,8 @@
         });
         if (res.ok) {
           const data = await res.json();
-          await loadThread(data.thread.id);
+          await loadThreads();
+          await handleThreadSelect(data.thread.id);
           threadId = data.thread.id;
         } else {
           showToast('Failed to create thread', 'error');
@@ -281,9 +282,9 @@
         });
         if (res.ok) {
           const data = await res.json();
-          await loadThread(data.thread.id);
+          await loadThreads();
+          await handleThreadSelect(data.thread.id);
           threadId = data.thread.id;
-          await new Promise(r => setTimeout(r, 100));
         } else {
           showToast('Failed to create thread', 'error');
           return;
