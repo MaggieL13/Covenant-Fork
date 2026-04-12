@@ -516,6 +516,7 @@ export class AgentService {
     // Interactive queries use primary model (configurable)
     // Priority: DB config > YAML config > env var > default
     const model = getConfiguredModel(isAutonomous);
+    console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'})`);
     const options: Options = {
       model,
       systemPrompt: claudeMdContent
