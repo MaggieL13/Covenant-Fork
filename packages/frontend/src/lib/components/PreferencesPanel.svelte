@@ -5,7 +5,7 @@
 
   interface Preferences {
     identity: { companion_name: string; user_name: string; timezone: string };
-    agent: { model: string; model_autonomous: string };
+    agent: { model: string; model_autonomous: string; thinking_effort: string };
     orchestrator: { enabled: boolean };
     voice: { enabled: boolean };
     discord: { enabled: boolean };
@@ -33,6 +33,7 @@
   let timezone = $state('');
   let model = $state('');
   let modelAutonomous = $state('');
+  let thinkingEffort = $state('max');
   let orchestratorEnabled = $state(true);
   let voiceEnabled = $state(false);
   let discordEnabled = $state(false);
@@ -94,6 +95,7 @@
       const dbConfig = getConfig();
       model = dbConfig['agent.model'] || prefs!.agent.model;
       modelAutonomous = prefs!.agent.model_autonomous;
+      thinkingEffort = prefs!.agent.thinking_effort || 'max';
       orchestratorEnabled = prefs!.orchestrator.enabled;
       voiceEnabled = prefs!.voice.enabled;
       discordEnabled = prefs!.discord.enabled;
@@ -116,7 +118,7 @@
     try {
       const updates: Record<string, unknown> = {
         identity: { companion_name: companionName, user_name: userName, timezone },
-        agent: { model, model_autonomous: modelAutonomous },
+        agent: { model, model_autonomous: modelAutonomous, thinking_effort: thinkingEffort },
         orchestrator: { enabled: orchestratorEnabled },
         voice: { enabled: voiceEnabled },
         discord: { enabled: discordEnabled },
@@ -136,6 +138,7 @@
         newPassword = '';
         // Sync model to DB config so the chat header pill updates
         await updateSetting('agent.model', model);
+        await updateSetting('agent.thinking_effort', thinkingEffort);
       } else {
         error = data.error || 'Failed to save';
       }
@@ -351,13 +354,13 @@
       </div>
     </section>
 
-    <!-- Agent Models -->
+    <!-- Claude Configuration -->
     <section class="section">
-      <h3 class="section-title">Agent Models</h3>
-      <p class="section-desc">Claude model for interactive and autonomous messages.</p>
+      <h3 class="section-title">Claude</h3>
+      <p class="section-desc">Model selection and thinking behavior for the Claude Agent SDK.</p>
 
       <div class="field">
-        <label class="field-label" for="pref-model">Interactive Model</label>
+        <label class="field-label" for="pref-model">Chat Model</label>
         <select id="pref-model" class="field-select" bind:value={model}>
           {#each MODELS as m}
             <option value={m.id}>{m.label}</option>
@@ -374,6 +377,17 @@
           {/each}
         </select>
         <span class="field-hint">Used for scheduled wakes and autonomous actions</span>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="pref-effort">Thinking Effort</label>
+        <select id="pref-effort" class="field-select" bind:value={thinkingEffort}>
+          <option value="max">Max — always thinks deeply, no constraints</option>
+          <option value="high">High — almost always thinks (default)</option>
+          <option value="medium">Medium — thinks when needed, skips simple stuff</option>
+          <option value="low">Low — minimal thinking, fastest responses</option>
+        </select>
+        <span class="field-hint">How much the model reasons before responding. Higher = smarter but slower</span>
       </div>
     </section>
 

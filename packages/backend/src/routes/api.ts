@@ -290,6 +290,7 @@ router.get('/preferences', (req, res) => {
       agent: {
         model: config.agent.model,
         model_autonomous: config.agent.model_autonomous,
+        thinking_effort: config.agent.thinking_effort || 'max',
       },
       orchestrator: {
         enabled: (parsed as any)?.orchestrator?.enabled ?? config.orchestrator.enabled,
@@ -335,6 +336,7 @@ router.put('/preferences', (req, res) => {
       if (!parsed.agent) parsed.agent = {};
       if (updates.agent.model !== undefined) parsed.agent.model = updates.agent.model;
       if (updates.agent.model_autonomous !== undefined) parsed.agent.model_autonomous = updates.agent.model_autonomous;
+      if (updates.agent.thinking_effort !== undefined) parsed.agent.thinking_effort = updates.agent.thinking_effort;
     }
     if (updates.orchestrator) {
       if (!parsed.orchestrator) parsed.orchestrator = {};

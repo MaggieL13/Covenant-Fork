@@ -167,6 +167,13 @@ function getConfiguredModel(isAutonomous: boolean): string {
   return 'claude-sonnet-4-6';
 }
 
+function getConfiguredThinkingEffort(): string {
+  const dbValue = getDbConfig('agent.thinking_effort');
+  if (dbValue) return dbValue;
+  const cfg = getResonantConfig();
+  return cfg.agent.thinking_effort || 'max';
+}
+
 // Presence state
 let presenceStatus: 'active' | 'dormant' | 'waking' | 'offline' = 'offline';
 
@@ -516,7 +523,8 @@ export class AgentService {
     // Interactive queries use primary model (configurable)
     // Priority: DB config > YAML config > env var > default
     const model = getConfiguredModel(isAutonomous);
-    console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'})`);
+    const effort = getConfiguredThinkingEffort();
+    console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'}, effort: ${effort})`);
     const options: Options = {
       model,
       systemPrompt: claudeMdContent
@@ -529,6 +537,7 @@ export class AgentService {
 
       includePartialMessages: true,
       thinking: { type: 'adaptive' },
+      effort: getConfiguredThinkingEffort() as any,
       hooks: createHooks(hookContext),
       // Plugin: native skill discovery from .claude/skills/
       plugins: [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],

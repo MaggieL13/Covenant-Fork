@@ -29,6 +29,7 @@ export interface ResonantConfig {
     mcp_json_path: string;
     model: string;
     model_autonomous: string;
+    thinking_effort: string;
   };
   orchestrator: {
     enabled: boolean;
@@ -103,6 +104,7 @@ const DEFAULTS: ResonantConfig = {
     mcp_json_path: './.mcp.json',
     model: 'claude-sonnet-4-6',
     model_autonomous: 'claude-sonnet-4-6',
+    thinking_effort: 'max',
   },
   orchestrator: {
     enabled: true,
