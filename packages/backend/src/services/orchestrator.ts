@@ -115,6 +115,11 @@ export function parseWakePromptsFile(filePath: string, userName: string): Record
       sections[currentSection] = lines.join('\n').trim();
     }
 
+    // Replace {user_name} placeholder in all parsed sections
+    for (const key of Object.keys(sections)) {
+      sections[key] = sections[key].replace(/\{user_name\}/g, userName);
+    }
+
     // Merge: defaults first, then all parsed sections (including custom ones)
     return { ...defaults, ...sections };
 
@@ -141,6 +146,7 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { wakeType: 'morning', label: '8:00 AM — Morning', cronExpr: '0 8 * * *', category: 'wake', conditional: true, freshSession: true },
   { wakeType: 'midday', label: '1:00 PM — Midday', cronExpr: '0 13 * * *', category: 'checkin', conditional: true },
   { wakeType: 'evening', label: '9:00 PM — Evening', cronExpr: '0 21 * * *', category: 'checkin' },
+  { wakeType: 'handoff', label: '11:50 PM — Handoff', cronExpr: '50 23 * * *', category: 'handoff' },
 ];
 
 // --- Managed task interface ---

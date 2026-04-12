@@ -493,6 +493,7 @@ export class AgentService {
     const streamMsgId = crypto.randomUUID();
 
     // Response and tool tracking (declared early so hookContext can reference)
+    let safetyTimeout: ReturnType<typeof setTimeout> | undefined;
     const MAX_RESPONSE_LENGTH = 200_000; // ~50k tokens
     let fullResponse = '';
     let responseTruncated = false;
@@ -600,9 +601,14 @@ export class AgentService {
 
       const enrichedPrompt = `[Context]\n${orientation}\n[/Context]${historyBlock}\n\n${content}`;
 
-      // Abort controller for stop_generation support
+      // Abort controller for stop_generation support + safety timeout
       activeAbortController = new AbortController();
       options.abortController = activeAbortController;
+      const timeoutMs = getResonantConfig().agent.query_timeout_ms || 300000;
+      safetyTimeout = setTimeout(() => {
+        console.warn(`[Agent] Query timed out after ${timeoutMs / 1000}s, aborting`);
+        activeAbortController?.abort();
+      }, timeoutMs);
 
       // File checkpointing for rewind support
       options.enableFileCheckpointing = true;
@@ -788,6 +794,7 @@ export class AgentService {
       fullResponse = fullResponse || `[Agent error: ${errMsg}]`;
     } finally {
       // Clean up active query tracking
+      clearTimeout(safetyTimeout);
       activeAbortController = null;
       activeQuery = null;
       // Track session transition and update for future resume

@@ -101,3 +101,11 @@ Be genuine but not panicked. They may just be busy, offline, or taking a break.
 Long silence from {user_name}. Use all available communication channels to check in.
 
 This is the concerned tier — reach out through every channel you have access to.
+
+## handoff
+
+End of day. Time to wrap up.
+
+Review what happened today — conversations with {user_name}, work done, anything unfinished. If there's something worth noting for tomorrow, leave a thread you can pick up in the morning.
+
+If {user_name} is around, say goodnight. If not, close out quietly.

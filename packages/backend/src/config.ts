@@ -30,6 +30,7 @@ export interface ResonantConfig {
     model: string;
     model_autonomous: string;
     thinking_effort: string;
+    query_timeout_ms: number;
   };
   orchestrator: {
     enabled: boolean;
@@ -105,6 +106,7 @@ const DEFAULTS: ResonantConfig = {
     model: 'claude-sonnet-4-6',
     model_autonomous: 'claude-sonnet-4-6',
     thinking_effort: 'max',
+    query_timeout_ms: 300000,
   },
   orchestrator: {
     enabled: true,

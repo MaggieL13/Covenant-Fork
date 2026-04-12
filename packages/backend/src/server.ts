@@ -228,25 +228,24 @@ server.listen(PORT, HOST, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  orchestrator.stop();
-  if (discordService) await discordService.stop();
-  if (telegramService) await telegramService.stop();
-  wss.clients.forEach(ws => ws.close());
-  wss.close();
-  server.close(() => {
-    console.log('Server closed');
-    db.close();
-    process.exit(0);
-  });
-});
+async function shutdown(signal: string) {
+  console.log(`${signal} received, shutting down gracefully...`);
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  orchestrator.stop();
+  // 1. Abort active agent query
+  if (agentService.isProcessing()) {
+    console.log('Aborting active agent query...');
+    agentService.stopGeneration();
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  // 2. Stop orchestrator
+  await orchestrator.stop();
+
+  // 3. Stop platform services
   if (discordService) await discordService.stop();
   if (telegramService) await telegramService.stop();
+
+  // 4. Close connections
   wss.clients.forEach(ws => ws.close());
   wss.close();
   server.close(() => {
@@ -254,4 +253,13 @@ process.on('SIGINT', async () => {
     db.close();
     process.exit(0);
   });
-});
+
+  // Force exit after 10s if cleanup hangs
+  setTimeout(() => {
+    console.error('Forced exit after shutdown timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
