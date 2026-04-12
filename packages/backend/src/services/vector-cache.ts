@@ -8,7 +8,7 @@
  * Memory: ~15 MB at 10K vectors (384 dims × 4 bytes × 10K).
  */
 
-import { getDb } from './db.js';
+import { getDb, getAllDigestEmbeddings } from './db.js';
 import { EMBEDDING_DIM } from './embeddings.js';
 
 interface CacheEntry {
@@ -17,6 +17,8 @@ interface CacheEntry {
   threadName: string;
   role: string;
   createdAt: string;
+  type?: 'message' | 'digest';
+  content?: string; // digest block content for display
 }
 
 // Parallel arrays: metadata[i] corresponds to vectors at offset i * EMBEDDING_DIM
@@ -59,8 +61,41 @@ export function loadVectorCache(): void {
     messageIndex.set(row.message_id, i);
   }
 
+  // Also load digest embeddings
+  try {
+    const digestRows = getAllDigestEmbeddings();
+    if (digestRows.length > 0) {
+      const totalCount = count + digestRows.length;
+      const newVectors = new Float32Array(totalCount * EMBEDDING_DIM);
+      newVectors.set(vectors);
+
+      for (let j = 0; j < digestRows.length; j++) {
+        const dr = digestRows[j];
+        const buf = dr.vector;
+        const f32 = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+        newVectors.set(f32, (count + j) * EMBEDDING_DIM);
+
+        metadata.push({
+          messageId: dr.digest_id,
+          threadId: '',
+          threadName: `Digest ${dr.date}`,
+          role: 'digest',
+          createdAt: dr.created_at,
+          type: 'digest',
+          content: dr.content,
+        });
+        messageIndex.set(dr.digest_id, count + j);
+      }
+
+      vectors = newVectors;
+      console.log(`[vector-cache] Loaded ${digestRows.length} digest vectors`);
+    }
+  } catch (err) {
+    console.warn('[vector-cache] Failed to load digest embeddings:', (err as Error).message);
+  }
+
   loaded = true;
-  console.log(`[vector-cache] Loaded ${count} vectors (${(vectors.byteLength / 1024 / 1024).toFixed(1)} MB)`);
+  console.log(`[vector-cache] Total: ${metadata.length} vectors (${(vectors.byteLength / 1024 / 1024).toFixed(1)} MB)`);
 }
 
 /** Add or update a single embedding in the cache. Called after embedMessageAsync. */
@@ -100,6 +135,8 @@ export interface SearchResult {
   role: string;
   createdAt: string;
   similarity: number;
+  type?: 'message' | 'digest';
+  content?: string;
 }
 
 /** Fast vector search with optional pre-filtering. Returns top N results sorted by similarity. */
@@ -129,14 +166,20 @@ export function searchVectors(queryVector: Float32Array, limit: number, filter?:
       dot += queryVector[d] * vectors[offset + d];
     }
 
+    const entry: SearchResult = {
+      messageId: m.messageId, threadId: m.threadId, threadName: m.threadName,
+      role: m.role, createdAt: m.createdAt, similarity: dot,
+      type: m.type || 'message', content: m.content,
+    };
+
     if (heap.length < limit) {
-      heap.push({ messageId: m.messageId, threadId: m.threadId, threadName: m.threadName, role: m.role, createdAt: m.createdAt, similarity: dot });
+      heap.push(entry);
       if (heap.length === limit) {
         heap.sort((a, b) => a.similarity - b.similarity);
         minScore = heap[0].similarity;
       }
     } else if (dot > minScore) {
-      heap[0] = { messageId: m.messageId, threadId: m.threadId, threadName: m.threadName, role: m.role, createdAt: m.createdAt, similarity: dot };
+      heap[0] = entry;
       heap.sort((a, b) => a.similarity - b.similarity);
       minScore = heap[0].similarity;
     }
@@ -144,6 +187,37 @@ export function searchVectors(queryVector: Float32Array, limit: number, filter?:
 
   heap.sort((a, b) => b.similarity - a.similarity);
   return heap;
+}
+
+/** Add a digest embedding to the live cache. */
+export function cacheDigestEmbedding(digestId: string, vector: Float32Array, meta: {
+  date: string; content: string;
+}): void {
+  if (!loaded) return;
+
+  const existing = messageIndex.get(digestId);
+  if (existing !== undefined) {
+    vectors.set(vector, existing * EMBEDDING_DIM);
+    metadata[existing] = {
+      messageId: digestId, threadId: '', threadName: `Digest ${meta.date}`,
+      role: 'digest', createdAt: new Date().toISOString(),
+      type: 'digest', content: meta.content,
+    };
+    return;
+  }
+
+  const oldLen = metadata.length;
+  const newVectors = new Float32Array((oldLen + 1) * EMBEDDING_DIM);
+  newVectors.set(vectors);
+  newVectors.set(vector, oldLen * EMBEDDING_DIM);
+  vectors = newVectors;
+
+  metadata.push({
+    messageId: digestId, threadId: '', threadName: `Digest ${meta.date}`,
+    role: 'digest', createdAt: new Date().toISOString(),
+    type: 'digest', content: meta.content,
+  });
+  messageIndex.set(digestId, oldLen);
 }
 
 export function getCacheStats(): { loaded: boolean; count: number; memoryMb: number } {

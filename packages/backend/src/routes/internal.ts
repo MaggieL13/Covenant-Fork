@@ -698,65 +698,22 @@ router.post('/react', (req, res) => {
 
 router.post('/search-semantic', async (req, res) => {
   try {
-    const { query, threadId, role, after, before, limit = 10 } = req.body as {
-      query?: string; threadId?: string; role?: string;
-      after?: string; before?: string; limit?: number;
-    };
+    const { query, threadId, role, after, before, limit, context } = req.body as Record<string, unknown>;
     if (!query || typeof query !== 'string') {
       res.status(400).json({ error: 'query is required' });
       return;
     }
-
-    const queryVector = await embed(query);
-
-    const filter: SearchFilter = {};
-    if (threadId) filter.threadId = threadId;
-    if (role) filter.role = role;
-    if (after) filter.after = after;
-    if (before) filter.before = before;
-
-    const topResults = searchVectors(queryVector, Math.min(limit, 50), filter);
-    const contextSize = Math.min((req.body as Record<string, unknown>).context as number || 2, 10);
-
-    const sessionStmt = getDb().prepare(`
-      SELECT sh.session_id, sh.started_at, sh.ended_at
-      FROM session_history sh
-      WHERE sh.thread_id = ? AND sh.started_at <= ? AND (sh.ended_at IS NULL OR sh.ended_at >= ?)
-      LIMIT 1
-    `);
-
-    const results = topResults.map(r => {
-      const surrounding = getMessageContext(r.messageId, contextSize);
-
-      let session: { sessionId: string; startedAt: string; endedAt: string | null } | null = null;
-      try {
-        const row = sessionStmt.get(r.threadId, r.createdAt, r.createdAt) as {
-          session_id: string; started_at: string; ended_at: string | null;
-        } | undefined;
-        if (row) session = { sessionId: row.session_id, startedAt: row.started_at, endedAt: row.ended_at };
-      } catch { /* best-effort */ }
-
-      return {
-        messageId: r.messageId,
-        threadId: r.threadId,
-        threadName: r.threadName,
-        similarity: Math.round(r.similarity * 1000) / 1000,
-        createdAt: r.createdAt,
-        role: r.role,
-        session,
-        context: surrounding.map(m => ({
-          id: m.id,
-          role: m.role,
-          content: m.content.length > 500 ? m.content.slice(0, 500) + '\u2026' : m.content,
-          createdAt: m.created_at,
-          isMatch: m.id === r.messageId,
-        })),
-      };
+    const { performSemanticSearch } = await import('../services/semantic-search.js');
+    const response = await performSemanticSearch({
+      query,
+      threadId: threadId as string | undefined,
+      role: role as string | undefined,
+      after: after as string | undefined,
+      before: before as string | undefined,
+      limit: typeof limit === 'number' ? limit : 10,
+      context: typeof context === 'number' ? context : 2,
     });
-
-    const cache = getCacheStats();
-    const { embedded, total } = getEmbeddingCount();
-    res.json({ results, indexed: embedded, totalMessages: total, cache });
+    res.json(response);
   } catch (error) {
     console.error('Semantic search error:', error);
     res.status(500).json({ error: 'Semantic search failed' });

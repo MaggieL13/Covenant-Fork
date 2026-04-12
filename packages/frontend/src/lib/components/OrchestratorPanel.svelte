@@ -17,7 +17,7 @@
   // Group tasks by category
   let wakeTasks = $derived(tasks.filter(t => t.category === 'wake'));
   let checkinTasks = $derived(tasks.filter(t => t.category === 'checkin'));
-  let handoffTasks = $derived(tasks.filter(t => t.category === 'handoff'));
+
 
   function cronToTime(cron: string): string {
     // Parse simple cron like "0 1 * * *" -> "01:00"
@@ -115,7 +115,7 @@
 
   <!-- Wake schedules -->
   <div class="section">
-    <h3 class="section-title">Night Routines</h3>
+    <h3 class="section-title">Wake</h3>
     <div class="task-list">
       {#each wakeTasks as task}
         <div class="task-row" class:disabled={!task.enabled}>
@@ -159,47 +159,6 @@
     <h3 class="section-title">Check-in Routines</h3>
     <div class="task-list">
       {#each checkinTasks as task}
-        <div class="task-row" class:disabled={!task.enabled}>
-          <div class="task-info">
-            <span class="task-label">{task.label}</span>
-            {#if editingTask === task.wakeType}
-              <div class="edit-row">
-                <input
-                  type="time"
-                  class="time-input"
-                  bind:value={editCronValue}
-                  onkeydown={(e) => { if (e.key === 'Enter') saveEdit(task.wakeType); if (e.key === 'Escape') cancelEdit(); }}
-                />
-                <button class="btn-sm" onclick={() => saveEdit(task.wakeType)}>Save</button>
-                <button class="btn-sm btn-ghost" onclick={cancelEdit}>Cancel</button>
-              </div>
-            {:else}
-              <button class="task-time" onclick={() => startEdit(task.wakeType, task.cronExpr)}>
-                {cronToTime(task.cronExpr)}
-              </button>
-            {/if}
-          </div>
-          <div class="task-controls">
-            <span class="status-dot" class:active={task.enabled}></span>
-            <button
-              class="toggle-btn"
-              class:on={task.enabled}
-              onclick={() => handleToggle(task.wakeType, task.enabled)}
-              aria-label={task.enabled ? 'Disable' : 'Enable'}
-            >
-              <span class="toggle-slider"></span>
-            </button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  </div>
-
-  <!-- Handoff -->
-  <div class="section">
-    <h3 class="section-title">Handoff</h3>
-    <div class="task-list">
-      {#each handoffTasks as task}
         <div class="task-row" class:disabled={!task.enabled}>
           <div class="task-info">
             <span class="task-label">{task.label}</span>

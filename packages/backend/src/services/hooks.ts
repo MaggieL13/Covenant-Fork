@@ -18,7 +18,7 @@ import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime 
 import { getResonantConfig } from '../config.js';
 import crypto from 'crypto';
 import { existsSync, readFileSync } from 'fs';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 
 // Re-export ConnectionRegistry type from types
 import type { ConnectionRegistry } from '../types.js';
@@ -36,6 +36,38 @@ function sanitizeForContext(text: string): string {
 // Extracted modules
 import { fetchLifeStatus, fetchMoodHistory } from './life-status.js';
 import { scanSkills, scanSkillSummaries } from './skills.js';
+
+// --- Scribe digest reader for orientation context ---
+function getLatestDigestExcerpt(maxChars = 2000): string | null {
+  try {
+    const config = getResonantConfig();
+    const digestsDir = join(dirname(config.server.db_path), 'digests');
+
+    // Try today first, then yesterday
+    const tz = config.identity.timezone || 'UTC';
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+    const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: tz });
+
+    for (const dateStr of [today, yesterday]) {
+      const digestPath = join(digestsDir, `${dateStr}.md`);
+      if (existsSync(digestPath)) {
+        const content = readFileSync(digestPath, 'utf-8');
+        if (content.trim()) {
+          // Take the last digest block (most recent entry) — blocks separated by \n---\n
+          const blocks = content.split('\n---\n').filter(b => b.trim());
+          const lastBlock = blocks[blocks.length - 1];
+          if (lastBlock) {
+            const trimmed = lastBlock.trim().substring(0, maxChars);
+            return `[Scribe Digest — ${dateStr}]\n${trimmed}`;
+          }
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // HookContext — built per query, passed to factory
@@ -783,6 +815,12 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     }
   } catch {}
 
+  // Latest Scribe digest — rich context from recent conversation
+  try {
+    const digest = getLatestDigestExcerpt(2000);
+    if (digest) parts.push(digest);
+  } catch {}
+
   // Active triggers (watchers/impulses)
   try {
     const triggers = getActiveTriggers();
@@ -991,8 +1029,15 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     parts.push(boundedPlatformContext);
   }
 
-  console.log(`[Orientation] ${ctx.isAutonomous ? 'autonomous' : 'interactive'}, platform=${ctx.platform}, thread="${ctx.threadName}", time=${timeStr}`);
-  return parts.join('\n');
+  // Token budget estimate (~4 chars per token)
+  const joined = parts.join('\n');
+  const estimatedTokens = Math.ceil(joined.length / 4);
+  const partsBreakdown = parts.map((p, i) => `${i}:${Math.ceil(p.length / 4)}t`).join(' ');
+  console.log(`[Orientation] ~${estimatedTokens} tokens (${parts.length} parts: ${partsBreakdown}) | ${ctx.isAutonomous ? 'autonomous' : 'interactive'}, platform=${ctx.platform}, thread="${ctx.threadName}"`);
+  if (estimatedTokens > 3000) {
+    console.warn(`[Orientation] WARNING: context exceeds 3000 token budget (~${estimatedTokens} tokens)`);
+  }
+  return joined;
 }
 
 // SessionStart hook — kept as fallback in case SDK adds V1 support
@@ -1047,11 +1092,12 @@ function buildSessionEnd(ctx: HookContext): HookCallback {
 
     // Capture handoff note for next session
     try {
-      const recentMsgs = getMessages({ threadId: ctx.threadId, limit: 3 });
-      const lastAssistant = recentMsgs.find(m => m.role === 'companion');
-      const excerpt = lastAssistant
-        ? lastAssistant.content.substring(0, 120).replace(/\n/g, ' ').trim()
-        : '';
+      const recentMsgs = getMessages({ threadId: ctx.threadId, limit: 5 });
+      const excerpt = recentMsgs.map(m => {
+        const role = m.role === 'user' ? 'user' : 'companion';
+        const text = m.content.substring(0, 150).replace(/\n/g, ' ').trim();
+        return `${role}: ${text}`;
+      }).join(' | ');
       const handoff = JSON.stringify({
         thread: ctx.threadName,
         threadType: ctx.threadType,

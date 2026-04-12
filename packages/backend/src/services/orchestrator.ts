@@ -138,7 +138,7 @@ export interface TaskDefinition {
 
 /** @internal Exported for testing */
 export const DEFAULT_TASKS: TaskDefinition[] = [
-  { wakeType: 'morning', label: '8:00 AM — Morning', cronExpr: '0 8 * * *', category: 'checkin', conditional: true },
+  { wakeType: 'morning', label: '8:00 AM — Morning', cronExpr: '0 8 * * *', category: 'wake', conditional: true, freshSession: true },
   { wakeType: 'midday', label: '1:00 PM — Midday', cronExpr: '0 13 * * *', category: 'checkin', conditional: true },
   { wakeType: 'evening', label: '9:00 PM — Evening', cronExpr: '0 21 * * *', category: 'checkin' },
 ];
@@ -706,6 +706,13 @@ export class Orchestrator {
       // Fresh session: clear session on existing thread (don't create duplicate)
       if (opts?.freshSession) {
         updateThreadSession(thread.id, null);
+      }
+
+      // Run digest before wake so orientation context has freshest data
+      try {
+        await runDigest(this.agent);
+      } catch (err) {
+        olog(`Pre-wake digest skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       // Fire the autonomous query

@@ -563,6 +563,31 @@ router.get('/search', (req, res) => {
   }
 });
 
+// Semantic search (authenticated)
+router.post('/search-semantic', async (req, res) => {
+  try {
+    const { query, threadId, role, after, before, limit, context } = req.body as Record<string, unknown>;
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: 'query is required' });
+      return;
+    }
+    const { performSemanticSearch } = await import('../services/semantic-search.js');
+    const response = await performSemanticSearch({
+      query,
+      threadId: threadId as string | undefined,
+      role: role as string | undefined,
+      after: after as string | undefined,
+      before: before as string | undefined,
+      limit: typeof limit === 'number' ? limit : 10,
+      context: typeof context === 'number' ? context : 2,
+    });
+    res.json(response);
+  } catch (error) {
+    console.error('Semantic search error:', error);
+    res.status(500).json({ error: 'Semantic search failed' });
+  }
+});
+
 // Audit log entries
 router.get('/audit', (req, res) => {
   try {

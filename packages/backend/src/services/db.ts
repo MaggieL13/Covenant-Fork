@@ -207,6 +207,18 @@ export function initDb(dbPath: string): Database.Database {
     )
   `);
 
+  // Digest embeddings table — semantic search over Scribe digest blocks
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS digest_embeddings (
+      digest_id TEXT PRIMARY KEY,
+      date TEXT NOT NULL,
+      block_index INTEGER NOT NULL,
+      vector BLOB NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+
   // Session history migration — add UNIQUE on session_id + 'resumed' end_reason
   const shCount = (db.prepare('SELECT COUNT(*) as c FROM session_history').get() as { c: number }).c;
   if (shCount === 0) {
@@ -732,6 +744,22 @@ export function getEmbeddingCount(): { embedded: number; total: number } {
     "SELECT COUNT(*) as c FROM messages WHERE deleted_at IS NULL AND role != 'system' AND content_type = 'text' AND length(content) > 10"
   ).get() as { c: number }).c;
   return { embedded, total };
+}
+
+// Digest embedding operations
+export function saveDigestEmbedding(digestId: string, date: string, blockIndex: number, vector: Buffer, content: string): void {
+  getDb().prepare(`
+    INSERT OR REPLACE INTO digest_embeddings (digest_id, date, block_index, vector, content, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(digestId, date, blockIndex, vector, content, new Date().toISOString());
+}
+
+export function getAllDigestEmbeddings(): Array<{
+  digest_id: string; date: string; block_index: number; vector: Buffer; content: string; created_at: string;
+}> {
+  return getDb().prepare('SELECT * FROM digest_embeddings ORDER BY date DESC, block_index ASC').all() as Array<{
+    digest_id: string; date: string; block_index: number; vector: Buffer; content: string; created_at: string;
+  }>;
 }
 
 // Session operations

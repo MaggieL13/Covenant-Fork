@@ -3,8 +3,10 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { getDb, getConfig, setConfig, getTodayThread } from './db.js';
+import { getDb, getConfig, setConfig, getTodayThread, saveDigestEmbedding } from './db.js';
 import { getResonantConfig } from '../config.js';
+import { embed, vectorToBuffer } from './embeddings.js';
+import { cacheDigestEmbedding } from './vector-cache.js';
 import type { AgentService } from './agent.js';
 
 function today(): string {
@@ -177,6 +179,21 @@ Write the digest block for this conversation. Remember: output ONLY the markdown
 
     // Update last processed sequence
     setConfig('digest.last_sequence', String(maxSeq.seq));
+
+    // Embed digest block for semantic search
+    try {
+      const dateStr = today();
+      // Count existing blocks to determine index
+      const existingContent = readFileSync(digestPath, 'utf-8');
+      const blockIndex = existingContent.split('\n---\n').filter(b => b.trim()).length - 1;
+      const digestId = `${dateStr}_${blockIndex}`;
+      const vector = await embed(digestContent.trim());
+      saveDigestEmbedding(digestId, dateStr, blockIndex, vectorToBuffer(vector), digestContent.trim());
+      cacheDigestEmbedding(digestId, vector, { date: dateStr, content: digestContent.trim() });
+      dlog(`Digest embedded: ${digestId}`);
+    } catch (embedErr: any) {
+      dlog(`Digest embedding failed (non-fatal): ${embedErr.message}`);
+    }
 
     dlog(`Digest written to ${digestPath} (${digestContent.length} chars)`);
   } catch (err: any) {

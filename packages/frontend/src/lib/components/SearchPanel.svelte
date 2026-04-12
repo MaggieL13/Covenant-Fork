@@ -20,12 +20,14 @@
     role: string;
     highlight: string;
     createdAt: string;
+    similarity?: number;
   }
 
   let query = $state('');
   let results = $state<SearchHit[]>([]);
   let total = $state(0);
   let loading = $state(false);
+  let semantic = $state(true);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let inputEl: HTMLInputElement;
 
@@ -39,16 +41,45 @@
     debounceTimer = setTimeout(() => doSearch(), 300);
   }
 
+  function toggleMode() {
+    semantic = !semantic;
+    if (query.trim()) doSearch();
+  }
+
   async function doSearch() {
     const q = query.trim();
     if (!q) return;
     loading = true;
     try {
-      const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
-      if (!res.ok) throw new Error('Search failed');
-      const data = await res.json();
-      results = data.results;
-      total = data.total;
+      if (semantic) {
+        const res = await apiFetch('/api/search-semantic', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, limit: 30 }),
+        });
+        if (!res.ok) throw new Error('Semantic search failed');
+        const data = await res.json();
+        results = data.results.map((r: { messageId: string; threadId: string; threadName: string; role: string; similarity: number; createdAt: string; context: Array<{ content: string; isMatch: boolean }> }) => {
+          const matched = r.context?.find((c: { isMatch: boolean }) => c.isMatch);
+          const content = matched?.content || '';
+          return {
+            messageId: r.messageId,
+            threadId: r.threadId,
+            threadName: r.threadName,
+            role: r.role,
+            highlight: content.length > 120 ? content.slice(0, 120) + '...' : content,
+            createdAt: r.createdAt,
+            similarity: r.similarity,
+          };
+        });
+        total = data.results.length;
+      } else {
+        const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
+        if (!res.ok) throw new Error('Search failed');
+        const data = await res.json();
+        results = data.results;
+        total = data.total;
+      }
     } catch (err) {
       console.error('Search error:', err);
       results = [];
@@ -96,13 +127,16 @@
         bind:this={inputEl}
         class="search-input"
         type="text"
-        placeholder="Search messages..."
+        placeholder={semantic ? "Search by meaning..." : "Search by keyword..."}
         bind:value={query}
         oninput={handleInput}
       />
       {#if loading}
         <span class="search-spinner"></span>
       {/if}
+      <button class="search-mode" class:active={semantic} onclick={toggleMode} title={semantic ? 'Semantic (meaning)' : 'Text (keyword)'}>
+        {semantic ? '~' : 'Aa'}
+      </button>
       <button class="search-close" onclick={() => onclose?.()} aria-label="Close">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
@@ -118,6 +152,7 @@
             <div class="result-header">
               <span class="result-role" class:simon={hit.role === 'companion'}>{hit.role === 'companion' ? companionDisplayName : userDisplayName}</span>
               <span class="result-thread">{hit.threadName}</span>
+              {#if hit.similarity}<span class="result-similarity">{Math.round(hit.similarity * 100)}%</span>{/if}
               <span class="result-time">{formatTime(hit.createdAt)}</span>
             </div>
             <div class="result-highlight">{hit.highlight}</div>
@@ -287,6 +322,41 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     line-height: 1.4;
+  }
+
+  .search-mode {
+    flex-shrink: 0;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: var(--font-mono, monospace);
+  }
+
+  .search-mode.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .search-mode:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .result-similarity {
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: 0.0625rem 0.375rem;
+    border-radius: 0.75rem;
+    white-space: nowrap;
   }
 
   .search-empty {
