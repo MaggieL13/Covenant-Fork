@@ -5,6 +5,7 @@
   import ResEmpty from '$lib/components/ResEmpty.svelte';
   import ResSkeleton from '$lib/components/ResSkeleton.svelte';
   import { CC_API } from '$lib/utils/cc';
+  import { apiFetch } from '$lib/utils/api';
 
   let expenses = $state<any[]>([]);
   let total = $state(0);
@@ -21,8 +22,8 @@
   async function load() {
     try {
       const [eRes, sRes] = await Promise.all([
-        fetch(`${CC_API}/expenses?limit=30`),
-        fetch(`${CC_API}/expenses/stats?period=${period}`),
+        apiFetch(`${CC_API}/expenses?limit=30`),
+        apiFetch(`${CC_API}/expenses/stats?period=${period}`),
       ]);
       const eData = await eRes.json(); const sData = await sRes.json();
       expenses = eData.expenses || []; total = eData.total || 0; stats = sData;
@@ -33,7 +34,7 @@
   async function addExpense() {
     const amt = parseFloat(newAmount);
     if (isNaN(amt) || amt <= 0) return;
-    await fetch(`${CC_API}/expenses`, {
+    await apiFetch(`${CC_API}/expenses`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount: amt, category: newCategory, description: newDesc || undefined, paid_by: newPaidBy || undefined }),
     });
@@ -44,7 +45,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch(`${CC_API}/config`);
+      const res = await apiFetch(`${CC_API}/config`);
       if (res.ok) {
         const config = await res.json();
         currencySymbol = config.currency_symbol || '$';

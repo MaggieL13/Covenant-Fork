@@ -8,6 +8,7 @@ import {
   deleteWebSession,
 } from '../services/db.js';
 import { getResonantConfig } from '../config.js';
+import { generateCsrfToken, setCsrfCookie, clearCsrfCookie } from './csrf.js';
 
 const COOKIE_NAME = 'resonant_session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -110,6 +111,10 @@ export function loginHandler(req: Request, res: Response): void {
     path: '/',
   });
 
+  // Set CSRF cookie alongside session cookie
+  const csrfToken = generateCsrfToken(sessionToken);
+  setCsrfCookie(res, csrfToken, isSecure);
+
   res.json({ success: true });
 }
 
@@ -130,6 +135,7 @@ export function logoutHandler(req: Request, res: Response): void {
     sameSite: 'strict',
     path: '/',
   });
+  clearCsrfCookie(res);
   res.json({ success: true });
 }
 

@@ -1,4 +1,5 @@
 import type { SystemStatus, OrchestratorTaskStatus, TriggerStatus } from '@resonant/shared';
+import { apiFetch } from '$lib/utils/api';
 
 // State
 let systemStatus = $state<SystemStatus | null>(null);
@@ -18,12 +19,12 @@ export async function loadSettings(): Promise<void> {
   loading = true;
   try {
     const [configRes, orchRes, failsafeRes, triggersRes, prefsRes, identityRes] = await Promise.all([
-      fetch('/api/settings', { credentials: 'include' }),
-      fetch('/api/orchestrator/status', { credentials: 'include' }),
-      fetch('/api/orchestrator/failsafe', { credentials: 'include' }),
-      fetch('/api/orchestrator/triggers', { credentials: 'include' }),
-      fetch('/api/preferences', { credentials: 'include' }),
-      fetch('/api/identity', { credentials: 'include' }),
+      apiFetch('/api/settings'),
+      apiFetch('/api/orchestrator/status'),
+      apiFetch('/api/orchestrator/failsafe'),
+      apiFetch('/api/orchestrator/triggers'),
+      apiFetch('/api/preferences'),
+      apiFetch('/api/identity'),
     ]);
 
     let prefs: Record<string, any> | null = null;
@@ -75,10 +76,9 @@ export async function loadSettings(): Promise<void> {
 // Update a single config value
 export async function updateSetting(key: string, value: string): Promise<boolean> {
   try {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ key, value }),
     });
     if (res.ok) {
@@ -94,10 +94,9 @@ export async function updateSetting(key: string, value: string): Promise<boolean
 // Toggle orchestrator task
 export async function toggleTask(wakeType: string, enabled: boolean): Promise<boolean> {
   try {
-    const res = await fetch(`/api/orchestrator/tasks/${wakeType}`, {
+    const res = await apiFetch(`/api/orchestrator/tasks/${wakeType}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ enabled }),
     });
     if (res.ok) {
@@ -119,10 +118,9 @@ export async function toggleTask(wakeType: string, enabled: boolean): Promise<bo
 // Reschedule orchestrator task
 export async function rescheduleTask(wakeType: string, cronExpr: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/orchestrator/tasks/${wakeType}`, {
+    const res = await apiFetch(`/api/orchestrator/tasks/${wakeType}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ cronExpr }),
     });
     if (res.ok) {
@@ -144,10 +142,9 @@ export async function rescheduleTask(wakeType: string, cronExpr: string): Promis
 // Update failsafe thresholds
 export async function updateFailsafe(update: { enabled?: boolean; gentle?: number; concerned?: number; emergency?: number }): Promise<boolean> {
   try {
-    const res = await fetch('/api/orchestrator/failsafe', {
+    const res = await apiFetch('/api/orchestrator/failsafe', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify(update),
     });
     if (res.ok) {
@@ -175,9 +172,8 @@ export function setSystemStatus(status: SystemStatus | null, mcpServers?: import
 // Cancel a trigger
 export async function cancelTriggerById(id: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/orchestrator/triggers/${id}`, {
+    const res = await apiFetch(`/api/orchestrator/triggers/${id}`, {
       method: 'DELETE',
-      credentials: 'include',
     });
     if (res.ok) {
       triggers = triggers.filter(t => t.id !== id);

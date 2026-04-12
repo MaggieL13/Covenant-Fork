@@ -3,6 +3,7 @@
   import type { ToolEvent } from '$lib/stores/websocket.svelte';
   import { send } from '$lib/stores/websocket.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
+  import { apiFetch } from '$lib/utils/api';
 
   let { message, isStreaming = false, streamTokens = '', toolEvents = [], segments = null, companionName = 'Companion' } = $props<{
     message: Message;
@@ -157,10 +158,9 @@
         blobUrl = cached;
       } else {
         ttsState = 'loading';
-        const res = await fetch('/api/tts', {
+        const res = await apiFetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
           body: JSON.stringify({ text: message.content }),
         });
         if (!res.ok) throw new Error(`TTS failed: ${res.status}`);

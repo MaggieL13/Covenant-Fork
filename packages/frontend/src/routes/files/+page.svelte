@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   interface FileEntry {
     fileId: string;
@@ -51,7 +52,7 @@
   async function loadFiles() {
     loading = true;
     try {
-      const response = await fetch('/api/files/list');
+      const response = await apiFetch('/api/files/list');
       if (!response.ok) throw new Error('Failed to fetch files');
       const data = await response.json();
       files = data.files;
@@ -67,7 +68,7 @@
 
   async function deleteFile(fileId: string) {
     try {
-      const response = await fetch(`/api/files/${fileId}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/files/${fileId}`, { method: 'DELETE' });
       if (response.ok) {
         files = files.filter(f => f.fileId !== fileId);
         totalCount--;

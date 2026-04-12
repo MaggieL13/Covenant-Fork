@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   interface Skill {
     name: string;
@@ -12,7 +13,7 @@
 
   onMount(async () => {
     try {
-      const response = await fetch('/api/skills');
+      const response = await apiFetch('/api/skills');
       if (!response.ok) throw new Error('Failed to fetch skills');
       const data = await response.json();
       skills = data.skills;

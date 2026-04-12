@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getNotificationPermission, requestNotificationPermission } from '$lib/stores/websocket.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   let permission = $derived(getNotificationPermission());
   let vapidPublicKey = $state<string | null>(null);
@@ -36,8 +37,8 @@
   async function loadData() {
     try {
       const [vapidRes, subsRes] = await Promise.all([
-        fetch('/api/push/vapid-public'),
-        fetch('/api/push/subscriptions'),
+        apiFetch('/api/push/vapid-public'),
+        apiFetch('/api/push/subscriptions'),
       ]);
       if (vapidRes.ok) {
         const data = await vapidRes.json();
@@ -76,7 +77,7 @@
       });
 
       const json = sub.toJSON();
-      const res = await fetch('/api/push/subscribe', {
+      const res = await apiFetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -107,7 +108,7 @@
       if (sub) {
         const endpoint = sub.endpoint;
         await sub.unsubscribe();
-        await fetch('/api/push/unsubscribe', {
+        await apiFetch('/api/push/unsubscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ endpoint }),
@@ -126,7 +127,7 @@
     testSending = true;
     error = null;
     try {
-      const res = await fetch('/api/push/test', { method: 'POST' });
+      const res = await apiFetch('/api/push/test', { method: 'POST' });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Test failed');

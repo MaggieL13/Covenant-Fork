@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   interface SessionInfo {
     sessionId: string;
@@ -33,7 +34,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch('/api/sessions?limit=50', { credentials: 'include' });
+      const res = await apiFetch('/api/sessions?limit=50');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       sessions = data.sessions || [];

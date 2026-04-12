@@ -6,6 +6,7 @@
   import ResEmpty from '$lib/components/ResEmpty.svelte';
   import ResSkeleton from '$lib/components/ResSkeleton.svelte';
   import { CC_API, daysLabel } from '$lib/utils/cc';
+  import { apiFetch } from '$lib/utils/api';
 
   let status = $state<any>({});
   let predict = $state<any>({});
@@ -20,7 +21,7 @@
   async function load() {
     try {
       const [sRes, pRes, hRes] = await Promise.all([
-        fetch(`${CC_API}/cycle/status`), fetch(`${CC_API}/cycle/predict`), fetch(`${CC_API}/cycle/history`),
+        apiFetch(`${CC_API}/cycle/status`), apiFetch(`${CC_API}/cycle/predict`), apiFetch(`${CC_API}/cycle/history`),
       ]);
       status = await sRes.json(); predict = await pRes.json();
       const hData = await hRes.json(); history = hData.cycles || [];
@@ -28,11 +29,11 @@
     loading = false;
   }
 
-  async function startPeriod() { await fetch(`${CC_API}/cycle/period/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await load(); }
-  async function endPeriod() { await fetch(`${CC_API}/cycle/period/end`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await load(); }
+  async function startPeriod() { await apiFetch(`${CC_API}/cycle/period/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await load(); }
+  async function endPeriod() { await apiFetch(`${CC_API}/cycle/period/end`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); await load(); }
 
   async function logDaily() {
-    await fetch(`${CC_API}/cycle/log`, {
+    await apiFetch(`${CC_API}/cycle/log`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ flow: logFlow || undefined, mood: logMood || undefined, energy: logEnergy || undefined, notes: logNotes || undefined }),
     });

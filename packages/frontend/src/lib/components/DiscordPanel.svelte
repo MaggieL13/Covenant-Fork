@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   interface DiscordStatus {
     enabled: boolean;
@@ -122,8 +123,8 @@
   async function loadData() {
     try {
       const [statusRes, pairingsRes] = await Promise.all([
-        fetch('/api/discord/status'),
-        fetch('/api/discord/pairings'),
+        apiFetch('/api/discord/status'),
+        apiFetch('/api/discord/pairings'),
       ]);
 
       if (statusRes.ok) {
@@ -145,7 +146,7 @@
   async function loadLogs() {
     logsLoading = true;
     try {
-      const res = await fetch('/api/discord/logs?limit=100');
+      const res = await apiFetch('/api/discord/logs?limit=100');
       if (res.ok) {
         activityLogs = await res.json();
       }
@@ -185,7 +186,7 @@
   async function loadSettings() {
     settingsLoading = true;
     try {
-      const res = await fetch('/api/discord/settings');
+      const res = await apiFetch('/api/discord/settings');
       if (res.ok) {
         settings = await res.json();
         settingsDirty = false;
@@ -202,7 +203,7 @@
     settingsLoading = true;
     error = null;
     try {
-      const res = await fetch('/api/discord/settings', {
+      const res = await apiFetch('/api/discord/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
@@ -226,7 +227,7 @@
   async function loadRules() {
     rulesLoading = true;
     try {
-      const res = await fetch('/api/discord/rules');
+      const res = await apiFetch('/api/discord/rules');
       if (res.ok) {
         rules = await res.json();
       }
@@ -241,7 +242,7 @@
     actionLoading = `save-${type}-${rule.id}`;
     error = null;
     try {
-      const res = await fetch(`/api/discord/rules/${type}`, {
+      const res = await apiFetch(`/api/discord/rules/${type}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rule),
@@ -264,7 +265,7 @@
     actionLoading = `delete-${type}-${id}`;
     error = null;
     try {
-      const res = await fetch(`/api/discord/rules/${type}/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/discord/rules/${type}/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Delete failed');
@@ -326,7 +327,7 @@
     error = null;
     const newState = !isEnabled;
     try {
-      const res = await fetch('/api/discord/toggle', {
+      const res = await apiFetch('/api/discord/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: newState }),
@@ -352,7 +353,7 @@
     actionLoading = `approve-${code}`;
     error = null;
     try {
-      const res = await fetch(`/api/discord/pairings/${code}/approve`, { method: 'POST' });
+      const res = await apiFetch(`/api/discord/pairings/${code}/approve`, { method: 'POST' });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Approval failed');
@@ -371,7 +372,7 @@
     actionLoading = `revoke-${userId}`;
     error = null;
     try {
-      const res = await fetch(`/api/discord/pairings/${userId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/discord/pairings/${userId}`, { method: 'DELETE' });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Revocation failed');

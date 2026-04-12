@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { SystemStatus, McpServerInfo } from '@resonant/shared';
   import { sendMcpReconnect, sendMcpToggle } from '$lib/stores/websocket.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   let { status }: { status: SystemStatus | null } = $props();
 
@@ -99,7 +100,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch('/api/audit?limit=200', { credentials: 'include' });
+      const res = await apiFetch('/api/audit?limit=200');
       if (res.ok) {
         const data = await res.json();
         entries = data.entries || [];

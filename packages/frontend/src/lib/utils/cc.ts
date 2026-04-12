@@ -1,4 +1,5 @@
 // Shared utilities for Command Center pages
+import { apiFetch } from '$lib/utils/api';
 
 export const CC_API = '/api/cc';
 
@@ -7,7 +8,7 @@ let _timezone: string | null = null;
 async function getTimezone(): Promise<string> {
   if (_timezone) return _timezone;
   try {
-    const res = await fetch('/api/cc/config', { credentials: 'include' });
+    const res = await apiFetch('/api/cc/config');
     if (res.ok) {
       const data = await res.json();
       // Fall back to identity endpoint timezone

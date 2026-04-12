@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { updateSetting, getConfig } from '$lib/stores/settings.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   interface Preferences {
     identity: { companion_name: string; user_name: string; timezone: string };
@@ -66,7 +67,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(input, { ...init, signal: controller.signal });
+      return await apiFetch(input as string, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timer);
     }
@@ -134,7 +135,7 @@
         message = data.message || 'Saved';
         newPassword = '';
         // Sync model to DB config so the chat header pill updates
-        updateSetting('agent.model', model);
+        await updateSetting('agent.model', model);
       } else {
         error = data.error || 'Failed to save';
       }

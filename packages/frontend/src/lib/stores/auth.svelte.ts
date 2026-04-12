@@ -1,3 +1,5 @@
+import { apiFetch } from '$lib/utils/api';
+
 let authenticated = $state(false);
 let checking = $state(true);
 let authRequired = $state(true);
@@ -28,9 +30,7 @@ async function checkAuthInternal(isRetry: boolean): Promise<boolean> {
   if (!isRetry) checking = true;
 
   try {
-    const response = await fetch('/api/auth/check', {
-      credentials: 'include'
-    });
+    const response = await apiFetch('/api/auth/check');
 
     if (response.ok) {
       const data = await response.json();
@@ -74,10 +74,9 @@ export async function checkAuth(): Promise<boolean> {
 
 export async function login(password: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const response = await fetch('/api/auth/login', {
+    const response = await apiFetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ password })
     });
 
@@ -98,9 +97,8 @@ export async function login(password: string): Promise<{ success: boolean; error
 
 export async function logout(): Promise<void> {
   try {
-    await fetch('/api/auth/logout', {
+    await apiFetch('/api/auth/logout', {
       method: 'POST',
-      credentials: 'include'
     });
   } catch (err) {
     console.error('Logout error:', err);

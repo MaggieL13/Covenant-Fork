@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getCompanionName, getUserName } from '../stores/settings.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   let {
     onresult,
@@ -43,7 +44,7 @@
     if (!q) return;
     loading = true;
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
+      const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&limit=30`);
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
       results = data.results;

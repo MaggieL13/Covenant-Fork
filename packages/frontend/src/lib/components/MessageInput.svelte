@@ -5,6 +5,7 @@
   import { getCompanionName } from '$lib/stores/settings.svelte';
   import CommandPalette from './CommandPalette.svelte';
   import { getCommandRegistry, sendCommand } from '$lib/stores/websocket.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   let companionName = $derived(getCompanionName());
 
@@ -174,7 +175,7 @@
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/files', {
+      const response = await apiFetch('/api/files', {
         method: 'POST',
         body: formData,
       });

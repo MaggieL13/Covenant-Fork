@@ -2,6 +2,7 @@
   import type { ThreadSummary } from '@resonant/shared';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { showToast } from '$lib/stores/toast.svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   let {
     threads = [],
@@ -142,7 +143,7 @@
 
   async function handleArchive(threadId: string) {
     try {
-      const response = await fetch(`/api/threads/${threadId}/archive`, { method: 'POST' });
+      const response = await apiFetch(`/api/threads/${threadId}/archive`, { method: 'POST' });
       if (response.ok) {
         contextMenuThread = null;
         // If this was the active thread, select the next one
@@ -174,7 +175,7 @@
       return;
     }
     try {
-      const response = await fetch(`/api/threads/${threadId}`, {
+      const response = await apiFetch(`/api/threads/${threadId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: renameValue.trim() }),
@@ -214,7 +215,7 @@
 
   async function confirmDelete(threadId: string) {
     try {
-      const response = await fetch(`/api/threads/${threadId}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/threads/${threadId}`, { method: 'DELETE' });
       if (response.ok) {
         // Auto-select next thread if the deleted one was active
         if (activeThreadId === threadId) {
@@ -243,7 +244,7 @@
 
   async function loadArchived() {
     try {
-      const response = await fetch('/api/threads/archived');
+      const response = await apiFetch('/api/threads/archived');
       if (response.ok) {
         const data = await response.json();
         archivedThreads = data.threads;
@@ -260,7 +261,7 @@
 
   async function handlePin(threadId: string) {
     try {
-      const response = await fetch(`/api/threads/${threadId}/pin`, { method: 'POST' });
+      const response = await apiFetch(`/api/threads/${threadId}/pin`, { method: 'POST' });
       contextMenuThread = null;
       if (!response.ok) {
         showToast('Failed to pin thread', 'error');
@@ -273,7 +274,7 @@
 
   async function handleUnpin(threadId: string) {
     try {
-      const response = await fetch(`/api/threads/${threadId}/unpin`, { method: 'POST' });
+      const response = await apiFetch(`/api/threads/${threadId}/unpin`, { method: 'POST' });
       contextMenuThread = null;
       if (!response.ok) {
         showToast('Failed to unpin thread', 'error');

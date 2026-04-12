@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getConfig, updateSetting } from '$lib/stores/settings.svelte';
   import { MODELS } from '$lib/models';
+  import { apiFetch } from '$lib/utils/api';
 
   let config = $derived(getConfig());
   let currentModel = $derived(config['agent.model'] || 'claude-sonnet-4-6');
@@ -17,10 +18,9 @@
     if (modelId === currentModel) return;
     // Write to both DB config (for backend getConfiguredModel) and YAML (for PreferencesPanel)
     await updateSetting('agent.model', modelId);
-    fetch('/api/preferences', {
+    apiFetch('/api/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({ agent: { model: modelId } }),
     }).catch(() => {}); // best-effort — DB is the authoritative source
   }

@@ -42,6 +42,7 @@
     clearCommandResult,
   } from '$lib/stores/websocket.svelte';
   import { loadSettings, getCompanionName, isCommandCenterEnabled } from '$lib/stores/settings.svelte';
+  import { apiFetch } from '$lib/utils/api';
   import type { Message } from '@resonant/shared';
 
   // Reactive state from stores
@@ -118,7 +119,7 @@
     if (creatingThread) return;
     creatingThread = true;
     try {
-      const response = await fetch('/api/threads', {
+      const response = await apiFetch('/api/threads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newThreadName.trim() || undefined }),
@@ -198,10 +199,9 @@
     if (!threadId) {
       // Auto-create a thread instead of silently dropping the message
       try {
-        const res = await fetch('/api/threads', {
+        const res = await apiFetch('/api/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
           body: JSON.stringify({ name: '' }),
         });
         if (res.ok) {
@@ -274,10 +274,9 @@
     let threadId = activeThreadId;
     if (!threadId) {
       try {
-        const res = await fetch('/api/threads', {
+        const res = await apiFetch('/api/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
           body: JSON.stringify({ name: '' }),
         });
         if (res.ok) {

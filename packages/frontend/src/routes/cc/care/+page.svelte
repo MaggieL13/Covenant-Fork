@@ -6,6 +6,7 @@
   import ResRating from '$lib/components/ResRating.svelte';
   import ResSkeleton from '$lib/components/ResSkeleton.svelte';
   import { CC_API, todayStr, formatCategory, shortDate } from '$lib/utils/cc';
+  import { apiFetch } from '$lib/utils/api';
 
   interface CareEntry { id: string; date: string; person: string; category: string; value: string | null; note: string | null; }
   interface CareConfig {
@@ -38,7 +39,7 @@
   async function loadEntries() {
     loading = true;
     try {
-      const res = await fetch(`${CC_API}/care?date=${selectedDate}&person=${person}`);
+      const res = await apiFetch(`${CC_API}/care?date=${selectedDate}&person=${person}`);
       const data = await res.json();
       entries = data.entries || [];
     } catch { /* empty */ }
@@ -46,7 +47,7 @@
   }
 
   async function upsertEntry(category: string, value?: string, note?: string) {
-    await fetch(`${CC_API}/care`, {
+    await apiFetch(`${CC_API}/care`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date: selectedDate, person, category, value, note }),
     });
@@ -83,7 +84,7 @@
 
   onMount(async () => {
     try {
-      const res = await fetch(`${CC_API}/config`);
+      const res = await apiFetch(`${CC_API}/config`);
       if (res.ok) {
         const config = await res.json();
         person = config.default_person || '';

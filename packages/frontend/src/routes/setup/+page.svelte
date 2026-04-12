@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { apiFetch } from '$lib/utils/api';
 
   // --- State ---
   let step = $state(1);
@@ -65,7 +66,7 @@
 
   async function checkSetupStatus() {
     try {
-      const res = await fetch('/api/setup/status');
+      const res = await apiFetch('/api/setup/status');
       if (res.ok) {
         const data = await res.json();
         if (!data.needsSetup) {
@@ -124,7 +125,7 @@
     try {
       const personality = assemblePersonality();
 
-      const res = await fetch('/api/setup/complete', {
+      const res = await apiFetch('/api/setup/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

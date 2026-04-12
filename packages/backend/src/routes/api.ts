@@ -26,6 +26,7 @@ import {
 } from '../middleware/auth.js';
 import { loginRateLimiter } from '../middleware/security.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { csrfProtection } from '../middleware/csrf.js';
 import { getRecentAuditEntries } from '../services/audit.js';
 import { saveFile, getFile, deleteFile, listFiles } from '../services/files.js';
 import { registry } from '../services/ws.js';
@@ -180,6 +181,7 @@ router.use('/internal', internalRouter);
 
 // --- Protected routes (auth required when password is set) ---
 router.use(authMiddleware);
+router.use(csrfProtection);
 
 // --- Mount authenticated sub-routers ---
 router.use('/threads', threadsRouter);

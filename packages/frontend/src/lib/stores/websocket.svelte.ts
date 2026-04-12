@@ -1,5 +1,6 @@
 import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry } from '@resonant/shared';
 import { setSystemStatus } from './settings.svelte';
+import { apiFetch } from '$lib/utils/api';
 
 // Connection state
 let wsInstance: WebSocket | null = $state(null);
@@ -649,7 +650,7 @@ export function send(msg: ClientMessage) {
 export async function loadThread(threadId: string) {
   activeThreadId = threadId;
   try {
-    const response = await fetch(`/api/threads/${threadId}/messages`);
+    const response = await apiFetch(`/api/threads/${threadId}/messages`);
     if (!response.ok) throw new Error('Failed to load messages');
     const data = await response.json();
     messages = data.messages || [];
@@ -673,7 +674,7 @@ export async function loadOlderMessages(threadId: string): Promise<boolean> {
   if (messages.length === 0) return false;
   const oldestMessage = messages[0];
   try {
-    const response = await fetch(`/api/threads/${threadId}/messages?before=${oldestMessage.id}&limit=50`);
+    const response = await apiFetch(`/api/threads/${threadId}/messages?before=${oldestMessage.id}&limit=50`);
     if (!response.ok) throw new Error('Failed to load older messages');
     const data = await response.json();
     const older = data.messages || [];
@@ -688,7 +689,7 @@ export async function loadOlderMessages(threadId: string): Promise<boolean> {
 
 export async function loadThreads() {
   try {
-    const response = await fetch('/api/threads');
+    const response = await apiFetch('/api/threads');
     if (!response.ok) throw new Error('Failed to load threads');
     const data = await response.json();
     threads = data.threads || [];
