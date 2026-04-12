@@ -50,16 +50,28 @@ Create or update collaborative documents alongside chat.
 sc canvas create "Title" /path/to/file.md markdown
 sc canvas create-inline "Title" "short text content" text
 sc canvas update CANVAS_ID /path/to/file
+sc canvas read CANVAS_ID              # Read canvas content
+sc canvas list                        # List all canvases
+sc canvas tag CANVAS_ID tag1,tag2     # Add tags for organization
 ```
 
 Content types: `markdown`, `code`, `text`, `html`
 
-### Reactions
-React to messages with emoji. Uses offset-based targeting — no message IDs needed.
+### Stickers
+Send sticker images in chat. Sticker packs are managed via Settings.
 
 ```bash
-sc react last "❤️"              # React to last message
-sc react last-2 "🔥"            # React to 2nd-to-last
+sc sticker send "pack-name" "sticker-name"
+sc sticker list                       # List all packs and stickers
+sc sticker list PACK_ID               # List stickers in a specific pack
+```
+
+### Reactions
+React to messages with emoji. Uses offset-based targeting — no message IDs needed. Reactions target user messages only (companion's own messages are skipped).
+
+```bash
+sc react last "❤️"              # React to last user message
+sc react last-2 "🔥"            # React to 2nd-to-last user message
 sc react last "❤️" remove       # Remove a reaction
 ```
 
@@ -84,6 +96,9 @@ Search conversation history by meaning using local ML embeddings. No external AP
 sc search "what did we talk about last week"
 sc search "that architecture discussion" --thread THREAD_ID
 sc search "query" --limit 5
+sc search "query" --role companion     # Filter by speaker
+sc search "query" --after 2026-03-01   # Filter by date range
+sc search "query" --before 2026-03-15
 ```
 
 Returns matched messages with surrounding conversation context (2 messages before and after each match).
@@ -113,7 +128,10 @@ sc schedule status                 # Show all schedules
 sc schedule enable                 # Enable orchestrator
 sc schedule disable                # Disable orchestrator
 sc schedule reschedule morning_anchor "0 8 * * *"   # Reschedule a wake
+sc routine remove ROUTINE_ID       # Remove a custom routine
 ```
+
+> `sc routine` and `sc schedule` are aliases — both work identically.
 
 Wake types depend on your `resonant.yaml` orchestrator config and `wake-prompts.md`.
 
@@ -256,5 +274,6 @@ All tools wrap localhost-only REST endpoints. These require no authentication �
 | `POST /api/internal/telegram-send` | Send to Telegram |
 | `POST /api/internal/search-semantic` | Semantic search |
 | `POST /api/internal/embed-backfill` | Embedding backfill |
+| `POST /api/internal/sticker` | Sticker send/list |
 
 The `sc` CLI is the recommended interface. Direct API access is available for custom integrations.

@@ -1,5 +1,7 @@
 # Getting Started with Resonant
 
+> **Looking for a quick reference?** See [SETUP-GUIDE.md](SETUP-GUIDE.md) for a condensed cheat sheet.
+
 This guide walks you through setting up Resonant from scratch, even if you've never used Node.js or the terminal before.
 
 ## What You Need

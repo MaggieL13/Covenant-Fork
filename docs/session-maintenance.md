@@ -128,6 +128,34 @@ db.close();
 
 These threads will start a fresh session on the next message.
 
+## Model Swapping & Context Continuity
+
+### The problem
+
+The Claude Agent SDK ties each session to a specific model. You cannot resume a session created by Opus 4.6 with Sonnet 4.5 — the SDK will reject it. When you change the model in Settings or the chat header, all thread sessions are cleared (`current_session_id` set to NULL).
+
+Previously, this meant the companion started completely blind after a model swap — no memory of the conversation at all.
+
+### How Resonant handles it (v1.5.0+)
+
+When a fresh session starts (no `current_session_id`), the agent checks if the thread already has messages. If it does, it injects the last 10 messages as a `[Recent Conversation]` block prepended to the prompt:
+
+- **Last 3 messages** — included at full length (up to 5000 chars each), since these are most likely to be referenced
+- **Older messages** — truncated to 500 chars each to save tokens
+
+This gives the new model enough context to continue the conversation naturally. It won't have deep SDK memory (tool call history, internal reasoning chains), but it knows who said what and what the topic was.
+
+### Thinking behavior across models
+
+Resonant uses `thinking: { type: 'adaptive' }` for all models. This means the Claude API decides when to produce thinking blocks based on query complexity. Different models have different thresholds:
+
+- **Claude 4.5 models** (Opus, Sonnet) — lower threshold, produce thinking blocks on most messages
+- **Claude 4.6 models** (Opus, Sonnet) — higher threshold, more selective about when to think
+
+This is API-side behavior, not a Resonant setting. The `thinking_effort` config (max/high/medium/low) controls how *deeply* the model thinks when it does think, but cannot force a model to think when it decides not to.
+
+The `enabled` thinking type exists in the SDK but only works for older models (4.5 and below). The 4.6 models only support `adaptive`.
+
 ## How It Works Internally
 
 ### Session file contents

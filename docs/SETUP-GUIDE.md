@@ -1,5 +1,7 @@
 # Covenant-Fork Setup Guide 💜
 
+> **First time?** See [GETTING-STARTED.md](GETTING-STARTED.md) for a detailed walkthrough with screenshots and troubleshooting.
+
 ## Prerequisites (one time only):
 
 1. **Node.js** — Download from [nodejs.org](https://nodejs.org) (LTS version)

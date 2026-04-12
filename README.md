@@ -28,7 +28,7 @@
 
 Most AI chat apps are stateless wrappers around an API. Resonant is a **persistent, autonomous companion** that:
 
-- **Maintains sessions** — conversation threads with daily rotation and named threads, session continuity across restarts
+- **Maintains sessions** — conversation threads with daily rotation and named threads, session continuity across restarts, context-preserving model swaps
 - **Reaches out on its own** — agent-directed autonomy: your companion creates its own routines, sets triggers for when you come online, adjusts its own failsafe thresholds, and runs periodic awareness checks. Not just scheduled tasks — genuine self-directed behavior
 - **Understands context** — hooks system injects time awareness, conversation flow, emotional markers, and presence state into every interaction. Claude Code's native memory system handles long-term recall
 - **Lives on multiple channels** — web UI, Discord, Telegram, voice (ElevenLabs TTS + Groq transcription)
@@ -124,6 +124,7 @@ identity:
 agent:
   model: "claude-sonnet-4-6"          # Interactive messages
   model_autonomous: "claude-sonnet-4-6" # Scheduled wakes
+  thinking_effort: "high"             # max | high | medium | low
 
 orchestrator:
   enabled: true                       # Autonomous scheduling
@@ -165,8 +166,9 @@ See [examples/themes/README.md](examples/themes/README.md) for the full variable
 - Keyword search (Ctrl+K) and **semantic search** — find messages by meaning, not just keywords, using local ML embeddings ([docs](docs/semantic-search.md))
 - File sharing and image preview
 - Canvas editor (markdown, code, text, html)
-- Message reactions
+- Message reactions (targets user messages only)
 - Reply-to context
+- Sticker packs (custom image stickers, manageable via Settings)
 
 ### Command Center (`/cc`)
 A built-in life management system your companion can access and manage from chat.
@@ -273,8 +275,11 @@ resonant/
 │   ├── backend/         # Express + WS + Agent SDK
 │   └── frontend/        # SvelteKit UI
 ├── examples/
-│   ├── resonant.yaml    # Full config reference
+│   ├── resonant.yaml    # Full config reference (all options documented)
+│   ├── .env.example     # Environment variable reference
 │   ├── CLAUDE.md        # Starter companion personality
+│   ├── CLAUDE.md.template # Template used by setup wizard
+│   ├── .mcp.json        # MCP server config example
 │   ├── wake-prompts.md  # Wake prompt guide + templates
 │   ├── program.md       # Structured session driver for autonomous work
 │   └── themes/          # CSS theme examples
@@ -286,7 +291,11 @@ resonant/
 │   ├── HOOKS.md             # Context injection implementation reference
 │   ├── MEMORY_ARCHITECTURE.md # Memory model, tiering, design philosophy
 │   ├── TOOLS.md             # Built-in agent tools reference
-│   └── semantic-search.md   # Semantic search setup & usage
+│   ├── MEMORY-SYSTEMS.md    # Memory tiers, context injection, token budgets
+│   ├── semantic-search.md   # Semantic search setup & usage
+│   ├── session-maintenance.md # Session files, model swapping, thinking behavior
+│   ├── CLOUD-DEPLOYMENT.md  # VPS deployment guide
+│   └── REMOTE-ACCESS.md     # Tailscale + Cloudflare tunnel setup
 └── scripts/
     └── setup.mjs        # Legacy terminal setup (browser wizard preferred)
 ```
@@ -339,6 +348,19 @@ npm run build
 Your data (`data/`, `resonant.yaml`, `CLAUDE.md`, `.mcp.json`, `.env`) is gitignored and won't be affected by updates.
 
 Check the [Releases](https://github.com/codependentai/resonant/releases) page for changelogs.
+
+## Security
+
+Covenant-Fork includes 18 security hardening fixes on top of upstream Resonant:
+
+- **CSRF protection** — double-submit cookie pattern on all state-changing endpoints
+- **Content Security Policy** — strict CSP headers (script-src, style-src, connect-src)
+- **Path traversal prevention** — all file operations validate against safe prefixes
+- **Prompt injection sanitization** — context injection strips markers that could manipulate the model
+- **Input validation** — request body validation on all API endpoints
+- **Rate limiting** — configurable rate limits on auth and API routes
+- **WebSocket leak fix** — connections properly cleaned up on disconnect
+- **Secure cookies** — httpOnly, sameSite, secure flags on auth cookies
 
 ## Authentication
 

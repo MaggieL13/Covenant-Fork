@@ -1,0 +1,95 @@
+# Resonant Configuration Reference
+# Copy this file to your project root as resonant.yaml
+# The setup wizard at /setup creates this automatically
+#
+# Priority: resonant.yaml values < environment variable overrides
+# All paths are relative to the project root unless absolute
+
+identity:
+  companion_name: "Echo"           # Your companion's name
+  user_name: "Alex"                # Your name (used in context injection)
+  timezone: "America/New_York"     # IANA timezone for scheduling and time awareness
+
+server:
+  port: 3002                       # HTTP + WebSocket port
+  host: "127.0.0.1"               # Bind address (use 0.0.0.0 for remote access)
+  db_path: "./data/resonant.db"    # SQLite database location
+
+auth:
+  password: ""                     # Optional web UI password (leave empty to disable)
+
+agent:
+  cwd: "."                         # Working directory for Claude Agent SDK
+  claude_md_path: "./CLAUDE.md"    # Companion personality file
+  mcp_json_path: "./.mcp.json"     # MCP server configuration
+  model: "claude-sonnet-4-6"       # Model for interactive messages
+  model_autonomous: "claude-sonnet-4-6"  # Model for scheduled wakes (can be cheaper)
+  thinking_effort: "high"          # max | high | medium | low
+                                   # Controls reasoning depth when the model thinks
+                                   # Thinking is adaptive — the model decides when to think
+                                   # 4.5 models think more eagerly; 4.6 models are selective
+
+orchestrator:
+  enabled: true                    # Enable autonomous scheduling system
+  wake_prompts_path: "./prompts/wake.md"  # Wake prompt templates
+  schedules:                       # Built-in wake schedules (cron expressions)
+    morning: "0 9 * * *"           # 9 AM daily
+    midday: "0 13 * * *"           # 1 PM daily
+    evening: "0 21 * * *"          # 9 PM daily
+  failsafe:
+    enabled: false                 # Tiered inactivity escalation
+    gentle_minutes: 120            # First check-in after 2 hours
+    concerned_minutes: 720         # Escalate after 12 hours
+    emergency_minutes: 1440        # Emergency after 24 hours
+
+hooks:
+  context_injection: true          # Inject time, presence, emotional context into prompts
+  safe_write_prefixes: []          # Directories the agent can write to without confirmation
+  platform_context_max_tokens: 500 # Max tokens for platform-specific context
+  cc_mcp_server_name: ""           # Command Center MCP server name (from .mcp.json)
+  mind_mcp_server_name: ""         # Mind/memory MCP server name (from .mcp.json)
+
+voice:
+  enabled: false                   # Enable voice features
+  elevenlabs_voice_id: ""          # ElevenLabs voice ID for TTS
+
+discord:
+  enabled: false                   # Enable Discord bot integration
+  owner_user_id: ""                # Your Discord user ID (for DM routing)
+  history_limit: 10                # Messages to include as context from Discord
+
+telegram:
+  enabled: false                   # Enable Telegram bot integration
+  owner_chat_id: ""                # Your Telegram chat ID
+
+integrations:
+  life_api_url: ""                 # External life API URL (optional)
+  mind_cloud:
+    enabled: false                 # Cloud memory sync
+    mcp_url: ""                    # Mind cloud MCP server URL
+
+command_center:
+  enabled: true                    # Enable Command Center at /cc
+  default_person: "user"           # Default person for care tracking
+  currency_symbol: "$"             # Currency symbol for finances
+  care_categories:
+    toggles:                       # Binary daily toggles
+      - breakfast
+      - lunch
+      - dinner
+      - snacks
+      - medication
+      - movement
+      - shower
+    ratings:                       # 1-5 scale daily ratings
+      - sleep
+      - energy
+      - wellbeing
+      - mood
+    counters:                      # Incrementable counters with max
+      - name: water
+        max: 10
+
+cors:
+  origins: []                      # Additional CORS origins (for remote access)
+                                   # Example: ["https://your-domain.com"]

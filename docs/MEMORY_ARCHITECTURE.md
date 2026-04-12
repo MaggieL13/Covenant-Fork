@@ -54,7 +54,7 @@ This is the warm tier (see [Memory Tiering](#memory-tiering) below). It runs on 
 When a session resumes, starts fresh, or recovers from compaction, this hook fires. It calls `buildOrientationContext` and adds source-specific notes:
 
 - **`resume`** — surfaces the last message preview, reports user connection status
-- **`startup`** — notes whether the session is autonomous or interactive
+- **`startup`** — notes whether the session is autonomous or interactive. On fresh sessions with existing thread messages (e.g. after a model swap), the last 10 messages are injected as a `[Recent Conversation]` block so the new model has conversational context
 - **`compact`** — notes that compaction happened and reminds the agent to re-ground
 
 The compaction case matters most. When the SDK compresses context, the hook re-fires — meaning the warm tier reloads even after the conversation history was truncated. This solves the "lost continuity after compaction" problem that plagues long-running agent sessions.

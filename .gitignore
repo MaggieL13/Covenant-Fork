@@ -12,6 +12,7 @@ logs/
 *.db-shm
 ecosystem.config.cjs
 resonant.yaml
+!examples/resonant.yaml
 resonant.yml
 CLAUDE.md
 .mcp.json
