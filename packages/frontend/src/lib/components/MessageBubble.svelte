@@ -60,11 +60,14 @@
 
   function formatToolOutput(raw: string): string {
     if (!raw) return '';
-    const trimmed = raw.trim();
+    // Replace escaped \n and \t with real whitespace
+    let cleaned = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    const trimmed = cleaned.trim();
+    // Pretty-print JSON blobs
     if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length > 2) {
       try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch {}
     }
-    return raw;
+    return cleaned;
   }
 
   // Interleaved segments mode
