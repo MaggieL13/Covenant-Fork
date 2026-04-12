@@ -7,6 +7,8 @@ import yaml from 'js-yaml';
 import {
   getAllConfig,
   setConfig,
+  getConfig,
+  clearAllThreadSessions,
   createCanvas,
   getCanvas,
   listCanvases,
@@ -590,6 +592,12 @@ router.put('/settings', (req, res) => {
     if (!key || typeof key !== 'string' || typeof value !== 'string') {
       res.status(400).json({ error: 'key and value (strings) required' });
       return;
+    }
+    if (key === 'agent.model') {
+      const previous = getConfig('agent.model');
+      if (previous !== value) {
+        clearAllThreadSessions();
+      }
     }
     setConfig(key, value);
     res.json({ success: true });

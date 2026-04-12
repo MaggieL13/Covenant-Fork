@@ -279,6 +279,10 @@ export function updateThreadSession(threadId: string, sessionId: string | null):
   stmt.run(sessionId, threadId);
 }
 
+export function clearAllThreadSessions(): void {
+  getDb().prepare('UPDATE threads SET current_session_id = NULL').run();
+}
+
 export function updateThreadActivity(threadId: string, timestamp: string, incrementUnread = false): void {
   let sql = 'UPDATE threads SET last_activity_at = ?';
   if (incrementUnread) {
