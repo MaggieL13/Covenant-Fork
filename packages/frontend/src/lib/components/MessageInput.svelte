@@ -6,7 +6,7 @@
   import { getCompanionName } from '$lib/stores/settings.svelte';
   import CommandPalette from './CommandPalette.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
-  import { getStickerPacks } from '$lib/stores/stickers.svelte';
+  import { getStickerPacks, getStickerRefMap, getAllStickers } from '$lib/stores/stickers.svelte';
   import { apiFetch } from '$lib/utils/api';
 
   let companionName = $derived(getCompanionName());
@@ -67,17 +67,83 @@
     }
   }
 
-  // Detect slash commands on input
+  // Sticker autocomplete state
+  let stickerQuery = $state('');
+  let stickerColonPos = $state(-1);
+  let showStickerAutocomplete = $state(false);
+  let stickerSelectedIndex = $state(0);
+
+  // Build flat sticker list with refs for autocomplete
+  let stickerAutocompleteList = $derived(() => {
+    if (!stickerQuery) return [];
+    const q = stickerQuery.toLowerCase();
+    const packs = getStickerPacks();
+    const stickers = getAllStickers();
+    const results: Array<{ ref: string; url: string; name: string; packName: string }> = [];
+    for (const s of stickers) {
+      const pack = packs.find(p => p.id === s.pack_id);
+      if (!pack) continue;
+      const ref = `:${pack.name.toLowerCase()}_${s.name}:`;
+      if (ref.includes(q) || s.name.toLowerCase().includes(q)) {
+        results.push({ ref, url: s.url, name: s.name, packName: pack.name });
+      }
+    }
+    return results.slice(0, 8);
+  });
+
+  // Detect slash commands and sticker autocomplete on input
   function handleInput() {
     autoResize();
     // Show command palette when content starts with / and is a single line
     if (content.startsWith('/') && !content.includes('\n')) {
       showCommandPalette = true;
-      commandFilter = content.slice(1).split(' ')[0]; // filter on command name only
+      commandFilter = content.slice(1).split(' ')[0];
     } else {
       showCommandPalette = false;
       commandFilter = '';
     }
+
+    // Sticker autocomplete: detect :partial anywhere in text
+    detectStickerAutocomplete();
+  }
+
+  function detectStickerAutocomplete() {
+    if (!textarea) { showStickerAutocomplete = false; return; }
+    const cursorPos = textarea.selectionStart;
+    const textBefore = content.slice(0, cursorPos);
+    // Find last unmatched : before cursor
+    const lastColon = textBefore.lastIndexOf(':');
+    if (lastColon === -1) { showStickerAutocomplete = false; return; }
+    // Check there's no closing : after the opening one (would mean a completed ref)
+    const afterColon = textBefore.slice(lastColon + 1);
+    if (afterColon.includes(':') || afterColon.includes(' ') || afterColon.includes('\n')) {
+      showStickerAutocomplete = false;
+      return;
+    }
+    if (afterColon.length < 1) { showStickerAutocomplete = false; return; }
+    stickerQuery = afterColon;
+    stickerColonPos = lastColon;
+    stickerSelectedIndex = 0;
+    showStickerAutocomplete = stickerAutocompleteList().length > 0;
+  }
+
+  function insertStickerRef(ref: string) {
+    // Replace from the : to cursor with the full ref
+    const before = content.slice(0, stickerColonPos);
+    const cursorPos = textarea?.selectionStart || content.length;
+    const after = content.slice(cursorPos);
+    content = before + ref + ' ' + after;
+    showStickerAutocomplete = false;
+    stickerQuery = '';
+    textarea?.focus();
+    // Move cursor after inserted ref
+    requestAnimationFrame(() => {
+      if (textarea) {
+        const newPos = before.length + ref.length + 1;
+        textarea.selectionStart = newPos;
+        textarea.selectionEnd = newPos;
+      }
+    });
   }
 
   // Handle command selection from palette
@@ -177,6 +243,8 @@
     content = '';
     pendingProsody = null;
     showCommandPalette = false;
+    showStickerAutocomplete = false;
+    stickerQuery = '';
     commandFilter = '';
     if (textarea) textarea.style.height = 'auto';
   }
@@ -210,6 +278,30 @@
     if (showCommandPalette && paletteRef) {
       const handled = paletteRef.handleKey(e);
       if (handled) return;
+    }
+
+    // Sticker autocomplete keyboard navigation
+    if (showStickerAutocomplete) {
+      const list = stickerAutocompleteList();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        stickerSelectedIndex = (stickerSelectedIndex + 1) % list.length;
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        stickerSelectedIndex = (stickerSelectedIndex - 1 + list.length) % list.length;
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && list.length > 0) {
+        e.preventDefault();
+        insertStickerRef(list[stickerSelectedIndex].ref);
+        return;
+      }
+      if (e.key === 'Escape') {
+        showStickerAutocomplete = false;
+        return;
+      }
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -371,6 +463,22 @@
       onselect={handleCommandSelect}
       onclose={() => { showCommandPalette = false; }}
     />
+  {/if}
+
+  {#if showStickerAutocomplete && stickerAutocompleteList().length > 0}
+    <div class="sticker-autocomplete">
+      {#each stickerAutocompleteList() as item, i (item.ref)}
+        <button
+          class="sticker-ac-item"
+          class:selected={i === stickerSelectedIndex}
+          onmousedown={(e) => { e.preventDefault(); insertStickerRef(item.ref); }}
+          onmouseenter={() => stickerSelectedIndex = i}
+        >
+          <img src={item.url} alt={item.name} class="sticker-ac-img" />
+          <span class="sticker-ac-ref">{item.ref}</span>
+        </button>
+      {/each}
+    </div>
   {/if}
 
   <div class="input-bar">
@@ -656,6 +764,49 @@
   .attach-button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* Sticker autocomplete dropdown */
+  .sticker-autocomplete {
+    position: relative;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    max-height: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    margin: 0 0.5rem;
+  }
+
+  .sticker-ac-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    cursor: pointer;
+    transition: background var(--transition);
+    text-align: left;
+  }
+
+  .sticker-ac-item:hover,
+  .sticker-ac-item.selected {
+    background: var(--bg-hover);
+  }
+
+  .sticker-ac-img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    border-radius: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .sticker-ac-ref {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: var(--font-mono, monospace);
   }
 
   .sticker-btn-wrap {

@@ -657,10 +657,10 @@
   }
 
   :global(.inline-sticker) {
-    height: 1.5em;
+    height: 2.5em;
     vertical-align: middle;
     display: inline;
-    margin: 0 0.1em;
+    margin: 0 0.15em;
   }
 
   :global(.canvas-ref-inline) {
