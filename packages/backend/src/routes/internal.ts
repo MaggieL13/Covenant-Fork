@@ -593,20 +593,22 @@ router.post('/react', (req, res) => {
     }
 
     // Resolve target shorthand: "last", "last-2", "last-3" etc.
+    // When companion reacts, target only USER messages (they'd never react to their own)
     if (!messageId && threadId && target) {
       const offset = target === 'last' ? 0 : parseInt(target.replace('last-', ''), 10) - 1;
       if (isNaN(offset) || offset < 0) {
         res.status(400).json({ error: 'Invalid target. Use "last", "last-2", "last-3" etc.' });
         return;
       }
-      const msgs = getMessages({ threadId, limit: offset + 5 });
-      // msgs is chronological (oldest first), we want from the end
-      const idx = msgs.length - 1 - offset;
+      const msgs = getMessages({ threadId, limit: 30 });
+      // Filter to user messages only, then count from the end
+      const userMsgs = msgs.filter(m => m.role === 'user');
+      const idx = userMsgs.length - 1 - offset;
       if (idx < 0) {
-        res.status(404).json({ error: 'No message at that position' });
+        res.status(404).json({ error: 'No user message at that position' });
         return;
       }
-      messageId = msgs[idx].id;
+      messageId = userMsgs[idx].id;
     }
 
     if (!messageId) {
