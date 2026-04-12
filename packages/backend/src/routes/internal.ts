@@ -17,6 +17,8 @@ import {
   listCanvases,
   updateCanvasContent,
   updateCanvasTags,
+  getStickerByRef,
+  getAllStickersWithPacks,
   createTimer,
   listPendingTimers,
   cancelTimer,
@@ -351,6 +353,56 @@ router.post('/canvas', (req, res) => {
   } catch (error) {
     console.error('Internal canvas error:', error);
     res.status(500).json({ error: 'Canvas operation failed' });
+  }
+});
+
+// Sticker operations — companion can send stickers and list available ones
+router.post('/sticker', (req, res) => {
+  const { action, packName, stickerName, threadId } = req.body;
+  const now = new Date().toISOString();
+
+  try {
+    if (action === 'send') {
+      if (!packName || !stickerName || !threadId) {
+        res.status(400).json({ error: 'packName, stickerName, and threadId are required' });
+        return;
+      }
+      const sticker = getStickerByRef(packName, stickerName);
+      if (!sticker) {
+        res.status(404).json({ error: `Sticker not found: :${packName}_${stickerName}:` });
+        return;
+      }
+      const thread = getThread(threadId);
+      if (!thread) {
+        res.status(404).json({ error: 'Thread not found' });
+        return;
+      }
+      const msg = createMessage({
+        id: crypto.randomUUID(),
+        threadId,
+        role: 'companion',
+        content: sticker.url,
+        contentType: 'sticker',
+        metadata: { stickerId: sticker.id, packId: sticker.pack_id, stickerName: sticker.name, packName },
+        createdAt: now,
+      });
+      updateThreadActivity(threadId, now);
+      registry.broadcast({ type: 'message', message: msg });
+      res.json({ success: true, message: msg });
+    } else if (action === 'list') {
+      const stickers = getAllStickersWithPacks();
+      const grouped: Record<string, string[]> = {};
+      for (const s of stickers) {
+        if (!grouped[s.pack_name]) grouped[s.pack_name] = [];
+        grouped[s.pack_name].push(s.name);
+      }
+      res.json({ success: true, packs: grouped });
+    } else {
+      res.status(400).json({ error: 'Unknown action. Use "send" or "list".' });
+    }
+  } catch (error) {
+    console.error('Internal sticker error:', error);
+    res.status(500).json({ error: 'Sticker operation failed' });
   }
 });
 

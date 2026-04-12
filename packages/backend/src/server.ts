@@ -50,6 +50,12 @@ if (!existsSync(filesDir)) {
   mkdirSync(filesDir, { recursive: true });
 }
 
+// Ensure stickers directory exists
+const stickersDir = join(dataDir, 'stickers');
+if (!existsSync(stickersDir)) {
+  mkdirSync(stickersDir, { recursive: true });
+}
+
 // Initialize database
 console.log('Initializing database...');
 const db = initDb(DB_PATH);
@@ -121,6 +127,9 @@ app.use('/api', apiRoutes);
 if (config.command_center.enabled) {
   import('./routes/cc-mcp.js').then(m => app.use('/mcp/cc', m.default));
 }
+
+// Serve sticker images statically
+app.use('/stickers', express.static(stickersDir));
 
 // Serve frontend static build — use PROJECT_ROOT for stable path resolution
 const FRONTEND_ROOT = join(PROJECT_ROOT, 'packages', 'frontend', 'build');

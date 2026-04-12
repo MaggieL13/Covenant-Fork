@@ -734,13 +734,14 @@ router.post('/sticker-packs', (req, res) => {
 // Update sticker pack
 router.put('/sticker-packs/:id', (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, userOnly } = req.body;
     const existing = getStickerPack(req.params.id);
     if (!existing) {
       res.status(404).json({ error: 'Sticker pack not found' });
       return;
     }
-    const pack = updateStickerPack(req.params.id, { name, description });
+    updateStickerPack(req.params.id, { name, description, userOnly });
+    const pack = getStickerPack(req.params.id);
     res.json({ pack });
   } catch (error) {
     console.error('Error updating sticker pack:', error);

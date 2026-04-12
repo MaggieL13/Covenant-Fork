@@ -12,7 +12,7 @@ import type {
   NotificationHookInput,
   HookInput,
 } from '@anthropic-ai/claude-agent-sdk';
-import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas } from './db.js';
+import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas, getAllStickersWithPacks } from './db.js';
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
@@ -125,6 +125,7 @@ const TOOL_REFERENCE_KEYWORDS = [
   'share file', 'share files', 'routine', 'routines', 'failsafe',
   'pulse', 'timer', 'timers', 'impulse', 'impulses', 'watcher',
   'watchers', 'react to', 'voice note', 'search', 'backfill', 'embed',
+  'sticker', 'stickers', 'emote', 'emotes',
 ];
 
 function shouldInjectToolReference(ctx: HookContext, userMessage: string): boolean {
@@ -761,6 +762,17 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   parts.push(`Thread: "${sanitizeForContext(ctx.threadName)}" (${ctx.threadType})`);
   parts.push(`Time: ${timeStr} ${timezone} \u2014 ${dateStr}`);
 
+  // Sticker awareness — always injected so the companion knows stickers are available
+  // Excludes user_only packs (those are for the human's use only)
+  try {
+    const stickerData = getAllStickersWithPacks();
+    const agentStickers = stickerData.filter(s => !s.user_only);
+    if (agentStickers.length > 0) {
+      const packNames = [...new Set(agentStickers.map(s => s.pack_name))];
+      parts.push(`Custom stickers: Packs: ${packNames.join(', ')}. Two ways to use: (1) :packname_stickername: in your text for small inline emoji, (2) \`sc sticker send <pack> <name>\` to send a big standalone sticker as its own message. Use naturally when the mood fits.`);
+    }
+  } catch {}
+
   // Last session handoff
   try {
     const handoffRaw = getConfig('session.handoff_note');
@@ -839,6 +851,8 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
       `  ${SC} canvas read CANVAS_ID              (read canvas content)`,
       `  ${SC} canvas list                        (list all canvases with IDs)`,
       `  ${SC} canvas tag CANVAS_ID tag1,tag2     (set tags on a canvas)`,
+      `  ${SC} sticker send <pack> <name>        (send a sticker as standalone message)`,
+      `  ${SC} sticker list                      (list all sticker packs and names)`,
       `  contentType: markdown|code|text|html. Files in shared/ auto-share.`,
       `  ${SC} react last "\u2764\ufe0f"             (react to last message)`,
       `  ${SC} react last-2 "\ud83d\udd25"           (react to 2nd-to-last message)`,
@@ -925,6 +939,24 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
     if (canvasContents.length > 0) {
       parts.push(canvasContents.join('\n\n'));
     }
+  }
+
+  // Available stickers — inject compact catalog when sticker keywords detected
+  if (shouldInjectToolReference(ctx, userMessage)) {
+    try {
+      const stickers = getAllStickersWithPacks();
+      if (stickers.length > 0) {
+        const grouped: Record<string, string[]> = {};
+        for (const s of stickers) {
+          if (!grouped[s.pack_name]) grouped[s.pack_name] = [];
+          grouped[s.pack_name].push(s.name);
+        }
+        const lines = Object.entries(grouped).map(([pack, names]) =>
+          `  ${pack}: ${names.join(', ')}`
+        );
+        parts.push(`AVAILABLE STICKERS (use :packname_stickername: inline or sc sticker send):\n${lines.join('\n')}`);
+      }
+    } catch {}
   }
 
   // Recent reactions — so companion sees user's reactions on each interaction

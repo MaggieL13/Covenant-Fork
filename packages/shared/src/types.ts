@@ -22,7 +22,7 @@ export interface Message {
   sequence: number;
   role: 'companion' | 'user' | 'system';
   content: string;
-  content_type: 'text' | 'image' | 'audio' | 'file';
+  content_type: 'text' | 'image' | 'audio' | 'file' | 'sticker';
   platform: Platform;
   metadata: Record<string, unknown> | null;
   reply_to_id: string | null;
@@ -127,6 +127,27 @@ export interface Canvas {
   created_by: 'companion' | 'user';
   created_at: string;
   updated_at: string;
+}
+
+export interface StickerPack {
+  id: string;
+  name: string;
+  description: string;
+  entity_id: string | null;
+  user_only: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Sticker {
+  id: string;
+  pack_id: string;
+  name: string;
+  filename: string;
+  aliases: string[];
+  sort_order: number;
+  url: string;
+  created_at: string;
 }
 
 export type MessageSegment =

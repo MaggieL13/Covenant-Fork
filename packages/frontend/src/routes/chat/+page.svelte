@@ -10,6 +10,7 @@
   import ContextIndicator from '$lib/components/ContextIndicator.svelte';
   import ModelSelector from '$lib/components/ModelSelector.svelte';
   import { showToast } from '$lib/stores/toast.svelte';
+  import { loadStickers } from '$lib/stores/stickers.svelte';
   import Canvas from '$lib/components/Canvas.svelte';
   import CanvasList from '$lib/components/CanvasList.svelte';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
@@ -397,7 +398,7 @@
 
   // Load initial data and connect
   onMount(async () => {
-    await Promise.all([loadThreads(), loadSettings()]);
+    await Promise.all([loadThreads(), loadSettings(), loadStickers()]);
     connect();
     window.addEventListener('keydown', handleGlobalKeydown);
 

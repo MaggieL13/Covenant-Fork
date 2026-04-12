@@ -92,6 +92,19 @@ switch (cmd) {
     break;
   }
 
+  case 'sticker': {
+    const sub = args[0];
+    if (sub === 'send') {
+      if (!args[1] || !args[2]) { console.log('Usage: sc sticker send <pack> <name>'); break; }
+      await post('sticker', { action: 'send', packName: args[1], stickerName: args[2], threadId: thread });
+    } else if (sub === 'list') {
+      await post('sticker', { action: 'list', packId: args[1] || undefined });
+    } else {
+      console.log('Usage: sc sticker send|list ...');
+    }
+    break;
+  }
+
   case 'voice':
     await post('tts', { text: args[0], threadId: thread });
     break;
@@ -176,15 +189,19 @@ switch (cmd) {
     break;
   }
 
-  case 'react':
+  case 'react': {
     if (!args[0] || !args[1]) {
-      console.log('Usage: sc react <last|last-N> <emoji> [remove]');
+      console.log('Usage: sc react <last|last-N|messageId> <emoji> [remove]');
     } else {
-      const body = { target: args[0], emoji: args[1], threadId: thread };
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args[0]);
+      const body = isUuid
+        ? { messageId: args[0], emoji: args[1], threadId: thread }
+        : { target: args[0], emoji: args[1], threadId: thread };
       if (args[2] === 'remove') body.action = 'remove';
       await post('react', body);
     }
     break;
+  }
 
   case 'impulse': {
     const sub = args[0];

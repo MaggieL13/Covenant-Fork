@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS messages (
   sequence INTEGER NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('companion', 'user', 'system')),
   content TEXT NOT NULL,
-  content_type TEXT DEFAULT 'text' CHECK(content_type IN ('text', 'image', 'audio', 'file')),
+  content_type TEXT DEFAULT 'text' CHECK(content_type IN ('text', 'image', 'audio', 'file', 'sticker')),
   platform TEXT DEFAULT 'web',
   metadata TEXT,
   reply_to_id TEXT,

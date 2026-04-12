@@ -305,6 +305,7 @@
   <article
     class="message {message.role}"
     class:deleted={isDeleted}
+    class:sticker-only={contentType === 'sticker'}
     aria-label="{message.role} message"
   >
     <div class="message-header">
@@ -346,6 +347,10 @@
     <div class="message-content" bind:this={messageContentEl}>
       {#if isDeleted}
         <span class="deleted-text">This message was deleted</span>
+      {:else if contentType === 'sticker'}
+        <div class="sticker-message">
+          <img src={message.content} alt={metadata?.stickerName ? `:${metadata.packName}_${metadata.stickerName}:` : 'sticker'} class="standalone-sticker" />
+        </div>
       {:else if contentType === 'image'}
         <div class="media-image">
           <button class="image-button" onclick={() => showLightbox = true} aria-label="View full size">
@@ -496,7 +501,7 @@
       </div>
     {/if}
 
-    {#if !isDeleted && groupedReactions().length > 0}
+    {#if !isDeleted && groupedReactions().length > 0 && message.role !== 'user'}
       <div class="reactions-row">
         {#if canReadAloud}
           <button
@@ -540,7 +545,7 @@
           {/if}
         </div>
       </div>
-    {:else if !isDeleted && !isStreaming}
+    {:else if !isDeleted && !isStreaming && message.role !== 'user'}
       <div class="reactions-row reactions-hover-only">
         {#if canReadAloud}
           <button
@@ -573,15 +578,40 @@
       </div>
     {/if}
 
-    {#if readStatus() && message.role === 'user'}
-      <div class="read-status">
-        {#if readStatus() === 'read'}
-          <span class="check read" title="Read">&#10003;&#10003;</span>
-        {:else if readStatus() === 'delivered'}
-          <span class="check" title="Delivered">&#10003;&#10003;</span>
-        {:else}
-          <span class="check" title="Sent">&#10003;</span>
-        {/if}
+    {#if message.role === 'user'}
+      <div class="user-footer">
+        <div class="user-footer-left">
+          <div class="reaction-picker-wrapper">
+            <button class="reaction-add" onclick={openReactionPicker} title="Add reaction">+</button>
+            {#if pickerOpen}
+              <div class="reaction-quick-pick" bind:this={pickerEl}>
+                {#each QUICK_EMOJIS as emoji}
+                  <button class="quick-emoji" onclick={() => pickEmoji(emoji)}>{emoji}</button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          {#if groupedReactions().length > 0}
+            {#each groupedReactions() as { emoji, count }}
+              <button class="reaction-chip" onclick={() => toggleReaction(emoji)}>
+                <span>{emoji}</span>
+                {#if count > 1}<span class="reaction-count">{count}</span>{/if}
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <div class="user-footer-right">
+          <span class="time-inline">{formatTime(message.created_at)}</span>
+          {#if readStatus()}
+            {#if readStatus() === 'read'}
+              <span class="check read" title="Read">&#10003;&#10003;</span>
+            {:else if readStatus() === 'delivered'}
+              <span class="check" title="Delivered">&#10003;&#10003;</span>
+            {:else}
+              <span class="check" title="Sent">&#10003;</span>
+            {/if}
+          {/if}
+        </div>
       </div>
     {/if}
   </article>
@@ -592,6 +622,45 @@
     display: flex;
     justify-content: center;
     margin: 1rem 0;
+  }
+
+  /* Sticker-only messages: no bubble, just the image */
+  .message.sticker-only {
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0.4rem 1.1rem !important;
+  }
+
+  .message.sticker-only .message-header {
+    padding: 0;
+  }
+
+  .sticker-message {
+    display: flex;
+    padding: 0;
+  }
+
+  .message.user .sticker-message {
+    justify-content: flex-end;
+  }
+
+  .standalone-sticker {
+    max-width: 180px;
+    max-height: 180px;
+    border-radius: 0.5rem;
+    transition: transform 0.1s ease;
+  }
+
+  .standalone-sticker:hover {
+    transform: scale(1.05);
+  }
+
+  :global(.inline-sticker) {
+    height: 1.5em;
+    vertical-align: middle;
+    display: inline;
+    margin: 0 0.1em;
   }
 
   :global(.canvas-ref-inline) {
@@ -642,11 +711,14 @@
   .message.user {
     align-self: flex-end;
     margin-left: auto;
-    max-width: 85%;
+    max-width: 70%;
+    width: fit-content;
     background: var(--user-bg);
     border: 1px solid var(--border);
     border-radius: 1.125rem;
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+    padding: 0.6rem 0.9rem;
+    gap: 0.25rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   }
 
   .message.deleted {
@@ -1112,14 +1184,39 @@
     background: var(--bg-hover);
   }
 
-  .read-status {
+  /* Hide header for user messages — time + checks shown inline instead */
+  .message.user .message-header {
+    display: none;
+  }
+
+  .user-footer {
     display: flex;
-    justify-content: flex-end;
-    margin-top: 0.05rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .user-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .user-footer-right {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    margin-left: auto;
+  }
+
+  .time-inline {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    opacity: 0.7;
   }
 
   .check {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
     letter-spacing: -0.25em;
   }
@@ -1394,7 +1491,7 @@
 
   @media (max-width: 768px) {
     .message.user {
-      max-width: 90%;
+      max-width: 85%;
     }
 
     .message {

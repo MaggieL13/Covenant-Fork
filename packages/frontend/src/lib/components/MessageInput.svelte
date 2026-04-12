@@ -1,10 +1,12 @@
 <script lang="ts">
-  import type { Message, CommandRegistryEntry } from '@resonant/shared';
+  import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
   import VoiceRecorder from './VoiceRecorder.svelte';
   import VoiceModeToggle from './VoiceModeToggle.svelte';
+  import StickerPicker from './StickerPicker.svelte';
   import { getCompanionName } from '$lib/stores/settings.svelte';
   import CommandPalette from './CommandPalette.svelte';
-  import { getCommandRegistry, sendCommand } from '$lib/stores/websocket.svelte';
+  import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
+  import { getStickerPacks } from '$lib/stores/stickers.svelte';
   import { apiFetch } from '$lib/utils/api';
 
   let companionName = $derived(getCompanionName());
@@ -43,6 +45,11 @@
   let pendingCanvasRefs = $state<Array<{ canvasId: string; title: string }>>([]);
   let pendingProsody = $state<Record<string, number> | null>(null);
 
+  // Sticker picker state
+  let showStickerPicker = $state(false);
+  let hasStickerPacks = $derived(getStickerPacks().length > 0);
+  let pendingSticker = $state<Sticker | null>(null);
+
   // Command palette state
   let showCommandPalette = $state(false);
   let commandFilter = $state('');
@@ -50,7 +57,7 @@
   let commandRegistry = $derived(getCommandRegistry());
 
   // Can send if there's text or pending attachments
-  let canSend = $derived(content.trim().length > 0 || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0);
+  let canSend = $derived(content.trim().length > 0 || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0 || pendingSticker !== null);
 
   // Auto-resize textarea
   function autoResize() {
@@ -135,20 +142,38 @@
       // Not a recognized command — fall through to send as regular message
     }
 
+    // Send sticker first (as its own message), then text
+    if (pendingSticker && activeThreadId) {
+      send({
+        type: 'message',
+        threadId: activeThreadId,
+        content: pendingSticker.url,
+        contentType: 'sticker',
+        metadata: {
+          stickerId: pendingSticker.id,
+          packId: pendingSticker.pack_id,
+          stickerName: pendingSticker.name,
+        },
+      });
+    }
+
+    // Then send text + files (if any content exists)
     const files = [...pendingAttachments];
-    // Append canvas references as compact markers the bubble renderer can detect
     let finalContent = trimmed;
     if (pendingCanvasRefs.length > 0) {
       const refs = pendingCanvasRefs.map(r => `<<canvas:${r.canvasId}:${r.title}>>`).join(' ');
       finalContent = finalContent ? `${finalContent}\n${refs}` : refs;
     }
-    onbatchsend?.(finalContent, files, pendingProsody ?? undefined);
+    if (finalContent || files.length > 0) {
+      onbatchsend?.(finalContent, files, pendingProsody ?? undefined);
+    }
     resetInput();
   }
 
   function resetInput() {
     pendingAttachments = [];
     pendingCanvasRefs = [];
+    pendingSticker = null;
     content = '';
     pendingProsody = null;
     showCommandPalette = false;
@@ -171,6 +196,13 @@
 
   function removeCanvasRef(index: number) {
     pendingCanvasRefs = pendingCanvasRefs.filter((_, i) => i !== index);
+  }
+
+  // Queue sticker for sending (shows as chip, sent on Enter/click send)
+  function handleStickerSelect(sticker: Sticker) {
+    pendingSticker = sticker;
+    showStickerPicker = false;
+    textarea?.focus();
   }
 
   // Handle keyboard — route to palette when open
@@ -282,8 +314,18 @@
     <div class="upload-error">{uploadError}</div>
   {/if}
 
-  {#if pendingAttachments.length > 0}
+  {#if pendingSticker || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0}
     <div class="attachment-strip">
+      {#if pendingSticker}
+        <div class="attachment-preview sticker-chip">
+          <img src={pendingSticker.url} alt={pendingSticker.name} class="sticker-chip-img" />
+          <button class="attachment-remove" onclick={() => pendingSticker = null} aria-label="Remove sticker">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      {/if}
       {#each pendingAttachments as attachment, i}
         <div class="attachment-preview">
           {#if attachment.contentType === 'image'}
@@ -303,11 +345,6 @@
           </button>
         </div>
       {/each}
-    </div>
-  {/if}
-
-  {#if pendingCanvasRefs.length > 0}
-    <div class="attachment-strip">
       {#each pendingCanvasRefs as ref, i}
         <div class="attachment-preview canvas-ref-chip">
           <div class="attachment-file-icon">
@@ -364,6 +401,30 @@
     </button>
 
     <VoiceRecorder ontranscript={handleTranscript} />
+
+    {#if hasStickerPacks}
+      <div class="sticker-btn-wrap">
+        <button
+          class="sticker-button"
+          onclick={() => showStickerPicker = !showStickerPicker}
+          aria-label="Send sticker"
+          title="Stickers"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+            <line x1="9" y1="9" x2="9.01" y2="9"/>
+            <line x1="15" y1="9" x2="15.01" y2="9"/>
+          </svg>
+        </button>
+        {#if showStickerPicker}
+          <StickerPicker
+            onselect={handleStickerSelect}
+            onclose={() => showStickerPicker = false}
+          />
+        {/if}
+      </div>
+    {/if}
 
     <textarea
       bind:this={textarea}
@@ -505,6 +566,17 @@
     border-color: var(--accent, #9b72cf);
   }
 
+  .sticker-chip {
+    padding: 0.25rem;
+  }
+
+  .sticker-chip-img {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    border-radius: 0.25rem;
+  }
+
   .attachment-thumb {
     width: 4rem;
     height: 4rem;
@@ -585,6 +657,24 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+
+  .sticker-btn-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .sticker-button {
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    color: var(--text-muted);
+    border-radius: 0.875rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color var(--transition), background var(--transition);
+  }
+  .sticker-button:hover { color: var(--accent); background: var(--bg-hover); }
 
   .upload-spinner {
     width: 20px;

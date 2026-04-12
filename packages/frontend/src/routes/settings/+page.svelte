@@ -5,6 +5,7 @@
   import SystemStatusPanel from '$lib/components/SystemStatusPanel.svelte';
   import McpActivityPanel from '$lib/components/McpActivityPanel.svelte';
   import SkillsPanel from '$lib/components/SkillsPanel.svelte';
+  import StickerManager from '$lib/components/StickerManager.svelte';
   import NotificationsPanel from '$lib/components/NotificationsPanel.svelte';
   import DiscordPanel from '$lib/components/DiscordPanel.svelte';
   import SessionsPanel from '$lib/components/SessionsPanel.svelte';
@@ -18,7 +19,7 @@
   } from '$lib/stores/settings.svelte';
   import { send, getConnectionState } from '$lib/stores/websocket.svelte';
 
-  let activeTab = $state<'preferences' | 'orchestrator' | 'system' | 'mcp' | 'skills' | 'notifications' | 'discord' | 'sessions'>('preferences');
+  let activeTab = $state<'preferences' | 'orchestrator' | 'system' | 'mcp' | 'stickers' | 'skills' | 'notifications' | 'discord' | 'sessions'>('preferences');
   let systemStatus = $derived(getSystemStatus());
   let loading = $derived(isLoading());
   let connectionState = $derived(getConnectionState());
@@ -29,6 +30,7 @@
     { id: 'orchestrator', label: 'Orchestrator', desc: 'Night routines and failsafes' },
     { id: 'system', label: 'System', desc: 'Runtime health and presence' },
     { id: 'mcp', label: 'MCP Servers', desc: 'Connected tools and services' },
+    { id: 'stickers', label: 'Stickers', desc: 'Custom sticker packs' },
     { id: 'skills', label: 'Skills', desc: 'Installed capability packs' },
     { id: 'notifications', label: 'Notifications', desc: 'Alerts and delivery' },
     { id: 'discord', label: 'Discord', desc: 'Community and routing' },
@@ -149,6 +151,8 @@
             <SystemStatusPanel status={systemStatus} />
           {:else if activeTab === 'mcp'}
             <McpActivityPanel status={systemStatus} />
+          {:else if activeTab === 'stickers'}
+            <StickerManager />
           {:else if activeTab === 'skills'}
             <SkillsPanel />
           {:else if activeTab === 'notifications'}
