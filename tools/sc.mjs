@@ -77,8 +77,17 @@ switch (cmd) {
       });
     } else if (sub === 'update') {
       await post('canvas', { action: 'update', canvasId: args[1], filePath: args[2] });
+    } else if (sub === 'read') {
+      if (!args[1]) { console.log('Usage: sc canvas read CANVAS_ID'); break; }
+      await post('canvas', { action: 'read', canvasId: args[1] });
+    } else if (sub === 'list') {
+      await post('canvas', { action: 'list' });
+    } else if (sub === 'tag') {
+      if (!args[1]) { console.log('Usage: sc canvas tag CANVAS_ID tag1,tag2,...'); break; }
+      const tags = (args[2] || '').split(',').map(t => t.trim()).filter(Boolean);
+      await post('canvas', { action: 'tag', canvasId: args[1], tags });
     } else {
-      console.log('Usage: sc canvas create|create-inline|update ...');
+      console.log('Usage: sc canvas create|create-inline|update|read|list|tag ...');
     }
     break;
   }

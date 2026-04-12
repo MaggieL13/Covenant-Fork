@@ -12,8 +12,10 @@ import {
   createCanvas,
   getCanvas,
   listCanvases,
+  getAllCanvasTags,
   updateCanvasContent,
   updateCanvasTitle,
+  updateCanvasTags,
   deleteCanvas,
   addPushSubscription,
   removePushSubscription,
@@ -669,14 +671,27 @@ router.get('/skills', (req, res) => {
 
 // --- Canvas REST routes ---
 
-// List canvases
+// List canvases (with optional search + tag filter)
 router.get('/canvases', (req, res) => {
   try {
-    const canvases = listCanvases();
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const tag = typeof req.query.tag === 'string' ? req.query.tag : undefined;
+    const canvases = listCanvases({ search, tag });
     res.json({ canvases });
   } catch (error) {
     console.error('Error listing canvases:', error);
     res.status(500).json({ error: 'Failed to list canvases' });
+  }
+});
+
+// Get all unique tags across canvases (for autocomplete)
+router.get('/canvases/tags', (req, res) => {
+  try {
+    const tags = getAllCanvasTags();
+    res.json({ tags });
+  } catch (error) {
+    console.error('Error fetching canvas tags:', error);
+    res.status(500).json({ error: 'Failed to fetch tags' });
   }
 });
 
@@ -733,7 +748,7 @@ router.patch('/canvases/:id', (req, res) => {
     }
 
     const now = new Date().toISOString();
-    const { title, content } = req.body;
+    const { title, content, tags } = req.body;
 
     if (title !== undefined) {
       updateCanvasTitle(req.params.id, title, now);
@@ -741,6 +756,10 @@ router.patch('/canvases/:id', (req, res) => {
     if (content !== undefined) {
       updateCanvasContent(req.params.id, content, now);
       registry.broadcast({ type: 'canvas_updated', canvasId: req.params.id, content, updatedAt: now });
+    }
+    if (Array.isArray(tags)) {
+      updateCanvasTags(req.params.id, tags, now);
+      registry.broadcast({ type: 'canvas_updated', canvasId: req.params.id, content: canvas.content, updatedAt: now, tags });
     }
 
     res.json({ success: true });

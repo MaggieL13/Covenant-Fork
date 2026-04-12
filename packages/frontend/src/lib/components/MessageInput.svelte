@@ -40,6 +40,7 @@
   let uploading = $state(false);
   let uploadError = $state<string | null>(null);
   let pendingAttachments = $state<FileUploadResult[]>([]);
+  let pendingCanvasRefs = $state<Array<{ canvasId: string; title: string }>>([]);
   let pendingProsody = $state<Record<string, number> | null>(null);
 
   // Command palette state
@@ -49,7 +50,7 @@
   let commandRegistry = $derived(getCommandRegistry());
 
   // Can send if there's text or pending attachments
-  let canSend = $derived(content.trim().length > 0 || pendingAttachments.length > 0);
+  let canSend = $derived(content.trim().length > 0 || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0);
 
   // Auto-resize textarea
   function autoResize() {
@@ -135,12 +136,19 @@
     }
 
     const files = [...pendingAttachments];
-    onbatchsend?.(trimmed, files, pendingProsody ?? undefined);
+    // Append canvas references as compact markers the bubble renderer can detect
+    let finalContent = trimmed;
+    if (pendingCanvasRefs.length > 0) {
+      const refs = pendingCanvasRefs.map(r => `<<canvas:${r.canvasId}:${r.title}>>`).join(' ');
+      finalContent = finalContent ? `${finalContent}\n${refs}` : refs;
+    }
+    onbatchsend?.(finalContent, files, pendingProsody ?? undefined);
     resetInput();
   }
 
   function resetInput() {
     pendingAttachments = [];
+    pendingCanvasRefs = [];
     content = '';
     pendingProsody = null;
     showCommandPalette = false;
@@ -151,6 +159,18 @@
   // Remove a pending attachment
   function removeAttachment(index: number) {
     pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+  }
+
+  // Canvas references — called externally via bind:this
+  export function attachCanvasRef(canvasId: string, title: string) {
+    // Don't add duplicates
+    if (pendingCanvasRefs.some(r => r.canvasId === canvasId)) return;
+    pendingCanvasRefs = [...pendingCanvasRefs, { canvasId, title }];
+    textarea?.focus();
+  }
+
+  function removeCanvasRef(index: number) {
+    pendingCanvasRefs = pendingCanvasRefs.filter((_, i) => i !== index);
   }
 
   // Handle keyboard — route to palette when open
@@ -277,6 +297,26 @@
             </div>
           {/if}
           <button class="attachment-remove" onclick={() => removeAttachment(i)} aria-label="Remove attachment">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if pendingCanvasRefs.length > 0}
+    <div class="attachment-strip">
+      {#each pendingCanvasRefs as ref, i}
+        <div class="attachment-preview canvas-ref-chip">
+          <div class="attachment-file-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+            </svg>
+            <span class="attachment-name">{ref.title}</span>
+          </div>
+          <button class="attachment-remove" onclick={() => removeCanvasRef(i)} aria-label="Remove canvas reference">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
@@ -459,6 +499,10 @@
     border-radius: 0.875rem;
     overflow: hidden;
     background: var(--bg-surface);
+  }
+
+  .canvas-ref-chip {
+    border-color: var(--accent, #9b72cf);
   }
 
   .attachment-thumb {

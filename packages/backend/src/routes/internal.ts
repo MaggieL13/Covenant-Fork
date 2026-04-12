@@ -13,7 +13,10 @@ import {
   updateThreadActivity,
   getDb,
   createCanvas,
+  getCanvas,
+  listCanvases,
   updateCanvasContent,
+  updateCanvasTags,
   createTimer,
   listPendingTimers,
   cancelTimer,
@@ -319,8 +322,31 @@ router.post('/canvas', (req, res) => {
       updateCanvasContent(canvasId, resolvedContent, now);
       registry.broadcast({ type: 'canvas_updated', canvasId, content: resolvedContent, updatedAt: now });
       res.json({ success: true });
+    } else if (action === 'read') {
+      if (!canvasId) {
+        res.status(400).json({ error: 'canvasId is required' });
+        return;
+      }
+      const canvas = getCanvas(canvasId);
+      if (!canvas) {
+        res.status(404).json({ error: 'Canvas not found' });
+        return;
+      }
+      res.json({ success: true, canvas });
+    } else if (action === 'list') {
+      const allCanvases = listCanvases();
+      res.json({ success: true, canvases: allCanvases });
+    } else if (action === 'tag') {
+      if (!canvasId || !Array.isArray(req.body.tags)) {
+        res.status(400).json({ error: 'canvasId and tags (array) are required' });
+        return;
+      }
+      updateCanvasTags(canvasId, req.body.tags, now);
+      const updated = getCanvas(canvasId);
+      registry.broadcast({ type: 'canvas_updated', canvasId, content: updated?.content || '', updatedAt: now, tags: req.body.tags });
+      res.json({ success: true, canvas: updated });
     } else {
-      res.status(400).json({ error: 'Unknown action. Use "create" or "update".' });
+      res.status(400).json({ error: 'Unknown action. Use "create", "update", "read", "list", or "tag".' });
     }
   } catch (error) {
     console.error('Internal canvas error:', error);

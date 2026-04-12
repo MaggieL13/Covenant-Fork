@@ -123,6 +123,7 @@ export interface Canvas {
   content: string;
   content_type: 'markdown' | 'code' | 'text' | 'html';
   language: string | null;
+  tags: string[];
   created_by: 'companion' | 'user';
   created_at: string;
   updated_at: string;

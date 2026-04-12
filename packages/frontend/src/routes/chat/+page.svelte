@@ -70,6 +70,9 @@
   // Search state
   let searchOpen = $state(false);
 
+  // Component refs
+  let messageInput: MessageInput | undefined = $state();
+
   // Workspace drawers
   let canvasPanelOpen = $state(false);
 
@@ -692,6 +695,7 @@
 
     <!-- Input area -->
     <MessageInput
+      bind:this={messageInput}
       replyTo={replyTo}
       isStreaming={isStreamingNow}
       activeThreadId={activeThreadId}
@@ -710,7 +714,9 @@
     <div class="canvas-sheet" role="dialog" aria-modal="true" aria-label="Canvas workspace">
       <div class="canvas-sheet-card">
         {#if activeCanvasId}
-          <Canvas embedded />
+          <Canvas embedded onreference={(canvasId, title) => {
+            messageInput?.attachCanvasRef(canvasId, title);
+          }} />
         {:else}
           <CanvasList embedded stayOpenOnSelect onclose={closeCanvasPanel} />
         {/if}

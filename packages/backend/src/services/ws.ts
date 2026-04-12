@@ -27,6 +27,7 @@ import {
   listCanvases,
   updateCanvasContent,
   updateCanvasTitle,
+  updateCanvasTags,
   deleteCanvas,
   addReaction,
   removeReaction,
@@ -329,6 +330,11 @@ export function createWebSocketServer(server: HTTPServer, agentService?: AgentSe
             registry.touchUserActivity();
             registry.touchUserWebActivity();
             handleCanvasUpdateTitle(clientMsg, extWs);
+            break;
+          case 'canvas_update_tags':
+            registry.touchUserActivity();
+            registry.touchUserWebActivity();
+            handleCanvasUpdateTags(clientMsg, extWs);
             break;
           case 'canvas_delete':
             registry.touchUserActivity();
@@ -883,6 +889,7 @@ function handleCanvasCreate(
     title: msg.title,
     contentType: msg.contentType || 'markdown',
     language: msg.language || undefined,
+    tags: msg.tags || undefined,
     createdBy: 'user',
     createdAt: now,
   });
@@ -932,6 +939,28 @@ function handleCanvasUpdateTitle(
     canvasId: msg.canvasId,
     content: canvas.content, // keep content unchanged
     updatedAt: now,
+  });
+}
+
+function handleCanvasUpdateTags(
+  msg: Extract<ClientMessage, { type: 'canvas_update_tags' }>,
+  ws: ExtendedWebSocket
+): void {
+  const canvas = getCanvas(msg.canvasId);
+  if (!canvas) {
+    sendError(ws, 'canvas_not_found', 'Canvas not found');
+    return;
+  }
+
+  const now = new Date().toISOString();
+  updateCanvasTags(msg.canvasId, msg.tags, now);
+
+  registry.broadcast({
+    type: 'canvas_updated',
+    canvasId: msg.canvasId,
+    content: canvas.content,
+    updatedAt: now,
+    tags: msg.tags,
   });
 }
 

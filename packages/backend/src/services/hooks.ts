@@ -12,7 +12,7 @@ import type {
   NotificationHookInput,
   HookInput,
 } from '@anthropic-ai/claude-agent-sdk';
-import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers } from './db.js';
+import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas } from './db.js';
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
@@ -836,6 +836,9 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
       `  ${SC} canvas create "Title" /path/to/file.md markdown`,
       `  ${SC} canvas create-inline "Title" "short text" text`,
       `  ${SC} canvas update CANVAS_ID /path/to/file`,
+      `  ${SC} canvas read CANVAS_ID              (read canvas content)`,
+      `  ${SC} canvas list                        (list all canvases with IDs)`,
+      `  ${SC} canvas tag CANVAS_ID tag1,tag2     (set tags on a canvas)`,
       `  contentType: markdown|code|text|html. Files in shared/ auto-share.`,
       `  ${SC} react last "\u2764\ufe0f"             (react to last message)`,
       `  ${SC} react last-2 "\ud83d\udd25"           (react to 2nd-to-last message)`,
@@ -899,6 +902,28 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
         `  ${SC} tg voice "text with [tone tags]"`,
         `  ${SC} tg text "proactive message"`,
       ].join('\n'));
+    }
+  }
+
+  // Canvas references — auto-inject canvas content when user references one
+  if (userMessage) {
+    const canvasRefPattern = /<<canvas:([^:]+):(.+?)>>/g;
+    let match;
+    const canvasContents: string[] = [];
+    while ((match = canvasRefPattern.exec(userMessage)) !== null) {
+      const [, canvasId, canvasTitle] = match;
+      try {
+        const canvas = getCanvas(canvasId);
+        if (canvas) {
+          const preview = canvas.content.length > 2000
+            ? canvas.content.slice(0, 2000) + '\n... (truncated)'
+            : canvas.content;
+          canvasContents.push(`REFERENCED CANVAS: "${canvasTitle}" (${canvas.content_type})\n${preview}`);
+        }
+      } catch {}
+    }
+    if (canvasContents.length > 0) {
+      parts.push(canvasContents.join('\n\n'));
     }
   }
 

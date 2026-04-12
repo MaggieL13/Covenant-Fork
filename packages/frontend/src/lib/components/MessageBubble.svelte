@@ -31,12 +31,21 @@
   const contentType = $derived(message.content_type || 'text');
   const metadata = $derived(message.metadata as Record<string, unknown> | null);
 
+  // Replace <<canvas:id:title>> markers with styled chips
+  function renderCanvasRefs(text: string): string {
+    return text.replace(/<<canvas:([^:]+):(.+?)>>/g, (_match, id, title) => {
+      return `<span class="canvas-ref-inline" data-canvas-id="${id}" title="Canvas: ${title}">📄 ${title}</span>`;
+    });
+  }
+
   // Render text content
   const renderedContent = $derived(() => {
     if (isDeleted) return '';
     if (isStreaming && streamTokens) return renderMarkdown(streamTokens);
     if (contentType !== 'text') return '';
-    return renderMarkdown(message.content);
+    // Render canvas refs first, then markdown
+    const withRefs = renderCanvasRefs(message.content);
+    return renderMarkdown(withRefs);
   });
 
   // Image lightbox state
@@ -580,6 +589,22 @@
     display: flex;
     justify-content: center;
     margin: 1rem 0;
+  }
+
+  :global(.canvas-ref-inline) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.75rem;
+    background: var(--bg-tertiary, #1a1428);
+    border: 1px solid var(--accent, #9b72cf);
+    color: var(--accent, #9b72cf);
+    font-size: 0.8rem;
+    font-family: var(--font-heading, 'Cinzel', serif);
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    vertical-align: middle;
   }
 
   .system-text {

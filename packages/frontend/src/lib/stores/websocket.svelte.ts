@@ -451,6 +451,7 @@ function handleMessage(event: MessageEvent) {
                 ...c,
                 content: msg.content,
                 title: msg.title ?? c.title,
+                tags: msg.tags ?? c.tags,
                 updated_at: msg.updatedAt,
               }
             : c
@@ -820,6 +821,14 @@ export function sendCanvasUpdateTitle(canvasId: string, title: string) {
   canvases = canvases.map(c =>
     c.id === canvasId
       ? { ...c, title, updated_at: new Date().toISOString() }
+      : c
+  );
+}
+export function sendCanvasUpdateTags(canvasId: string, tags: string[]) {
+  send({ type: 'canvas_update_tags', canvasId, tags });
+  canvases = canvases.map(c =>
+    c.id === canvasId
+      ? { ...c, tags, updated_at: new Date().toISOString() }
       : c
   );
 }
