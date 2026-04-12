@@ -1,6 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig } from './db.js';
+import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -173,6 +173,7 @@ function getConfiguredThinkingEffort(): string {
   const cfg = getResonantConfig();
   return cfg.agent.thinking_effort || 'max';
 }
+
 
 // Presence state
 let presenceStatus: 'active' | 'dormant' | 'waking' | 'offline' = 'offline';
@@ -537,7 +538,7 @@ export class AgentService {
 
       includePartialMessages: true,
       thinking: { type: 'adaptive' },
-      effort: getConfiguredThinkingEffort() as any,
+      effort: effort as any,
       hooks: createHooks(hookContext),
       // Plugin: native skill discovery from .claude/skills/
       plugins: [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
@@ -577,7 +578,27 @@ export class AgentService {
       // Prepended to prompt because SessionStart hooks don't fire in V1 query()
       // Static content (CHAT TOOLS, skills, vault path) only on first message of session
       const orientation = await buildOrientationContext(hookContext, isFirstMessage, content);
-      const enrichedPrompt = `[Context]\n${orientation}\n[/Context]\n\n${content}`;
+
+      // On fresh sessions (e.g. after model swap), inject recent message history
+      // so the new model has conversational context instead of starting blind
+      let historyBlock = '';
+      if (isFirstMessage) {
+        const recentMessages = getMessages({ threadId, limit: 10 });
+        if (recentMessages.length > 0) {
+          const historyLines = recentMessages.map((m, i) => {
+            const role = m.role === 'user' ? cfg.identity.user_name : cfg.identity.companion_name;
+            // Last 3 messages get full content (most likely to be referenced after model swap)
+            // Older messages get truncated to save tokens
+            const isRecent = i >= recentMessages.length - 3;
+            const maxLen = isRecent ? 5000 : 500;
+            const preview = m.content.length > maxLen ? m.content.slice(0, maxLen) + '...' : m.content;
+            return `${role}: ${preview}`;
+          });
+          historyBlock = `\n[Recent Conversation]\n${historyLines.join('\n')}\n[/Recent Conversation]\n`;
+        }
+      }
+
+      const enrichedPrompt = `[Context]\n${orientation}\n[/Context]${historyBlock}\n\n${content}`;
 
       // Abort controller for stop_generation support
       activeAbortController = new AbortController();
@@ -622,7 +643,6 @@ export class AgentService {
         if (!msg || typeof msg !== 'object' || !('type' in msg)) continue;
 
         const msgType = (msg as any).type;
-
         // Capture thinking from raw stream events (SDK strips them from assistant messages)
         if (msgType === 'stream_event') {
           const streamEvent = (msg as any).event;
@@ -804,6 +824,8 @@ export class AgentService {
       presenceStatus = 'dormant';
       registry.broadcast({ type: 'presence', status: 'dormant' });
     }
+
+    console.log(`[Agent] Response complete: ${thinkingBlocks.length} thinking block(s), ${toolInsertions.length} tool call(s)`);
 
     // Build segments for interleaved tool/thinking display
     const segments = buildSegments(fullResponse, toolInsertions, thinkingBlocks);

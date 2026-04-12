@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
-import { readdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync } from 'fs';
+import { readdirSync, readFileSync, writeFileSync, existsSync, copyFileSync, mkdirSync, rmSync } from 'fs';
 import { basename, join, resolve } from 'path';
 import yaml from 'js-yaml';
 import {
@@ -22,6 +22,18 @@ import {
   listPushSubscriptions,
   searchMessages,
   getDb,
+  createStickerPack,
+  getStickerPack,
+  listStickerPacks,
+  updateStickerPack,
+  deleteStickerPack,
+  createSticker,
+  getSticker,
+  getStickerByRef,
+  listStickers,
+  updateSticker,
+  deleteSticker,
+  getAllStickersWithPacks,
 } from '../services/db.js';
 import {
   loginHandler,
@@ -600,6 +612,8 @@ router.put('/settings', (req, res) => {
     if (key === 'agent.model') {
       const previous = getConfig('agent.model');
       if (previous !== value) {
+        // Clear all sessions so the new model starts fresh —
+        // agent.ts will inject recent message history for context continuity
         clearAllThreadSessions();
       }
     }
@@ -668,6 +682,223 @@ router.get('/skills', (req, res) => {
   } catch (error) {
     console.error('Error reading skills:', error);
     res.status(500).json({ error: 'Failed to read skills' });
+  }
+});
+
+// --- Sticker REST routes ---
+
+const stickerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 512 * 1024 }, // 512KB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'image/png' || file.mimetype === 'image/webp') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PNG and WebP files are allowed'));
+    }
+  },
+});
+
+// List all sticker packs
+router.get('/sticker-packs', (req, res) => {
+  try {
+    const packs = listStickerPacks();
+    res.json({ packs });
+  } catch (error) {
+    console.error('Error listing sticker packs:', error);
+    res.status(500).json({ error: 'Failed to list sticker packs' });
+  }
+});
+
+// Create sticker pack
+router.post('/sticker-packs', (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name || typeof name !== 'string') {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const pack = createStickerPack({
+      id: crypto.randomUUID(),
+      name,
+      description: description || undefined,
+      createdAt: new Date().toISOString(),
+    });
+    res.json({ pack });
+  } catch (error) {
+    console.error('Error creating sticker pack:', error);
+    res.status(500).json({ error: 'Failed to create sticker pack' });
+  }
+});
+
+// Update sticker pack
+router.put('/sticker-packs/:id', (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const existing = getStickerPack(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: 'Sticker pack not found' });
+      return;
+    }
+    const pack = updateStickerPack(req.params.id, { name, description });
+    res.json({ pack });
+  } catch (error) {
+    console.error('Error updating sticker pack:', error);
+    res.status(500).json({ error: 'Failed to update sticker pack' });
+  }
+});
+
+// Delete sticker pack + all stickers + files on disk
+router.delete('/sticker-packs/:id', (req, res) => {
+  try {
+    const existing = getStickerPack(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: 'Sticker pack not found' });
+      return;
+    }
+    // Delete all stickers in this pack from DB
+    const stickers = listStickers(req.params.id);
+    for (const s of stickers) {
+      deleteSticker(s.id);
+    }
+    // Delete the pack from DB
+    deleteStickerPack(req.params.id);
+    // Remove files on disk
+    const packDir = resolve(PROJECT_ROOT, 'data', 'stickers', req.params.id);
+    if (existsSync(packDir)) {
+      rmSync(packDir, { recursive: true, force: true });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting sticker pack:', error);
+    res.status(500).json({ error: 'Failed to delete sticker pack' });
+  }
+});
+
+// List all stickers (optional ?packId= filter)
+router.get('/stickers', (req, res) => {
+  try {
+    const packId = typeof req.query.packId === 'string' ? req.query.packId : undefined;
+    const stickers = listStickers(packId);
+    res.json({ stickers });
+  } catch (error) {
+    console.error('Error listing stickers:', error);
+    res.status(500).json({ error: 'Failed to list stickers' });
+  }
+});
+
+// List packs with their stickers grouped (for the picker)
+router.get('/stickers/packs-with-stickers', (req, res) => {
+  try {
+    const data = getAllStickersWithPacks();
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching stickers with packs:', error);
+    res.status(500).json({ error: 'Failed to fetch stickers with packs' });
+  }
+});
+
+// Upload sticker to a pack
+router.post('/stickers', stickerUpload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'No file provided' });
+      return;
+    }
+    const { packId, name, aliases } = req.body;
+    if (!packId || typeof packId !== 'string') {
+      res.status(400).json({ error: 'packId is required' });
+      return;
+    }
+    if (!name || typeof name !== 'string') {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const pack = getStickerPack(packId);
+    if (!pack) {
+      res.status(404).json({ error: 'Sticker pack not found' });
+      return;
+    }
+
+    // Sanitize filename from sticker name
+    const ext = req.file.mimetype === 'image/webp' ? '.webp' : '.png';
+    const sanitizedName = name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
+    const filename = `${sanitizedName}${ext}`;
+
+    // Ensure pack directory exists
+    const packDir = resolve(PROJECT_ROOT, 'data', 'stickers', packId);
+    mkdirSync(packDir, { recursive: true });
+
+    // Write file to disk
+    const filePath = join(packDir, filename);
+    writeFileSync(filePath, req.file.buffer);
+
+    // Parse aliases
+    const aliasArray = aliases && typeof aliases === 'string'
+      ? aliases.split(',').map((a: string) => a.trim()).filter(Boolean)
+      : [];
+
+    // Create sticker record in DB
+    const sticker = createSticker({
+      id: crypto.randomUUID(),
+      packId,
+      name,
+      filename,
+      aliases: aliasArray,
+      createdAt: new Date().toISOString(),
+    });
+
+    res.json({ sticker });
+  } catch (error) {
+    console.error('Error uploading sticker:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to upload sticker';
+    res.status(400).json({ error: msg });
+  }
+});
+
+// Update sticker name/aliases
+router.put('/stickers/:id', (req, res) => {
+  try {
+    const existing = getSticker(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: 'Sticker not found' });
+      return;
+    }
+    const { name, aliases } = req.body;
+    const updates: Record<string, any> = {};
+    if (name !== undefined) updates.name = name;
+    if (aliases !== undefined) {
+      updates.aliases = typeof aliases === 'string'
+        ? aliases.split(',').map((a: string) => a.trim()).filter(Boolean)
+        : aliases;
+    }
+    const sticker = updateSticker(req.params.id, updates);
+    res.json({ sticker });
+  } catch (error) {
+    console.error('Error updating sticker:', error);
+    res.status(500).json({ error: 'Failed to update sticker' });
+  }
+});
+
+// Delete sticker + file on disk
+router.delete('/stickers/:id', (req, res) => {
+  try {
+    const existing = getSticker(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: 'Sticker not found' });
+      return;
+    }
+    // Remove file from disk
+    const filePath = resolve(PROJECT_ROOT, 'data', 'stickers', existing.pack_id, existing.filename);
+    if (existsSync(filePath)) {
+      rmSync(filePath);
+    }
+    // Remove from DB
+    deleteSticker(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting sticker:', error);
+    res.status(500).json({ error: 'Failed to delete sticker' });
   }
 });
 
