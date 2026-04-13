@@ -23,6 +23,7 @@
   let showArchived = $state(false);
   let archivedThreads = $state<ThreadSummary[]>([]);
   let contextMenuThread = $state<string | null>(null);
+  let contextMenuIsArchived = $state(false);
   let renamingThread = $state<string | null>(null);
   let renameValue = $state('');
   let deleteConfirm = $state<string | null>(null);
@@ -152,6 +153,7 @@
           if (nextId) onselect?.(nextId);
         }
         await loadThreads?.();
+        if (showArchived) await loadArchived();
         showToast('Thread archived', 'success');
       } else {
         const data = await response.json().catch(() => ({}));
@@ -160,6 +162,24 @@
     } catch (err) {
       console.error('Failed to archive thread:', err);
       showToast('Failed to archive thread', 'error');
+    }
+  }
+
+  async function handleUnarchive(threadId: string) {
+    try {
+      const response = await apiFetch(`/api/threads/${threadId}/unarchive`, { method: 'POST' });
+      if (response.ok) {
+        contextMenuThread = null;
+        await loadThreads?.();
+        await loadArchived();
+        showToast('Thread restored', 'success');
+      } else {
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || 'Failed to restore thread', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to unarchive thread:', err);
+      showToast('Failed to restore thread', 'error');
     }
   }
 
@@ -225,6 +245,7 @@
         // Notify parent and refresh thread list
         ondelete?.(threadId);
         await loadThreads?.();
+        if (showArchived) await loadArchived();
         showToast('Thread deleted', 'success');
       } else {
         const data = await response.json().catch(() => ({}));
@@ -285,10 +306,23 @@
     }
   }
 
-  function toggleContextMenu(threadId: string, e: MouseEvent) {
+  let contextMenuPos = $state<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  function toggleContextMenu(threadId: string, e: MouseEvent, archived = false) {
     e.preventDefault();
     e.stopPropagation();
-    contextMenuThread = contextMenuThread === threadId ? null : threadId;
+    if (contextMenuThread === threadId) {
+      contextMenuThread = null;
+      return;
+    }
+    // Position menu at click coordinates, fixed to viewport
+    const menuHeight = 200;
+    const y = e.clientY + menuHeight > window.innerHeight
+      ? e.clientY - menuHeight
+      : e.clientY;
+    contextMenuPos = { x: e.clientX, y };
+    contextMenuIsArchived = archived;
+    contextMenuThread = threadId;
   }
 
   function handleDocumentClick(e: MouseEvent) {
@@ -330,31 +364,19 @@
       />
     </div>
   {:else}
-    <button
-      class="thread-item"
-      class:active={thread.id === activeThreadId}
-      onclick={() => handleSelect(thread.id)}
-      oncontextmenu={(e) => toggleContextMenu(thread.id, e)}
-    >
-      <span class="thread-name">{thread.name}</span>
-      {#if thread.unread_count > 0}
-        <span class="unread-badge">{thread.unread_count}</span>
-      {/if}
-    </button>
-    {#if contextMenuThread === thread.id}
-      <div class="context-menu">
-        {#if thread.pinned_at}
-          <button onclick={() => handleUnpin(thread.id)}>Unpin</button>
-        {:else}
-          <button onclick={() => handlePin(thread.id)}>Pin</button>
+    <div class="thread-item-wrapper">
+      <button
+        class="thread-item"
+        class:active={thread.id === activeThreadId}
+        onclick={() => handleSelect(thread.id)}
+        oncontextmenu={(e) => toggleContextMenu(thread.id, e)}
+      >
+        <span class="thread-name">{thread.name}</span>
+        {#if thread.unread_count > 0}
+          <span class="unread-badge">{thread.unread_count}</span>
         {/if}
-        {#if thread.type === 'named'}
-          <button onclick={() => startRename(thread.id, thread.name)}>Rename</button>
-        {/if}
-        <button onclick={() => handleArchive(thread.id)}>Archive</button>
-        <button class="context-delete" onclick={() => startDelete(thread.id)}>Delete</button>
-      </div>
-    {/if}
+      </button>
+    </div>
   {/if}
 {/snippet}
 
@@ -373,97 +395,129 @@
   </div>
 
   <div class="thread-groups">
-    <div class="filter-input-wrapper">
-      <input
-        class="filter-input"
-        type="text"
-        placeholder="Filter threads..."
-        bind:value={filterQuery}
-      />
-      {#if filterQuery}
-        <button class="filter-clear" onclick={() => filterQuery = ''} aria-label="Clear filter">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
-      {/if}
-    </div>
-
-    {#if groupedThreads().filtered}
-      <!-- Flat filtered results -->
-      {#each groupedThreads().filtered as thread (thread.id)}
-        {@render threadItem(thread)}
-      {/each}
-      {#if groupedThreads().filtered.length === 0}
-        <p class="empty-filter">No matching threads</p>
-      {/if}
+    {#if showArchived}
+      <!-- Archive view -->
+      <div class="thread-group">
+        <h3 class="group-title">Archived</h3>
+        {#if archivedThreads.length === 0}
+          <p class="empty-filter">No archived threads</p>
+        {:else}
+          {#each archivedThreads as thread (thread.id)}
+            <div class="thread-item-wrapper">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="thread-item archived"
+                role="listitem"
+                oncontextmenu={(e) => toggleContextMenu(thread.id, e, true)}
+              >
+                <span class="thread-name">{thread.name}</span>
+                <button class="restore-btn" onclick={() => handleUnarchive(thread.id)}>Restore</button>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
     {:else}
-      {#if groupedThreads().pinned.length > 0}
-        <div class="thread-group">
-          <h3 class="group-title pinned-title">Pinned</h3>
-          {#each groupedThreads().pinned as thread (thread.id)}
-            {@render threadItem(thread)}
-          {/each}
-        </div>
-      {/if}
-
-      {#if groupedThreads().today.length > 0}
-        <div class="thread-group">
-          <h3 class="group-title">Today</h3>
-          {#each groupedThreads().today as thread (thread.id)}
-            {@render threadItem(thread)}
-          {/each}
-        </div>
-      {/if}
-
-      {#each groupedThreads().months as [key, group]}
-        <div class="thread-group">
-          <button class="group-title collapsible" onclick={() => toggleMonth(key)}>
-            <span class="group-chevron">{collapsedMonths.has(key) ? '▸' : '▾'}</span>
-            {group.label}
-            <span class="group-count">{group.threads.length}</span>
+      <!-- Active threads view -->
+      <div class="filter-input-wrapper">
+        <input
+          class="filter-input"
+          type="text"
+          placeholder="Filter threads..."
+          bind:value={filterQuery}
+        />
+        {#if filterQuery}
+          <button class="filter-clear" onclick={() => filterQuery = ''} aria-label="Clear filter">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
-          {#if !collapsedMonths.has(key)}
-            {#each group.threads as thread (thread.id)}
+        {/if}
+      </div>
+
+      {#if groupedThreads().filtered}
+        {#each groupedThreads().filtered as thread (thread.id)}
+          {@render threadItem(thread)}
+        {/each}
+        {#if groupedThreads().filtered.length === 0}
+          <p class="empty-filter">No matching threads</p>
+        {/if}
+      {:else}
+        {#if groupedThreads().pinned.length > 0}
+          <div class="thread-group">
+            <h3 class="group-title pinned-title">Pinned</h3>
+            {#each groupedThreads().pinned as thread (thread.id)}
               {@render threadItem(thread)}
             {/each}
-          {/if}
-        </div>
-      {/each}
+          </div>
+        {/if}
 
-      {#if groupedThreads().named.length > 0}
-        <div class="thread-group">
-          <h3 class="group-title">Named</h3>
-          {#each groupedThreads().named as thread (thread.id)}
-            {@render threadItem(thread)}
-          {/each}
-        </div>
+        {#if groupedThreads().today.length > 0}
+          <div class="thread-group">
+            <h3 class="group-title">Today</h3>
+            {#each groupedThreads().today as thread (thread.id)}
+              {@render threadItem(thread)}
+            {/each}
+          </div>
+        {/if}
+
+        {#each groupedThreads().months as [key, group]}
+          <div class="thread-group">
+            <button class="group-title collapsible" onclick={() => toggleMonth(key)}>
+              <span class="group-chevron">{collapsedMonths.has(key) ? '▸' : '▾'}</span>
+              {group.label}
+              <span class="group-count">{group.threads.length}</span>
+            </button>
+            {#if !collapsedMonths.has(key)}
+              {#each group.threads as thread (thread.id)}
+                {@render threadItem(thread)}
+              {/each}
+            {/if}
+          </div>
+        {/each}
+
+        {#if groupedThreads().named.length > 0}
+          <div class="thread-group">
+            <h3 class="group-title">Named</h3>
+            {#each groupedThreads().named as thread (thread.id)}
+              {@render threadItem(thread)}
+            {/each}
+          </div>
+        {/if}
       {/if}
     {/if}
   </div>
 
   <div class="thread-actions">
-    <button class="action-button" onclick={toggleArchived}>
-      {showArchived ? 'Hide Archive' : 'Archive'}
+    <button class="action-button" class:active={showArchived} onclick={toggleArchived}>
+      {showArchived ? 'Back to Threads' : 'Archive'}
     </button>
   </div>
+</aside>
 
-  {#if showArchived}
-    <div class="archived-section">
-      <h3 class="group-title">Archived</h3>
-      {#if archivedThreads.length === 0}
-        <p class="empty-archive">No archived threads</p>
+<!-- Context menu (fixed, outside all overflow containers) -->
+{#if contextMenuThread}
+  {@const menuThread = contextMenuIsArchived
+    ? archivedThreads.find(t => t.id === contextMenuThread)
+    : threads.find(t => t.id === contextMenuThread)}
+  {#if menuThread}
+    <div class="context-menu" style="left: {contextMenuPos.x}px; top: {contextMenuPos.y}px;">
+      {#if contextMenuIsArchived}
+        <button onclick={() => handleUnarchive(menuThread.id)}>Restore</button>
+        <button class="context-delete" onclick={() => startDelete(menuThread.id)}>Delete</button>
       {:else}
-        {#each archivedThreads as thread}
-          <button
-            class="thread-item archived"
-            onclick={() => handleSelect(thread.id)}
-          >
-            <span class="thread-name">{thread.name}</span>
-          </button>
-        {/each}
+        {#if menuThread.pinned_at}
+          <button onclick={() => handleUnpin(menuThread.id)}>Unpin</button>
+        {:else}
+          <button onclick={() => handlePin(menuThread.id)}>Pin</button>
+        {/if}
+        {#if menuThread.type === 'named'}
+          <button onclick={() => startRename(menuThread.id, menuThread.name)}>Rename</button>
+        {/if}
+        <button onclick={() => handleArchive(menuThread.id)}>Archive</button>
+        <button class="context-delete" onclick={() => startDelete(menuThread.id)}>Delete</button>
       {/if}
     </div>
   {/if}
-</aside>
+{/if}
 
 <ConfirmDialog
   open={deleteConfirm !== null}
@@ -615,6 +669,10 @@
     font-family: var(--font-mono, monospace);
   }
 
+  .thread-item-wrapper {
+    position: relative;
+  }
+
   .thread-item {
     width: 100%;
     display: flex;
@@ -663,12 +721,14 @@
   }
 
   .context-menu {
+    position: fixed;
+    z-index: 300;
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: 0.875rem;
     padding: 0.35rem;
-    margin: 0 0.75rem;
-    box-shadow: var(--shadow-md);
+    min-width: 10rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   }
 
   .context-menu button {
@@ -759,18 +819,26 @@
     background: var(--accent-hover);
   }
 
-  .archived-section {
-    border-top: 1px solid var(--border);
-    padding: 0.5rem 0;
-    max-height: 200px;
-    overflow-y: auto;
+  .restore-btn {
+    padding: 0.25rem 0.625rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    flex-shrink: 0;
   }
 
-  .empty-archive {
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 0.875rem;
-    padding: 1rem;
+  .restore-btn:hover {
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--text-primary);
+  }
+
+  .action-button.active {
+    color: var(--accent);
   }
 
   @media (max-width: 768px) {

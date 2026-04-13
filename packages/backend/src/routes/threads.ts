@@ -154,6 +154,24 @@ router.post('/:id/archive', (req, res) => {
   }
 });
 
+// Unarchive a thread
+router.post('/:id/unarchive', (req, res) => {
+  try {
+    const { id } = req.params;
+    const thread = getThread(id);
+    if (!thread) {
+      res.status(404).json({ error: 'Thread not found' });
+      return;
+    }
+
+    archiveThread(id, null);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error unarchiving thread:', error);
+    res.status(500).json({ error: 'Failed to unarchive thread' });
+  }
+});
+
 // Pin a thread
 router.post('/:id/pin', (req, res) => {
   try {

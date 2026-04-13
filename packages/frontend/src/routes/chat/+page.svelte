@@ -348,6 +348,13 @@
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
+  // Manual scroll to bottom (ignores shouldAutoScroll flag)
+  function jumpToBottom() {
+    if (!messagesContainer) return;
+    shouldAutoScroll = true;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
   // Toggle sidebar on mobile
   function toggleSidebar() {
     sidebarOpen = !sidebarOpen;
@@ -694,6 +701,17 @@
       </div>
     </div>
 
+    <!-- Scroll to bottom button -->
+    {#if !shouldAutoScroll}
+      <div class="scroll-to-bottom-wrapper">
+        <button class="scroll-to-bottom" onclick={jumpToBottom} aria-label="Scroll to bottom">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
+          </svg>
+        </button>
+      </div>
+    {/if}
+
     <!-- Input area -->
     <MessageInput
       bind:this={messageInput}
@@ -1020,6 +1038,35 @@
     overflow-y: auto;
     overflow-x: hidden;
     background: var(--bg-primary);
+  }
+
+  .scroll-to-bottom-wrapper {
+    display: flex;
+    justify-content: center;
+    padding: 0.5rem 0;
+    flex-shrink: 0;
+  }
+
+  .scroll-to-bottom {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-muted);
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+    transition: all 0.15s;
+    opacity: 0.85;
+  }
+
+  .scroll-to-bottom:hover {
+    opacity: 1;
+    color: var(--text-primary);
+    transform: translateY(1px);
   }
 
   .messages-list {

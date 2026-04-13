@@ -392,7 +392,7 @@ export function updateThreadActivity(threadId: string, timestamp: string, increm
   stmt.run(timestamp, threadId);
 }
 
-export function archiveThread(threadId: string, archivedAt: string): void {
+export function archiveThread(threadId: string, archivedAt: string | null): void {
   const stmt = getDb().prepare('UPDATE threads SET archived_at = ? WHERE id = ?');
   stmt.run(archivedAt, threadId);
 }
