@@ -1,6 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { createMessage, updateThreadSession, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, getMessages } from './db.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -70,6 +70,22 @@ function ensureInit() {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent MCP disable list — survives between queries
+// ---------------------------------------------------------------------------
+
+function getDisabledMcpServers(): Set<string> {
+  try {
+    const raw = getDbConfig('mcp.disabled_servers');
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch {}
+  return new Set();
+}
+
+function setDisabledMcpServers(disabled: Set<string>): void {
+  setDbConfig('mcp.disabled_servers', JSON.stringify([...disabled]));
+}
+
+// ---------------------------------------------------------------------------
 // Dynamic MCP loading — keyword-gated to reduce token overhead (~2,000 tokens)
 // ---------------------------------------------------------------------------
 
@@ -134,8 +150,13 @@ function buildMcpServersForQuery(
   const includeCc = shouldIncludeCcMcp(content, isAutonomous);
   const includeMind = shouldIncludeMindMcp(content, isAutonomous, isFirstMessage);
 
+  const disabled = getDisabledMcpServers();
   const filtered: Record<string, McpServerConfig> = {};
   for (const [name, serverConfig] of Object.entries(allServers)) {
+    if (disabled.has(name)) {
+      console.log(`[MCP] Skipping "${name}" (disabled by user)`);
+      continue;
+    }
     if (!includeCc && isCcMcpServer(name, serverConfig, ccServerName)) {
       console.log(`[MCP] Skipping CC MCP "${name}" (no keyword match)`);
       continue;
@@ -348,8 +369,20 @@ function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], th
   return segments;
 }
 
-// Cached MCP server status (refreshed on each query)
+// Cached MCP server status (refreshed on each query, seeded from config on first access)
 let cachedMcpStatus: McpServerInfo[] = [];
+let mcpStatusSeeded = false;
+
+function seedMcpStatusIfNeeded(): void {
+  if (mcpStatusSeeded || cachedMcpStatus.length > 0) return;
+  mcpStatusSeeded = true;
+  const disabled = getDisabledMcpServers();
+  cachedMcpStatus = Object.keys(mcpServersFromConfig).map(name => ({
+    name,
+    status: disabled.has(name) ? 'disabled' : 'pending',
+    toolCount: 0,
+  }));
+}
 
 export class AgentService {
   private pushService: PushService | null = null;
@@ -371,7 +404,24 @@ export class AgentService {
   }
 
   getMcpStatus(): McpServerInfo[] {
-    return cachedMcpStatus;
+    ensureInit();
+    seedMcpStatusIfNeeded();
+    const disabled = getDisabledMcpServers();
+    // Merge disabled state into cached status
+    const status = cachedMcpStatus.map(s => ({
+      ...s,
+      status: disabled.has(s.name) ? 'disabled' : s.status,
+    }));
+    // Add any disabled servers not in cache (e.g., never connected this session)
+    for (const name of disabled) {
+      if (!status.find(s => s.name === name)) {
+        // Check if it exists in config
+        if (mcpServersFromConfig[name]) {
+          status.push({ name, status: 'disabled', toolCount: 0 });
+        }
+      }
+    }
+    return status;
   }
 
   getContextUsage(): { tokensUsed: number; contextWindow: number } {
@@ -407,19 +457,55 @@ export class AgentService {
   }
 
   async toggleMcpServer(name: string, enabled: boolean): Promise<{ success: boolean; error?: string }> {
-    if (!activeQuery) {
-      return { success: false, error: 'No active session — will apply on next message' };
-    }
     try {
-      await activeQuery.toggleMcpServer(name, enabled);
-      // Refresh cached status
-      const statuses = await activeQuery.mcpServerStatus();
-      cachedMcpStatus = statuses.map(s => ({
-        name: s.name, status: s.status, error: s.error,
-        toolCount: s.tools?.length ?? 0,
-        tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
-        scope: s.scope,
-      }));
+      // Check if already in desired state — prevent duplicate calls
+      const disabled = getDisabledMcpServers();
+      const isCurrentlyDisabled = disabled.has(name);
+      if (enabled && !isCurrentlyDisabled) return { success: true }; // already enabled
+      if (!enabled && isCurrentlyDisabled) return { success: true }; // already disabled
+
+      // Persist to DB — takes effect on next query
+      if (enabled) {
+        disabled.delete(name);
+      } else {
+        disabled.add(name);
+      }
+      setDisabledMcpServers(disabled);
+
+      // Update cached status immediately so UI reflects the change
+      const serverInCache = cachedMcpStatus.find(s => s.name === name);
+      if (serverInCache) {
+        serverInCache.status = enabled ? 'pending' : 'disabled';
+        if (!enabled) serverInCache.toolCount = 0;
+      } else if (!enabled) {
+        // Server not in cache yet (never connected) — add it as disabled
+        cachedMcpStatus.push({ name, status: 'disabled', toolCount: 0 });
+      }
+
+      // If there's an active query, also toggle in the live session (best-effort)
+      if (activeQuery) {
+        try {
+          await activeQuery.toggleMcpServer(name, enabled);
+          const statuses = await activeQuery.mcpServerStatus();
+          cachedMcpStatus = statuses.map(s => ({
+            name: s.name, status: s.status, error: s.error,
+            toolCount: s.tools?.length ?? 0,
+            tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
+            scope: s.scope,
+          }));
+        } catch { /* best-effort */ }
+      }
+
+      // Re-enabling requires a fresh session to fully reconnect SDK-managed servers.
+      // Clear all active sessions so the next message starts clean.
+      if (enabled) {
+        try {
+          clearAllThreadSessions();
+          console.log(`[MCP] Cleared sessions to force MCP reconnect on next message`);
+        } catch { /* best-effort */ }
+      }
+
+      console.log(`[MCP] ${name} ${enabled ? 'enabled' : 'disabled'} (persistent)`);
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -616,6 +702,27 @@ export class AgentService {
       // V1 query — single params object with prompt and options
       const result = query({ prompt: enrichedPrompt, options });
       activeQuery = result;
+
+      // Enforce MCP server preferences on query start
+      const disabledServers = getDisabledMcpServers();
+      result.mcpServerStatus().then(async (statuses) => {
+        for (const s of statuses) {
+          if (disabledServers.has(s.name) && s.status !== 'disabled') {
+            // Disable servers that should be off
+            try {
+              await result.toggleMcpServer(s.name, false);
+              console.log(`[MCP] Disabled "${s.name}" on query start (persistent preference)`);
+            } catch { /* best-effort */ }
+          } else if (!disabledServers.has(s.name) && s.status === 'disabled') {
+            // Re-enable servers that should be on (were disabled in a previous message)
+            try {
+              await result.toggleMcpServer(s.name, true);
+              await result.reconnectMcpServer(s.name);
+              console.log(`[MCP] Re-enabled "${s.name}" on query start (persistent preference)`);
+            } catch { /* best-effort */ }
+          }
+        }
+      }).catch(() => {});
 
       // Refresh MCP server status (non-blocking — caches for settings panel)
       result.mcpServerStatus().then(statuses => {
