@@ -435,19 +435,16 @@ GROQ_API_KEY=your_groq_key</pre>
           <ol class="guide-steps">
             <li>Go to the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a></li>
             <li>Create a <strong>New Application</strong>, then go to <strong>Bot</strong> → Reset Token → copy the token</li>
-            <li>Under <strong>Privileged Gateway Intents</strong>, enable: Message Content, Server Members, Presence</li>
-            <li>Go to <strong>OAuth2</strong> → URL Generator → select <code>bot</code> scope with permissions: Send Messages, Read Message History, Add Reactions, Embed Links, Attach Files</li>
+            <li>Under <strong>Privileged Gateway Intents</strong>, enable: <strong>Message Content</strong> and <strong>Server Members</strong></li>
+            <li>Go to <strong>OAuth2</strong> → URL Generator → select <code>bot</code> scope with permissions: Send Messages, Read Messages/View Channels, Read Message History, Add Reactions</li>
             <li>Use the generated URL to invite the bot to your server</li>
-            <li>Right-click your username in Discord → Copy User ID (enable Developer Mode in Discord settings first)</li>
-            <li>Add to your <code>.env</code> file:
-              <pre class="guide-code">DISCORD_BOT_TOKEN=your_bot_token</pre>
+            <li>Add to your <code>.env</code> file and restart:
+              <pre class="guide-code">DISCORD_BOT_TOKEN=your_bot_token
+DISCORD_ENABLED=true</pre>
             </li>
-            <li>Set your owner user ID in <code>resonant.yaml</code>:
-              <pre class="guide-code">discord:
-  enabled: true
-  owner_user_id: "your_discord_user_id"</pre>
-            </li>
-            <li>Restart the server. Configure rules in the Discord tab in settings.</li>
+            <li>In Discord, enable <strong>Developer Mode</strong> (Settings → Advanced), then right-click your username → <strong>Copy User ID</strong></li>
+            <li>Go to the <strong>Discord</strong> tab in settings and paste your user ID into the <strong>Owner User ID</strong> field under Gateway Settings</li>
+            <li>Toggle the gateway on in the Discord tab — your companion should appear online in your server</li>
           </ol>
         </div>
       {/if}
