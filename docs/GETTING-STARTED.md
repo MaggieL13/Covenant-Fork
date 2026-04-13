@@ -273,8 +273,69 @@ The database tables are created automatically on first startup.
 ## What's Next
 
 - **Voice:** Add ElevenLabs + Groq for voice conversations. See Settings > Preferences for setup instructions.
-- **Discord:** Connect your companion to Discord. See Settings > Preferences.
+- **Discord:** Connect your companion to Discord. See the [Discord setup guide](#discord-setup) below.
 - **Telegram:** Connect via Telegram bot. See Settings > Preferences.
 - **Slash Commands:** Type `/` in chat to browse available commands.
 - **Themes:** Customize the look — light mode is built in, or see `examples/themes/README.md` for custom themes.
 - **Context hooks:** Advanced context injection. See `docs/HOOKS.md`.
+
+---
+
+## Discord Setup
+
+Connect your companion to Discord so it can respond to messages in servers and DMs.
+
+### 1. Create a Discord Application
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Click **New Application** and give it a name (e.g. your companion's name).
+3. In the sidebar, go to **Bot** and click **Add Bot**.
+4. Under the bot's token section, click **Copy** — save this for step 4.
+
+### 2. Enable Required Intents
+
+On the **Bot** page, scroll to **Privileged Gateway Intents** and enable:
+
+- **MESSAGE CONTENT** — required for reading message text
+- **SERVER MEMBERS** — for user identification
+
+### 3. Invite the Bot to Your Server
+
+1. Go to **OAuth2 → URL Generator**.
+2. Under **Scopes**, check `bot`.
+3. Under **Bot Permissions**, check:
+   - Send Messages
+   - Read Messages / View Channels
+   - Read Message History
+   - Add Reactions
+4. Copy the generated URL and open it in your browser to invite the bot.
+
+### 4. Add Your Bot Token
+
+Add these to your `.env` file and restart:
+
+```env
+DISCORD_BOT_TOKEN=your_token_here
+DISCORD_ENABLED=true
+```
+
+### 5. Set Your Owner User ID
+
+1. In Discord, go to **Settings → Advanced** and enable **Developer Mode**.
+2. Right-click your own username anywhere in Discord and select **Copy User ID**.
+3. In the app, go to **Settings → Preferences → Discord → Gateway Settings** and paste it into the **Owner User ID** field.
+
+### 6. Enable the Gateway
+
+In **Settings → Preferences → Discord**, toggle the gateway on. Your companion should connect and appear online in your server.
+
+### Optional Configuration
+
+Once connected, you can configure from the Discord settings panel:
+
+- **Allowed guilds / channels / users** — restrict where the bot responds
+- **Require @mention** — only respond when mentioned (default: on in guilds)
+- **Rules** — per-server, per-channel, and per-user rules with custom context injection
+- **User pairing** — new DM users get a pairing code you can approve from the settings panel
+
+> **Tip:** All ID fields (guilds, channels, users) use Discord snowflake IDs. With Developer Mode enabled, right-click any server, channel, or user in Discord to copy their ID.

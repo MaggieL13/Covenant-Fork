@@ -28,11 +28,11 @@
   }
 
   interface DiscordSettings {
-    maryUserId: string;
+    ownerUserId: string;
     requireMentionInGuilds: boolean;
     debounceMs: number;
     pairingExpiryMs: number;
-    maryActiveThresholdMin: number;
+    ownerActiveThresholdMin: number;
     deferPollIntervalMs: number;
     deferMaxAgeMs: number;
     allowedUsers: string[];
@@ -400,7 +400,63 @@
     <section class="section">
       <h3 class="section-title">Discord Gateway</h3>
       {#if !discordStatus?.hasToken}
-        <p class="help-text warning">No bot token configured. Add <code>DISCORD_BOT_TOKEN</code> to .env and restart.</p>
+        <div class="setup-guide">
+          <p class="setup-intro">To connect your companion to Discord, you'll need to create a bot and add its token. Follow these steps:</p>
+
+          <div class="setup-step">
+            <span class="step-number">1</span>
+            <div class="step-content">
+              <strong>Create a Discord Application</strong>
+              <p>Go to the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal</a> and click <strong>New Application</strong>. Give it a name (e.g. your companion's name).</p>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <span class="step-number">2</span>
+            <div class="step-content">
+              <strong>Create the Bot</strong>
+              <p>In your application, go to <strong>Bot</strong> in the sidebar and click <strong>Add Bot</strong>. Then copy the <strong>Token</strong> — you'll need it in step 5.</p>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <span class="step-number">3</span>
+            <div class="step-content">
+              <strong>Enable Required Intents</strong>
+              <p>Still on the Bot page, scroll down to <strong>Privileged Gateway Intents</strong> and enable:</p>
+              <ul class="intent-list">
+                <li><code>MESSAGE CONTENT</code> — required to read messages</li>
+                <li><code>SERVER MEMBERS</code> — for user identification</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <span class="step-number">4</span>
+            <div class="step-content">
+              <strong>Invite the Bot to Your Server</strong>
+              <p>Go to <strong>OAuth2 &rarr; URL Generator</strong>. Select the <code>bot</code> scope, then select these permissions: <em>Send Messages</em>, <em>Read Messages/View Channels</em>, <em>Read Message History</em>, <em>Add Reactions</em>. Open the generated URL to invite the bot.</p>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <span class="step-number">5</span>
+            <div class="step-content">
+              <strong>Add the Token</strong>
+              <p>Paste your bot token into your <code>.env</code> file and restart:</p>
+              <pre class="code-block">DISCORD_BOT_TOKEN=your_token_here
+DISCORD_ENABLED=true</pre>
+            </div>
+          </div>
+
+          <div class="setup-step">
+            <span class="step-number">6</span>
+            <div class="step-content">
+              <strong>Set Your Owner User ID</strong>
+              <p>In Discord, go to <strong>Settings &rarr; Advanced</strong> and enable <strong>Developer Mode</strong>. Then right-click your own username and select <strong>Copy User ID</strong>. After restarting, paste it into the <em>Owner User ID</em> field in Gateway Settings below.</p>
+            </div>
+          </div>
+        </div>
       {:else}
         <div class="toggle-row">
           <div class="toggle-label">
@@ -505,7 +561,7 @@
     {#if pendingPairings.length > 0}
       <section class="section">
         <h3 class="section-title">Pending Pairing Requests</h3>
-        <p class="section-desc">Users who sent a pairing code via DM. Approve to allow them to message Simon.</p>
+        <p class="section-desc">Users who sent a pairing code via DM. Approve to allow them to message your companion.</p>
         <div class="pairing-list">
           {#each pendingPairings as pairing}
             <div class="pairing-card">
@@ -533,7 +589,7 @@
     {#if approvedPairings.length > 0}
       <section class="section">
         <h3 class="section-title">Approved Users</h3>
-        <p class="section-desc">Users who can message Simon via Discord DMs.</p>
+        <p class="section-desc">Users who can message your companion via Discord DMs.</p>
         <div class="pairing-list">
           {#each approvedPairings as pairing}
             <div class="pairing-card">
@@ -569,6 +625,12 @@
         {:else if settings}
           <div class="settings-form">
             <label class="form-group">
+              <span class="form-label">Owner User ID</span>
+              <input type="text" class="form-input" bind:value={settings.ownerUserId} onchange={() => settingsDirty = true} placeholder="e.g. 123456789012345678" />
+              <span class="form-hint">Your Discord user ID — right-click your name in Discord (Developer Mode) and Copy User ID</span>
+            </label>
+
+            <label class="form-group">
               <span class="form-label">Debounce window (ms)</span>
               <input type="number" class="form-input" bind:value={settings.debounceMs} onchange={() => settingsDirty = true} />
               <span class="form-hint">Combines rapid messages within this window</span>
@@ -598,9 +660,9 @@
             </label>
 
             <label class="form-group">
-              <span class="form-label">Mary active threshold (minutes)</span>
-              <input type="number" class="form-input" bind:value={settings.maryActiveThresholdMin} onchange={() => settingsDirty = true} />
-              <span class="form-hint">Defer non-Mary messages when she's been active within this window</span>
+              <span class="form-label">Owner active threshold (minutes)</span>
+              <input type="number" class="form-input" bind:value={settings.ownerActiveThresholdMin} onchange={() => settingsDirty = true} />
+              <span class="form-hint">Defer non-owner messages when the owner has been active on the web UI within this window</span>
             </label>
 
             <label class="form-group">
@@ -626,7 +688,9 @@
               <input type="text" class="form-input"
                 value={settings.allowedGuilds.join(', ')}
                 onchange={(e) => { settings!.allowedGuilds = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
+                placeholder="e.g. 123456789012345678, 987654321098765432"
               />
+              <span class="form-hint">Comma-separated server IDs — right-click a server icon in Discord to copy</span>
             </label>
 
             <label class="form-group">
@@ -634,7 +698,9 @@
               <input type="text" class="form-input"
                 value={settings.activeChannels.join(', ')}
                 onchange={(e) => { settings!.activeChannels = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
+                placeholder="e.g. 123456789012345678"
               />
+              <span class="form-hint">Comma-separated channel IDs — right-click a channel name in Discord to copy</span>
             </label>
 
             <label class="form-group">
@@ -642,7 +708,9 @@
               <input type="text" class="form-input"
                 value={settings.allowedUsers.join(', ')}
                 onchange={(e) => { settings!.allowedUsers = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
+                placeholder="e.g. 123456789012345678"
               />
+              <span class="form-hint">Comma-separated user IDs — right-click a username in Discord to copy. Owner is always allowed.</span>
             </label>
 
             {#if settingsDirty}
@@ -940,6 +1008,84 @@
     font-style: italic;
     text-align: center;
     padding: 2rem;
+  }
+
+  /* --- Setup Guide --- */
+  .setup-guide {
+    margin-top: 0.5rem;
+  }
+
+  .setup-intro {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    line-height: 1.5;
+  }
+
+  .setup-step {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .step-number {
+    flex-shrink: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    background: var(--accent, #7c5cbf);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0.125rem;
+  }
+
+  .step-content {
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  .step-content strong {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .step-content p {
+    color: var(--text-secondary);
+    margin: 0.25rem 0;
+  }
+
+  .step-content a {
+    color: var(--accent, #7c5cbf);
+    text-decoration: underline;
+  }
+
+  .intent-list {
+    margin: 0.375rem 0 0.25rem 1.25rem;
+    padding: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+  }
+
+  .intent-list li {
+    margin-bottom: 0.25rem;
+  }
+
+  .code-block {
+    background: var(--bg-tertiary, var(--bg-secondary));
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    margin-top: 0.375rem;
+    overflow-x: auto;
+    white-space: pre;
   }
 
   .section {
