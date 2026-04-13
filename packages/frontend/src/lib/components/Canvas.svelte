@@ -586,6 +586,45 @@
     margin: 1rem 0;
   }
 
+  .canvas-preview :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.875rem;
+  }
+
+  .canvas-preview :global(thead) {
+    background: var(--bg-tertiary);
+  }
+
+  .canvas-preview :global(th) {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .canvas-preview :global(td) {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+  }
+
+  .canvas-preview :global(tbody tr:nth-child(even)) {
+    background: var(--bg-hover);
+  }
+
+  .canvas-preview :global(li:has(> input[type="checkbox"])) {
+    list-style: none;
+    margin-left: -1.25rem;
+  }
+
+  .canvas-preview :global(input[type="checkbox"]) {
+    margin-right: 0.375rem;
+    accent-color: var(--gold);
+    pointer-events: none;
+  }
+
   .canvas-iframe {
     width: 100%;
     height: 100%;

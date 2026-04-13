@@ -1285,6 +1285,51 @@
     color: var(--text-secondary);
   }
 
+  .markdown-content :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.875rem;
+  }
+
+  .markdown-content :global(thead) {
+    background: var(--bg-tertiary);
+  }
+
+  .markdown-content :global(th) {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .markdown-content :global(td) {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+  }
+
+  .markdown-content :global(tbody tr:nth-child(even)) {
+    background: var(--bg-hover);
+  }
+
+  .markdown-content :global(hr) {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+
+  .markdown-content :global(li:has(> input[type="checkbox"])) {
+    list-style: none;
+    margin-left: -1.25rem;
+  }
+
+  .markdown-content :global(input[type="checkbox"]) {
+    margin-right: 0.375rem;
+    accent-color: var(--accent);
+    pointer-events: none;
+  }
+
   /* Media: Image */
   .media-image {
     margin: 0.25rem 0;

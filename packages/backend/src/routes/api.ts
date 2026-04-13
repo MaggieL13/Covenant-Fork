@@ -516,7 +516,11 @@ router.get('/files/:id', (req, res) => {
       return;
     }
 
-    res.setHeader('Content-Type', file.mimeType);
+    // Add charset=utf-8 for text-based file types
+    const contentType = file.mimeType.startsWith('text/')
+      ? `${file.mimeType}; charset=utf-8`
+      : file.mimeType;
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'private, max-age=86400'); // 24h cache
     res.sendFile(file.path);
   } catch (error) {

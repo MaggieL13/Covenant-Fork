@@ -415,7 +415,7 @@ export function deleteThread(threadId: string): string[] {
   const deleteAll = db.transaction(() => {
     db.prepare('DELETE FROM triggers WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM timers WHERE thread_id = ?').run(threadId);
-    db.prepare('DELETE FROM canvases WHERE thread_id = ?').run(threadId);
+    db.prepare('UPDATE canvases SET thread_id = NULL WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM outbound_queue WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM audit_log WHERE thread_id = ?').run(threadId);
     db.prepare('DELETE FROM session_history WHERE thread_id = ?').run(threadId);
