@@ -189,7 +189,7 @@ export class DiscordService {
 
       // Show typing indicator (refresh every 8s — Discord typing expires after 10s)
       if ('sendTyping' in lastMessage.channel) {
-        await lastMessage.channel.sendTyping();
+        await lastMessage.channel.sendTyping().catch(() => {});
       }
       typingInterval = setInterval(() => {
         if ('sendTyping' in lastMessage.channel) {
@@ -426,5 +426,50 @@ export class DiscordService {
 
   getPairingService(): PairingService {
     return this.pairingService;
+  }
+
+  // --- Public accessors for guild/channel data (used by admin API) ---
+
+  getBotUser() {
+    if (!this.client.user) return null;
+    return {
+      id: this.client.user.id,
+      tag: this.client.user.tag,
+      username: this.client.user.username,
+      avatar: this.client.user.displayAvatarURL({ size: 64 }),
+    };
+  }
+
+  getGuilds() {
+    return Array.from(this.client.guilds.cache.values()).map(g => ({
+      id: g.id,
+      name: g.name,
+      icon: g.iconURL({ size: 64 }),
+      memberCount: g.memberCount,
+    }));
+  }
+
+  getGuildChannels(guildId: string) {
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) return null;
+    // Return text-based channels only, sorted by position
+    return Array.from(guild.channels.cache.values())
+      .filter(c => c.isTextBased() && !c.isThread() && !c.isVoiceBased())
+      .sort((a, b) => ('position' in a && 'position' in b) ? (a as any).position - (b as any).position : 0)
+      .map(c => ({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        parentId: ('parentId' in c) ? (c as any).parentId : null,
+        parentName: ('parent' in c && (c as any).parent) ? (c as any).parent.name : null,
+      }));
+  }
+
+  ping(): number {
+    return this.client.ws.ping;
+  }
+
+  getApplicationOwnerId(): string | null {
+    return this.client.application?.owner?.id ?? null;
   }
 }

@@ -14,6 +14,7 @@
     deferred: number;
     deferredPending: number;
     errors: number;
+    botUser: { id: string; tag: string; username: string; avatar: string } | null;
   }
 
   interface PairingEntry {
@@ -48,6 +49,22 @@
     ignoredChannels?: string[];
     ignoredUsers?: string[];
     allowPublicResponses?: boolean;
+    muted?: boolean;
+  }
+
+  interface GuildInfo {
+    id: string;
+    name: string;
+    icon: string | null;
+    memberCount: number;
+  }
+
+  interface ChannelInfo {
+    id: string;
+    name: string;
+    type: number;
+    parentId: string | null;
+    parentName: string | null;
   }
 
   interface ChannelRule {
@@ -95,6 +112,15 @@
   let rules = $state<RulesData | null>(null);
   let rulesLoading = $state(false);
   let expandedRules = $state<Set<string>>(new Set());
+
+  // Guild & channel selector state
+  let guilds = $state<GuildInfo[]>([]);
+  let guildChannels = $state<Record<string, ChannelInfo[]>>({});
+  let guildsLoading = $state(false);
+  let channelsLoading = $state<string | null>(null);
+  let pingResult = $state<number | null>(null);
+  let pingLoading = $state(false);
+  let serverRules = $state<Record<string, ServerRule>>({});
 
   // Activity log state
   interface LogEntry {
@@ -387,8 +413,133 @@
     }
   }
 
-  onMount(() => {
-    loadData();
+  async function loadGuilds() {
+    guildsLoading = true;
+    try {
+      const res = await apiFetch('/api/discord/guilds');
+      if (res.ok) {
+        guilds = await res.json();
+        // Load rules to get per-guild muted/public state
+        const rulesRes = await apiFetch('/api/discord/rules');
+        if (rulesRes.ok) {
+          const data = await rulesRes.json();
+          serverRules = data.servers || {};
+        }
+        // Auto-enable all guilds on first setup (empty allowlist = new install)
+        if (settings && settings.allowedGuilds.length === 0 && guilds.length > 0) {
+          settings.allowedGuilds = guilds.map(g => g.id);
+          settingsDirty = true;
+          await saveSettings();
+        }
+      }
+    } catch {
+      // non-critical
+    } finally {
+      guildsLoading = false;
+    }
+  }
+
+  async function loadChannelsForGuild(guildId: string) {
+    if (guildChannels[guildId]) return;
+    channelsLoading = guildId;
+    try {
+      const res = await apiFetch(`/api/discord/guilds/${guildId}/channels`);
+      if (res.ok) {
+        const channels: ChannelInfo[] = await res.json();
+        guildChannels[guildId] = channels;
+        guildChannels = { ...guildChannels };
+        // Auto-enable all channels on first load (empty activeChannels = new setup)
+        if (settings && settings.activeChannels.length === 0 && channels.length > 0) {
+          settings.activeChannels = channels.map(c => c.id);
+          settingsDirty = true;
+          await saveSettings();
+        }
+      }
+    } catch {
+      // non-critical
+    } finally {
+      channelsLoading = null;
+    }
+  }
+
+  async function testConnection() {
+    pingLoading = true;
+    pingResult = null;
+    try {
+      const res = await apiFetch('/api/discord/ping');
+      if (res.ok) {
+        const data = await res.json();
+        pingResult = data.ping;
+      }
+    } catch {
+      pingResult = -1;
+    } finally {
+      pingLoading = false;
+    }
+  }
+
+  async function autoDetectOwner() {
+    try {
+      const res = await apiFetch('/api/discord/owner-id');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ownerId && settings) {
+          settings.ownerUserId = data.ownerId;
+          settingsDirty = true;
+          statusMessage = 'Owner ID detected';
+          setTimeout(() => statusMessage = null, 3000);
+        }
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  function toggleGuild(guildId: string) {
+    if (!settings) return;
+    const idx = settings.allowedGuilds.indexOf(guildId);
+    if (idx >= 0) {
+      settings.allowedGuilds = settings.allowedGuilds.filter(id => id !== guildId);
+    } else {
+      settings.allowedGuilds = [...settings.allowedGuilds, guildId];
+    }
+    settingsDirty = true;
+  }
+
+  function toggleChannel(channelId: string) {
+    if (!settings) return;
+    const idx = settings.activeChannels.indexOf(channelId);
+    if (idx >= 0) {
+      settings.activeChannels = settings.activeChannels.filter(id => id !== channelId);
+    } else {
+      settings.activeChannels = [...settings.activeChannels, channelId];
+    }
+    settingsDirty = true;
+  }
+
+  async function toggleGuildRule(guildId: string, field: 'muted' | 'allowPublicResponses', value: boolean) {
+    try {
+      const res = await apiFetch(`/api/discord/guilds/${guildId}/rule`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        serverRules[guildId] = data.rule;
+        serverRules = { ...serverRules };
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  onMount(async () => {
+    await loadData();
+    if (discordStatus?.connected) {
+      loadGuilds();
+      loadSettings();
+    }
   });
 </script>
 
@@ -443,7 +594,7 @@
             <span class="step-number">5</span>
             <div class="step-content">
               <strong>Add the Token</strong>
-              <p>Paste your bot token into your <code>.env</code> file and restart:</p>
+              <p>Paste your bot token into the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>) and restart:</p>
               <pre class="code-block">DISCORD_BOT_TOKEN=your_token_here
 DISCORD_ENABLED=true</pre>
             </div>
@@ -483,9 +634,17 @@ DISCORD_ENABLED=true</pre>
         <div class="status-row">
           <span class="status-dot" class:connected={discordStatus?.connected} class:offline={!discordStatus?.connected}></span>
           {#if discordStatus?.connected}
-            <span class="status-text connected">
-              Online as <strong>{discordStatus.username}</strong>
-            </span>
+            <div class="connection-info">
+              {#if discordStatus.botUser?.avatar}
+                <img class="bot-avatar" src={discordStatus.botUser.avatar} alt="" />
+              {/if}
+              <span class="status-text connected">
+                Connected as <strong>{discordStatus.botUser?.tag || discordStatus.username}</strong> · {discordStatus.guilds} server{discordStatus.guilds !== 1 ? 's' : ''}
+              </span>
+              <button class="btn btn-sm" onclick={testConnection} disabled={pingLoading}>
+                {pingLoading ? 'Pinging...' : pingResult !== null ? (pingResult >= 0 ? `${pingResult}ms` : 'Failed') : 'Test'}
+              </button>
+            </div>
           {:else}
             <span class="status-text offline">Connecting...</span>
           {/if}
@@ -560,7 +719,7 @@ DISCORD_ENABLED=true</pre>
     <!-- Pending Pairings -->
     {#if pendingPairings.length > 0}
       <section class="section">
-        <h3 class="section-title">Pending Pairing Requests</h3>
+        <h3 class="section-title">Pending Pairing Requests <span class="badge">{pendingPairings.length}</span></h3>
         <p class="section-desc">Users who sent a pairing code via DM. Approve to allow them to message your companion.</p>
         <div class="pairing-list">
           {#each pendingPairings as pairing}
@@ -624,11 +783,14 @@ DISCORD_ENABLED=true</pre>
           <p class="loading">Loading settings...</p>
         {:else if settings}
           <div class="settings-form">
-            <label class="form-group">
+            <div class="form-group">
               <span class="form-label">Owner User ID</span>
-              <input type="text" class="form-input" bind:value={settings.ownerUserId} onchange={() => settingsDirty = true} placeholder="e.g. 123456789012345678" />
+              <div class="input-with-button">
+                <input type="text" class="form-input" bind:value={settings.ownerUserId} onchange={() => settingsDirty = true} placeholder="e.g. 123456789012345678" />
+                <button class="btn btn-sm" onclick={autoDetectOwner}>Auto-detect</button>
+              </div>
               <span class="form-hint">Your Discord user ID — right-click your name in Discord (Developer Mode) and Copy User ID</span>
-            </label>
+            </div>
 
             <label class="form-group">
               <span class="form-label">Debounce window (ms)</span>
@@ -683,25 +845,118 @@ DISCORD_ENABLED=true</pre>
               <span class="form-hint">Drop deferred messages older than this</span>
             </label>
 
-            <label class="form-group">
-              <span class="form-label">Allowed guilds (IDs)</span>
-              <input type="text" class="form-input"
-                value={settings.allowedGuilds.join(', ')}
-                onchange={(e) => { settings!.allowedGuilds = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
-                placeholder="e.g. 123456789012345678, 987654321098765432"
-              />
-              <span class="form-hint">Comma-separated server IDs — right-click a server icon in Discord to copy</span>
-            </label>
+            <!-- Server Selector -->
+            <div class="form-group">
+              <span class="form-label">Servers</span>
+              <span class="form-hint">Toggle servers ON where the bot should respond. OFF = bot ignores that server entirely.</span>
+              {#if guildsLoading}
+                <p class="form-hint">Loading servers...</p>
+              {:else if guilds.length > 0}
+                <div class="selector-list">
+                  {#each guilds as guild}
+                    {@const isAllowed = settings.allowedGuilds.includes(guild.id)}
+                    {@const guildRule = serverRules[guild.id]}
+                    <div class="selector-item" class:active={settings.allowedGuilds.includes(guild.id)}>
+                      <div class="selector-main" role="button" tabindex="0" onclick={() => toggleGuild(guild.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGuild(guild.id); }}>
+                        {#if guild.icon}
+                          <img class="guild-icon" src={guild.icon} alt="" />
+                        {:else}
+                          <span class="guild-icon-fallback">{guild.name.charAt(0)}</span>
+                        {/if}
+                        <div class="selector-info">
+                          <span class="selector-name">{guild.name}</span>
+                          <span class="selector-meta">{guild.memberCount} members</span>
+                        </div>
+                        <button
+                          class="toggle-switch small"
+                          class:on={settings.allowedGuilds.includes(guild.id)}
+                          aria-label="Restrict to {guild.name}"
+                          onclick={(e) => { e.stopPropagation(); toggleGuild(guild.id); }}
+                        >
+                          <span class="toggle-knob"></span>
+                        </button>
+                      </div>
+                      {#if isAllowed}
+                        <div class="guild-options">
+                          <div class="guild-option-block">
+                            <div class="guild-option-row">
+                              <span class="guild-option-label">Anyone can talk</span>
+                              <button
+                                class="toggle-switch tiny"
+                                class:on={guildRule?.allowPublicResponses}
+                                aria-label="Let anyone talk in {guild.name}"
+                                onclick={() => toggleGuildRule(guild.id, 'allowPublicResponses', !guildRule?.allowPublicResponses)}
+                              >
+                                <span class="toggle-knob"></span>
+                              </button>
+                            </div>
+                            <span class="guild-option-desc">
+                              {guildRule?.allowPublicResponses
+                                ? 'Anyone in this server can message the bot'
+                                : 'Only the owner and approved users get responses'}
+                            </span>
+                          </div>
+                          <div class="guild-option-block">
+                            <div class="guild-option-row">
+                              <span class="guild-option-label">Silence bot</span>
+                              <button
+                                class="toggle-switch tiny"
+                                class:on={guildRule?.muted}
+                                aria-label="Silence bot in {guild.name}"
+                                onclick={() => toggleGuildRule(guild.id, 'muted', !guildRule?.muted)}
+                              >
+                                <span class="toggle-knob"></span>
+                              </button>
+                            </div>
+                            <span class="guild-option-desc">
+                              {guildRule?.muted
+                                ? 'Bot is silent — won\'t auto-respond to anything here'
+                                : 'Bot is active and will respond normally'}
+                            </span>
+                          </div>
+                        </div>
 
-            <label class="form-group">
-              <span class="form-label">Active channels (no @mention needed)</span>
-              <input type="text" class="form-input"
-                value={settings.activeChannels.join(', ')}
-                onchange={(e) => { settings!.activeChannels = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
-                placeholder="e.g. 123456789012345678"
-              />
-              <span class="form-hint">Comma-separated channel IDs — right-click a channel name in Discord to copy</span>
-            </label>
+                        <!-- Channel selector for this guild -->
+                        <div class="channel-section">
+                          <button class="channel-expand" onclick={() => loadChannelsForGuild(guild.id)}>
+                            {guildChannels[guild.id] ? '▾' : '▸'} Channels
+                          </button>
+                          <span class="form-hint channel-hint">Toggle channels ON where the bot can respond. OFF = bot ignores that channel.</span>
+                          {#if channelsLoading === guild.id}
+                            <p class="form-hint">Loading channels...</p>
+                          {/if}
+                          {#if guildChannels[guild.id]}
+                            <div class="channel-list">
+                              {#each guildChannels[guild.id] as channel}
+                                <div class="channel-item">
+                                  <span class="channel-name"># {channel.name}</span>
+                                  {#if channel.parentName}
+                                    <span class="channel-category">{channel.parentName}</span>
+                                  {/if}
+                                  <button
+                                    class="toggle-switch tiny"
+                                    class:on={settings.activeChannels.includes(channel.id)}
+                                    aria-label="Always listen in #{channel.name}"
+                                    onclick={() => toggleChannel(channel.id)}
+                                  >
+                                    <span class="toggle-knob"></span>
+                                  </button>
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+                {#if settings.allowedGuilds.length === 0}
+                  <span class="form-hint warning-hint">No servers enabled — bot won't respond in any server</span>
+                {/if}
+              {:else}
+                <span class="form-hint">No servers found — is the bot in any servers?</span>
+              {/if}
+            </div>
 
             <label class="form-group">
               <span class="form-label">Allowed users (IDs)</span>
@@ -710,7 +965,7 @@ DISCORD_ENABLED=true</pre>
                 onchange={(e) => { settings!.allowedUsers = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
                 placeholder="e.g. 123456789012345678"
               />
-              <span class="form-hint">Comma-separated user IDs — right-click a username in Discord to copy. Owner is always allowed.</span>
+              <span class="form-hint">Most users should use the pairing system. Only add IDs for pre-approved users. Owner is always allowed.</span>
             </label>
 
             {#if settingsDirty}
@@ -1250,24 +1505,6 @@ DISCORD_ENABLED=true</pre>
   .status-text.connected { color: #22c55e; }
   .status-text.offline { color: var(--text-muted); }
 
-  .help-text {
-    font-size: 0.8125rem;
-    color: var(--text-muted);
-    margin-top: 0.375rem;
-  }
-
-  .help-text.warning {
-    color: #f59e0b;
-  }
-
-  .help-text code {
-    font-size: 0.75rem;
-    background: var(--bg-surface);
-    padding: 0.125rem 0.375rem;
-    border-radius: 3px;
-    color: var(--text-secondary);
-  }
-
   .stats-grid {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
@@ -1679,5 +1916,244 @@ DISCORD_ENABLED=true</pre>
       flex-direction: column;
       gap: 0.5rem;
     }
+  }
+
+  /* --- Connection banner --- */
+  .connection-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+  }
+
+  .bot-avatar {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+  }
+
+  .btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.6875rem;
+    border-radius: 0.25rem;
+    background: var(--bg-tertiary, var(--bg-secondary));
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .btn-sm:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  /* --- Badge --- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.375rem;
+    border-radius: 0.625rem;
+    background: var(--accent, #7c5cbf);
+    color: #fff;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    margin-left: 0.375rem;
+    vertical-align: middle;
+  }
+
+  /* --- Input with button --- */
+  .input-with-button {
+    display: flex;
+    gap: 0.375rem;
+    align-items: center;
+  }
+
+  .input-with-button .form-input {
+    flex: 1;
+  }
+
+  /* --- Server/Channel Selectors --- */
+  .selector-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.375rem;
+  }
+
+  .selector-item {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: var(--bg-secondary);
+  }
+
+  .selector-item.active {
+    border-color: var(--accent, #7c5cbf);
+  }
+
+  .selector-main {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+  }
+
+  .selector-main:hover {
+    background: var(--bg-tertiary, rgba(255,255,255,0.03));
+  }
+
+  .guild-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .guild-icon-fallback {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    background: var(--bg-tertiary, var(--bg-secondary));
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  .selector-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .selector-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .selector-meta {
+    font-size: 0.6875rem;
+    color: var(--text-muted);
+  }
+
+  .channel-hint {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .warning-hint {
+    color: #f59e0b;
+  }
+
+  .guild-options {
+    display: flex;
+    gap: 1rem;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg-tertiary, rgba(255,255,255,0.02));
+  }
+
+  .guild-option-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .guild-option-row {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .guild-option-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .guild-option-desc {
+    font-size: 0.625rem;
+    color: var(--text-muted);
+    line-height: 1.3;
+  }
+
+  .channel-section {
+    border-top: 1px solid var(--border);
+    padding: 0.375rem 0.75rem;
+  }
+
+  .channel-expand {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0;
+  }
+
+  .channel-expand:hover {
+    color: var(--text-primary);
+  }
+
+  .channel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    margin-top: 0.25rem;
+  }
+
+  .channel-item {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+  }
+
+  .channel-item:hover {
+    background: var(--bg-tertiary, rgba(255,255,255,0.03));
+  }
+
+  .channel-name {
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+    flex: 1;
+  }
+
+  .channel-category {
+    font-size: 0.625rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .toggle-switch.tiny {
+    width: 28px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .toggle-switch.tiny .toggle-knob {
+    width: 10px;
+    height: 10px;
+    top: 2px;
+    left: 2px;
+  }
+
+  .toggle-switch.tiny.on .toggle-knob {
+    left: 14px;
   }
 </style>

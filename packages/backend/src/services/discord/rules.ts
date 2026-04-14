@@ -14,6 +14,7 @@ export interface ServerRule {
   ignoredChannels?: string[];
   ignoredUsers?: string[];
   allowPublicResponses?: boolean;
+  muted?: boolean;
 }
 
 export interface ChannelRule {

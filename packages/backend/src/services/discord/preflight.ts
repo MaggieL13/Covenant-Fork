@@ -46,6 +46,16 @@ export async function preflight(batch: MessageBatch, pairingService: PairingServ
   const userRule = getUserRule(userId);
   const serverRule = guildId ? getServerRule(guildId) : undefined;
 
+  // Debug: trace muted state
+  if (guildId) {
+    console.log(`[Preflight] Guild ${guildId}: serverRule exists=${!!serverRule}, muted=${serverRule?.muted}`);
+  }
+
+  // Server mute check — blocks all auto-responses in muted guilds
+  if (guildId && serverRule?.muted) {
+    return { allowed: false, reason: 'Server is muted' };
+  }
+
   // Guild message flow
   if (guildId) {
     if (!userAllowed && !isGuildAllowed(guildId)) {
@@ -58,6 +68,16 @@ export async function preflight(batch: MessageBatch, pairingService: PairingServ
 
     if (serverRule?.ignoredUsers?.includes(userId)) {
       return { allowed: false, reason: 'User is ignored in this server' };
+    }
+
+    // Channel allowlist — if activeChannels has entries, only respond in those channels
+    // Threads inherit from their parent channel
+    const activeChannels = DISCORD_CONFIG.activeChannels;
+    if (activeChannels.size > 0 && !activeChannels.has(channelId)) {
+      const parentId = firstMessage.channel.isThread() ? firstMessage.channel.parentId : null;
+      if (!parentId || !activeChannels.has(parentId)) {
+        return { allowed: false, reason: 'Channel not enabled' };
+      }
     }
 
     const needsMention = requiresMention(channelId, guildId, DISCORD_CONFIG.requireMentionInGuilds);

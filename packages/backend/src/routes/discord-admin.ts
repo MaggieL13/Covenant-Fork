@@ -18,13 +18,125 @@ router.get('/status', (req, res) => {
     const configEnabled = getConfigBool('discord.enabled', false);
     const hasToken = !!process.env.DISCORD_BOT_TOKEN;
     if (!discordService) {
-      res.json({ enabled: false, configEnabled, hasToken });
+      res.json({ enabled: false, configEnabled, hasToken, botUser: null });
       return;
     }
-    res.json({ enabled: true, configEnabled, hasToken, ...discordService.getStats() });
+    res.json({
+      enabled: true,
+      configEnabled,
+      hasToken,
+      botUser: discordService.getBotUser(),
+      ...discordService.getStats(),
+    });
   } catch (error) {
     console.error('Error fetching Discord status:', error);
     res.status(500).json({ error: 'Failed to fetch Discord status' });
+  }
+});
+
+// GET /guilds — list all guilds the bot is in
+router.get('/guilds', (req, res) => {
+  try {
+    const discordService = req.app.locals.discordService as DiscordService | null;
+    if (!discordService || !discordService.isConnected()) {
+      res.status(503).json({ error: 'Discord bot not connected' });
+      return;
+    }
+    res.json(discordService.getGuilds());
+  } catch (error) {
+    console.error('Error fetching guilds:', error);
+    res.status(500).json({ error: 'Failed to fetch guilds' });
+  }
+});
+
+// GET /guilds/:guildId/channels — list text channels in a guild
+router.get('/guilds/:guildId/channels', (req, res) => {
+  try {
+    const discordService = req.app.locals.discordService as DiscordService | null;
+    if (!discordService || !discordService.isConnected()) {
+      res.status(503).json({ error: 'Discord bot not connected' });
+      return;
+    }
+    const channels = discordService.getGuildChannels(req.params.guildId);
+    if (!channels) {
+      res.status(404).json({ error: 'Guild not found' });
+      return;
+    }
+    res.json(channels);
+  } catch (error) {
+    console.error('Error fetching guild channels:', error);
+    res.status(500).json({ error: 'Failed to fetch channels' });
+  }
+});
+
+// GET /ping — bot health check with latency
+router.get('/ping', (req, res) => {
+  try {
+    const discordService = req.app.locals.discordService as DiscordService | null;
+    if (!discordService || !discordService.isConnected()) {
+      res.status(503).json({ error: 'Discord bot not connected' });
+      return;
+    }
+    res.json({ ping: discordService.ping(), status: 'ok' });
+  } catch (error) {
+    console.error('Error pinging Discord:', error);
+    res.status(500).json({ error: 'Failed to ping' });
+  }
+});
+
+// GET /owner-id — auto-detect application owner
+router.get('/owner-id', (req, res) => {
+  try {
+    const discordService = req.app.locals.discordService as DiscordService | null;
+    if (!discordService || !discordService.isConnected()) {
+      res.status(503).json({ error: 'Discord bot not connected' });
+      return;
+    }
+    const ownerId = discordService.getApplicationOwnerId();
+    if (!ownerId) {
+      res.status(404).json({ error: 'Could not detect application owner' });
+      return;
+    }
+    res.json({ ownerId });
+  } catch (error) {
+    console.error('Error detecting owner:', error);
+    res.status(500).json({ error: 'Failed to detect owner' });
+  }
+});
+
+// PATCH /guilds/:guildId/rule — partial update of a server rule
+router.patch('/guilds/:guildId/rule', (req, res) => {
+  try {
+    const guildId = req.params.guildId;
+    const updates = req.body as Partial<Pick<ServerRule, 'allowPublicResponses' | 'requireMention' | 'context'>> & { muted?: boolean };
+    const data = getRulesData();
+
+    // Get or create server rule
+    let rule = data.servers[guildId];
+    if (!rule) {
+      // Auto-populate name from bot cache if available
+      const discordService = req.app.locals.discordService as DiscordService | null;
+      const guilds = discordService?.getGuilds() || [];
+      const guild = guilds.find(g => g.id === guildId);
+      rule = {
+        id: guildId,
+        name: guild?.name || guildId,
+        context: '',
+      };
+    }
+
+    // Merge updates
+    if ('allowPublicResponses' in updates) rule.allowPublicResponses = updates.allowPublicResponses;
+    if ('requireMention' in updates) rule.requireMention = updates.requireMention;
+    if ('muted' in updates) (rule as any).muted = updates.muted;
+    if ('context' in updates) rule.context = updates.context || '';
+
+    data.servers[guildId] = rule;
+    saveRules(data);
+    res.json({ success: true, rule });
+  } catch (error) {
+    console.error('Error patching server rule:', error);
+    res.status(500).json({ error: 'Failed to update server rule' });
   }
 });
 
