@@ -186,6 +186,13 @@ export function getRulesData(): RulesData {
 }
 
 export function saveRules(data: RulesData): void {
+  // Debug: log what's being saved
+  const serverMuteStates = Object.entries(data.servers)
+    .filter(([_, rule]) => rule.muted)
+    .map(([id, rule]) => `${rule.name || id}: muted`);
+  if (serverMuteStates.length > 0) {
+    console.log(`[Discord Rules] Saving muted servers:`, serverMuteStates);
+  }
   setConfig('discord.rules', JSON.stringify(data));
   reloadRules(data);
 }
