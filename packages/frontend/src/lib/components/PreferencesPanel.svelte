@@ -414,7 +414,7 @@
             <li>Get an API key from <strong>ElevenLabs</strong> — <a href="https://elevenlabs.io" target="_blank" rel="noopener">elevenlabs.io</a> → Profile → API Keys</li>
             <li>Create or choose a voice, copy the <strong>Voice ID</strong> from the voice settings</li>
             <li>For transcription, get a <strong>Groq</strong> API key — <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a> → API Keys</li>
-            <li>Add to your <code>.env</code> file:
+            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>):
               <pre class="guide-code">ELEVENLABS_API_KEY=your_key_here
 ELEVENLABS_VOICE_ID=your_voice_id
 GROQ_API_KEY=your_groq_key</pre>
@@ -438,7 +438,7 @@ GROQ_API_KEY=your_groq_key</pre>
             <li>Under <strong>Privileged Gateway Intents</strong>, enable: <strong>Message Content</strong> and <strong>Server Members</strong></li>
             <li>Go to <strong>OAuth2</strong> → URL Generator → select <code>bot</code> scope with permissions: Send Messages, Read Messages/View Channels, Read Message History, Add Reactions</li>
             <li>Use the generated URL to invite the bot to your server</li>
-            <li>Add to your <code>.env</code> file and restart:
+            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>) and restart:
               <pre class="guide-code">DISCORD_BOT_TOKEN=your_bot_token
 DISCORD_ENABLED=true</pre>
             </li>
@@ -464,7 +464,7 @@ DISCORD_ENABLED=true</pre>
             <li>Send a message to your new bot, then visit:<br/>
               <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code><br/>
               Find your <strong>chat ID</strong> in the response JSON under <code>message.chat.id</code></li>
-            <li>Add to your <code>.env</code> file:
+            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>):
               <pre class="guide-code">TELEGRAM_BOT_TOKEN=your_bot_token</pre>
             </li>
             <li>Set your chat ID in <code>resonant.yaml</code>:

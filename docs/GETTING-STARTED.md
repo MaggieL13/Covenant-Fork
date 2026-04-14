@@ -312,7 +312,7 @@ On the **Bot** page, scroll to **Privileged Gateway Intents** and enable:
 
 ### 4. Add Your Bot Token
 
-Add these to your `.env` file and restart:
+Add these to the `.env` file **in the project root** (next to `resonant.yaml`) and restart:
 
 ```env
 DISCORD_BOT_TOKEN=your_token_here

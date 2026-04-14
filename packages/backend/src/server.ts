@@ -7,12 +7,12 @@ if (_nodeMajor >= 25) {
   process.exit(1);
 }
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { createServer } from 'http';
-import { join, dirname } from 'path';
+import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync } from 'fs';
 import { loadConfig, PROJECT_ROOT } from './config.js';
@@ -28,11 +28,13 @@ import { TelegramService } from './services/telegram/index.js';
 import { rateLimiter, securityHeaders } from './middleware/security.js';
 import apiRoutes, { initCcRoutes } from './routes/api.js';
 
-// Load config FIRST — before any other initialization
-const config = loadConfig();
-
+// Load .env from project root (not cwd, which npm workspaces may set to packages/backend)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+dotenv.config({ path: resolve(__dirname, '..', '..', '..', '.env') });
+
+// Load config FIRST — before any other initialization
+const config = loadConfig();
 
 const PORT = config.server.port;
 const HOST = config.server.host;
