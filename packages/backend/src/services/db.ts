@@ -147,16 +147,6 @@ export function initDb(dbPath: string): Database.Database {
     }
   }
 
-  // Sticker pack user_only migration
-  try {
-    db.exec(`ALTER TABLE sticker_packs ADD COLUMN user_only INTEGER DEFAULT 0`);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
-      console.warn('Migration warning:', msg);
-    }
-  }
-
   // Sticker system tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS sticker_packs (
@@ -183,6 +173,16 @@ export function initDb(dbPath: string): Database.Database {
       UNIQUE(pack_id, name)
     )
   `);
+
+  // Sticker pack user_only migration
+  try {
+    db.exec(`ALTER TABLE sticker_packs ADD COLUMN user_only INTEGER DEFAULT 0`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+      console.warn('Migration warning:', msg);
+    }
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS discord_pairings (
@@ -222,17 +222,14 @@ export function initDb(dbPath: string): Database.Database {
   // Session history migration — add UNIQUE on session_id + 'resumed' end_reason
   const shCount = (db.prepare('SELECT COUNT(*) as c FROM session_history').get() as { c: number }).c;
   if (shCount === 0) {
-    let needsRecreate = false;
-    try {
-      db.prepare("INSERT INTO session_history (id, thread_id, session_id, session_type, started_at, end_reason) VALUES ('__test', '__test', '__test', 'v1', '2026-01-01', 'resumed')").run();
-      db.prepare("DELETE FROM session_history WHERE id = '__test'").run();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
-        console.warn('Migration warning:', msg);
-      }
-      needsRecreate = true;
-    }
+    const sessionHistorySchema = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_history'"
+    ).get() as { sql?: string } | undefined;
+    const sessionHistorySql = sessionHistorySchema?.sql ?? '';
+    const needsRecreate =
+      !sessionHistorySql.includes('session_id TEXT NOT NULL UNIQUE') ||
+      !sessionHistorySql.includes("'resumed'");
+
     if (needsRecreate) {
       db.exec('DROP TABLE session_history');
       db.exec(`

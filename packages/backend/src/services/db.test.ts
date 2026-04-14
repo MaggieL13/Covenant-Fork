@@ -117,7 +117,7 @@ describe('Thread operations', () => {
     expect(thread!.archived_at).toBe('2026-01-01T00:00:00Z');
   });
 
-  it('deletes thread and all related data', () => {
+  it('deletes thread data but keeps detached canvases', () => {
     makeThread({ id: 'th-del' });
     makeMessage('th-del', { id: 'msg-1' });
     makeMessage('th-del', { id: 'msg-2' });
@@ -131,7 +131,11 @@ describe('Thread operations', () => {
     expect(getThread('th-del')).toBeNull();
     expect(getMessage('msg-1')).toBeNull();
     expect(getMessage('msg-2')).toBeNull();
-    expect(getCanvas('canvas-1')).toBeNull();
+    expect(getCanvas('canvas-1')).toMatchObject({
+      id: 'canvas-1',
+      thread_id: null,
+      title: 'Test',
+    });
   });
 });
 
