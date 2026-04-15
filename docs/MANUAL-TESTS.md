@@ -37,34 +37,39 @@ Do these after every UI-touching batch.
 - [ ] Open search with `Ctrl+K` or `Cmd+K`
 - [ ] Search for a known message, select a result, and confirm chat jumps to the right thread/message
 
+### 6. Canvas drawer
+- [ ] Open the canvas drawer from the chat header button and close it with the overlay
+- [ ] Open an active canvas and confirm the drawer shows the canvas view, not the canvas list
+- [ ] Use the canvas reference action and confirm the canvas is attached into the composer
+
 ---
 
 ## 🔍 Deeper Checks (≤ 5 minutes)
 
 Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 
-### 6. Thread list behavior
+### 7. Thread list behavior
 - [ ] Pin a thread → moves to top of list, stays after refresh
 - [ ] Unpin → drops back into chronological position
 - [ ] Archive a thread → disappears from main list
 - [ ] Toggle "show archived" → archived thread reappears
 - [ ] Unarchive → thread returns to main list
 
-### 7. Canvas
+### 8. Canvas
 - [ ] Create a canvas inside a thread
 - [ ] Canvas appears in canvas list
 - [ ] Delete the thread that owns the canvas
 - [ ] **Canvas still exists** in the canvas list (detached, not deleted)
 - [ ] Open the detached canvas — still readable
 
-### 8. Reactions
+### 9. Reactions
 - [ ] React to a message with an emoji
 - [ ] Reaction appears on the message, persists after refresh
 - [ ] Add a second different emoji → both show
 - [ ] Remove a reaction → only the remaining one shows
 - [ ] Companion reacting shows distinct attribution (not user)
 
-### 9. Streaming feel
+### 10. Streaming feel
 - [ ] Send a message that triggers a companion response
 - [ ] Response streams in character-by-character (not all at once at the end)
 - [ ] Tool use shows an indicator (thinking, searching, etc.)

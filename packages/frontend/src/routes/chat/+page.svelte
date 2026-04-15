@@ -11,10 +11,9 @@
   import ModelSelector from '$lib/components/ModelSelector.svelte';
   import { showToast } from '$lib/stores/toast.svelte';
   import { loadStickers } from '$lib/stores/stickers.svelte';
-  import Canvas from '$lib/components/Canvas.svelte';
-  import CanvasList from '$lib/components/CanvasList.svelte';
   import NewThreadModal from '$lib/components/chat/NewThreadModal.svelte';
   import SearchOverlay from '$lib/components/chat/SearchOverlay.svelte';
+  import CanvasDrawer from '$lib/components/chat/CanvasDrawer.svelte';
   import {
     connect,
     disconnect,
@@ -728,21 +727,14 @@
     <AudioAutoPlayer />
   </div>
 
-  <!-- Canvas panel -->
-  {#if canvasPanelOpen}
-    <button class="canvas-overlay" onclick={closeCanvasPanel} aria-label="Close canvas"></button>
-    <div class="canvas-sheet" role="dialog" aria-modal="true" aria-label="Canvas workspace">
-      <div class="canvas-sheet-card">
-        {#if activeCanvasId}
-          <Canvas embedded onreference={(canvasId, title) => {
-            messageInput?.attachCanvasRef(canvasId, title);
-          }} />
-        {:else}
-          <CanvasList embedded stayOpenOnSelect onclose={closeCanvasPanel} />
-        {/if}
-      </div>
-    </div>
-  {/if}
+  <CanvasDrawer
+    open={canvasPanelOpen}
+    showActiveCanvas={!!activeCanvasId}
+    onclose={closeCanvasPanel}
+    onreference={(canvasId, title) => {
+      messageInput?.attachCanvasRef(canvasId, title);
+    }}
+  />
 
   <SearchOverlay
     open={searchOpen}
@@ -1257,37 +1249,6 @@
     to { opacity: 0.7; }
   }
 
-  .canvas-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 320;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(10px);
-  }
-
-  .canvas-sheet {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    bottom: 1rem;
-    width: min(36rem, calc(100vw - 2rem));
-    z-index: 330;
-    pointer-events: none;
-  }
-
-  .canvas-sheet-card {
-    width: 100%;
-    height: 100%;
-    pointer-events: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--bg-surface);
-    backdrop-filter: blur(20px);
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-    overflow: hidden;
-    animation: modalRise 0.2s ease-out;
-  }
-
   /* Mobile styles */
   @media (max-width: 768px) {
     .sidebar-overlay {
@@ -1353,15 +1314,6 @@
       flex-shrink: 0;
     }
 
-    .canvas-sheet {
-      inset: 0;
-      width: 100%;
-    }
-
-    .canvas-sheet-card {
-      border-radius: 0;
-      border: none;
-    }
   }
 
   .toast-error {
