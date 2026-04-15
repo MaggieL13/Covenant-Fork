@@ -338,6 +338,12 @@
     }
   }
 
+  function getContextMenuThread(): ThreadSummary | undefined {
+    if (!contextMenuThread) return undefined;
+    const source = contextMenuIsArchived ? archivedThreads : threads;
+    return source.find((thread: ThreadSummary) => thread.id === contextMenuThread);
+  }
+
   function getNextThreadIdAfterDelete(deletedId: string): string | null {
     const idx = threads.findIndex((t: ThreadSummary) => t.id === deletedId);
     if (idx === -1) return threads.length > 0 ? threads[0].id : null;
@@ -495,9 +501,7 @@
 
 <!-- Context menu (fixed, outside all overflow containers) -->
 {#if contextMenuThread}
-  {@const menuThread = contextMenuIsArchived
-    ? archivedThreads.find(t => t.id === contextMenuThread)
-    : threads.find(t => t.id === contextMenuThread)}
+  {@const menuThread = getContextMenuThread()}
   {#if menuThread}
     <div class="context-menu" style="left: {contextMenuPos.x}px; top: {contextMenuPos.y}px;">
       {#if contextMenuIsArchived}

@@ -46,6 +46,11 @@ import {
   getConfig,
   setConfig,
   getConfigBool,
+  pinThread,
+  unpinThread,
+  getTodayThread,
+  saveDigestEmbedding,
+  getAllDigestEmbeddings,
 } from './db.js';
 
 beforeEach(() => {
@@ -117,7 +122,7 @@ describe('Thread operations', () => {
     expect(thread!.archived_at).toBe('2026-01-01T00:00:00Z');
   });
 
-  it('deletes thread and all related data', () => {
+  it('deletes thread data but keeps detached canvases', () => {
     makeThread({ id: 'th-del' });
     makeMessage('th-del', { id: 'msg-1' });
     makeMessage('th-del', { id: 'msg-2' });
@@ -131,7 +136,11 @@ describe('Thread operations', () => {
     expect(getThread('th-del')).toBeNull();
     expect(getMessage('msg-1')).toBeNull();
     expect(getMessage('msg-2')).toBeNull();
-    expect(getCanvas('canvas-1')).toBeNull();
+    expect(getCanvas('canvas-1')).toMatchObject({
+      id: 'canvas-1',
+      thread_id: null,
+      title: 'Test',
+    });
   });
 });
 
@@ -402,5 +411,127 @@ describe('Embedding operations', () => {
     saveEmbedding('msg-emb', vector2);
 
     // Should not throw — if it does, the OR REPLACE is broken
+  });
+});
+
+describe('Pin/unpin behavior', () => {
+  it('pins a thread', () => {
+    makeThread({ id: 'th-pin' });
+    pinThread('th-pin');
+
+    const thread = getThread('th-pin');
+    expect(thread!.pinned_at).not.toBeNull();
+    expect(typeof thread!.pinned_at).toBe('string');
+  });
+
+  it('unpins a thread', () => {
+    makeThread({ id: 'th-unpin' });
+    pinThread('th-unpin');
+    unpinThread('th-unpin');
+
+    const thread = getThread('th-unpin');
+    expect(thread!.pinned_at).toBeNull();
+  });
+
+  it('pin is idempotent (multiple pins ok)', () => {
+    makeThread({ id: 'th-idem' });
+    pinThread('th-idem');
+    const firstPin = getThread('th-idem')!.pinned_at;
+    pinThread('th-idem');
+    // Should still be pinned (timestamp may update, but it stays pinned)
+    expect(getThread('th-idem')!.pinned_at).not.toBeNull();
+    expect(typeof firstPin).toBe('string');
+  });
+
+  it('unpin is safe on unpinned thread', () => {
+    makeThread({ id: 'th-safe' });
+    unpinThread('th-safe'); // Should not throw
+    expect(getThread('th-safe')!.pinned_at).toBeNull();
+  });
+});
+
+describe('Unarchive behavior', () => {
+  it('archives then unarchives a thread', () => {
+    makeThread({ id: 'th-unarch' });
+
+    // Archive
+    archiveThread('th-unarch', '2026-01-01T00:00:00Z');
+    expect(getThread('th-unarch')!.archived_at).toBe('2026-01-01T00:00:00Z');
+
+    // Unarchive by passing null
+    archiveThread('th-unarch', null);
+    expect(getThread('th-unarch')!.archived_at).toBeNull();
+  });
+
+  it('unarchived thread reappears in default list', () => {
+    makeThread({ id: 'th-a' });
+    makeThread({ id: 'th-b' });
+    archiveThread('th-b', new Date().toISOString());
+
+    // Only 'th-a' shows by default
+    expect(listThreads({}).length).toBe(1);
+
+    // Unarchive 'th-b'
+    archiveThread('th-b', null);
+
+    // Now both show
+    expect(listThreads({}).length).toBe(2);
+  });
+});
+
+describe('Scribe digest data pipeline', () => {
+  it('getTodayThread returns null when no thread exists for today', () => {
+    // Fresh DB, no threads — Scribe has nothing to digest yet
+    expect(getTodayThread()).toBeNull();
+  });
+
+  it('getTodayThread returns a thread created today', () => {
+    createThread({
+      id: 'th-today',
+      name: 'Today',
+      type: 'daily',
+      createdAt: new Date().toISOString(),
+    });
+
+    const today = getTodayThread();
+    expect(today).not.toBeNull();
+    expect(today!.id).toBe('th-today');
+  });
+
+  it('saveDigestEmbedding persists and can be read back', () => {
+    const vector = Buffer.alloc(384 * 4);
+    saveDigestEmbedding('digest-1', '2026-04-14', 0, vector, 'Test block content');
+
+    const all = getAllDigestEmbeddings();
+    expect(all.length).toBe(1);
+    expect(all[0].digest_id).toBe('digest-1');
+    expect(all[0].date).toBe('2026-04-14');
+    expect(all[0].block_index).toBe(0);
+    expect(all[0].content).toBe('Test block content');
+  });
+
+  it('stores multiple digests (one row per digest_id)', () => {
+    const vector = Buffer.alloc(384 * 4);
+    saveDigestEmbedding('digest-2a', '2026-04-14', 0, vector, 'Block 0');
+    saveDigestEmbedding('digest-2b', '2026-04-14', 1, vector, 'Block 1');
+    saveDigestEmbedding('digest-2c', '2026-04-14', 2, vector, 'Block 2');
+
+    const all = getAllDigestEmbeddings();
+    expect(all.length).toBe(3);
+    expect(all.map(d => d.digest_id).sort()).toEqual(['digest-2a', 'digest-2b', 'digest-2c']);
+  });
+
+  // NOTE: digest_id is the primary key, so re-saving with the same digest_id
+  // replaces the previous row. Block-per-digest is not supported by the current schema.
+  // Flagged for review in a future batch (schema design is out of scope for Batch 0).
+  it('INSERT OR REPLACE on same digest_id overwrites previous row', () => {
+    const vector = Buffer.alloc(384 * 4);
+    saveDigestEmbedding('digest-3', '2026-04-14', 0, vector, 'First version');
+    saveDigestEmbedding('digest-3', '2026-04-14', 0, vector, 'Second version');
+
+    const all = getAllDigestEmbeddings();
+    const match = all.filter(d => d.digest_id === 'digest-3');
+    expect(match.length).toBe(1);
+    expect(match[0].content).toBe('Second version');
   });
 });
