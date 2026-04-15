@@ -27,34 +27,39 @@ Do these after every UI-touching batch.
 - [ ] Message appears in the correct thread (not a different one)
 - [ ] Message persists after refresh
 
+### 4. New thread modal
+- [ ] Open the new-thread modal from the chat UI
+- [ ] Close it without creating anything
+- [ ] Re-open it, create a named thread, and confirm the new thread opens selected
+
 ---
 
 ## 🔍 Deeper Checks (≤ 5 minutes)
 
 Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 
-### 4. Thread list behavior
+### 5. Thread list behavior
 - [ ] Pin a thread → moves to top of list, stays after refresh
 - [ ] Unpin → drops back into chronological position
 - [ ] Archive a thread → disappears from main list
 - [ ] Toggle "show archived" → archived thread reappears
 - [ ] Unarchive → thread returns to main list
 
-### 5. Canvas
+### 6. Canvas
 - [ ] Create a canvas inside a thread
 - [ ] Canvas appears in canvas list
 - [ ] Delete the thread that owns the canvas
 - [ ] **Canvas still exists** in the canvas list (detached, not deleted)
 - [ ] Open the detached canvas — still readable
 
-### 6. Reactions
+### 7. Reactions
 - [ ] React to a message with an emoji
 - [ ] Reaction appears on the message, persists after refresh
 - [ ] Add a second different emoji → both show
 - [ ] Remove a reaction → only the remaining one shows
 - [ ] Companion reacting shows distinct attribution (not user)
 
-### 7. Streaming feel
+### 8. Streaming feel
 - [ ] Send a message that triggers a companion response
 - [ ] Response streams in character-by-character (not all at once at the end)
 - [ ] Tool use shows an indicator (thinking, searching, etc.)
