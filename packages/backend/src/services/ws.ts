@@ -1,19 +1,15 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { IncomingMessage, Server as HTTPServer } from 'http';
-import type { Socket } from 'net';
-import { parse as parseCookie } from 'cookie';
+import { Server as HTTPServer } from 'http';
 import crypto from 'crypto';
 import type {
   ClientMessage,
   ServerMessage,
-  Canvas,
   Thread,
   ThreadSummary,
 } from '@resonant/shared';
 import { registry, type ExtendedWebSocket } from './registry.js';
 import {
   getDb,
-  getWebSession,
   createMessage,
   getMessages,
   markMessagesRead,
@@ -42,40 +38,13 @@ import type { DiscordService } from './discord/index.js';
 import type { TelegramService } from './telegram/index.js';
 import { getResonantConfig } from '../config.js';
 import { buildCommandRegistry, handleCommand } from './commands.js';
-
-function getAllowedOrigins(): string[] {
-  const config = getResonantConfig();
-  const port = config.server.port;
-  const origins = new Set<string>([
-    'http://localhost:5173',
-    `http://localhost:${port}`,
-    `http://127.0.0.1:${port}`,
-    'capacitor://localhost',
-    'tauri://localhost',
-  ]);
-  for (const o of config.cors.origins) {
-    origins.add(o);
-  }
-  return Array.from(origins);
-}
+import { createSocketLifecycleServer } from './ws/socket.js';
 
 const MAX_TEXT_MESSAGE_SIZE = 10 * 1024; // 10KB for text messages
 const MAX_VOICE_MESSAGE_SIZE = 512 * 1024; // 512KB for voice audio chunks
 const MAX_AUDIO_BUFFER_SIZE = 25 * 1024 * 1024; // 25MB total accumulated audio
-const COOKIE_NAME = 'resonant_session';
 
 // ExtendedWebSocket is now imported from ./registry.js
-
-function parseDeviceType(ua: string): 'mobile' | 'desktop' | 'unknown' {
-  if (!ua) return 'unknown';
-  if (/iPhone|iPad|iPod|Android|Mobile|webOS|BlackBerry|Opera Mini|IEMobile/i.test(ua)) {
-    return 'mobile';
-  }
-  if (/Mozilla|Chrome|Safari|Firefox|Edge|Opera/i.test(ua)) {
-    return 'desktop';
-  }
-  return 'unknown';
-}
 
 // ConnectionRegistry class and registry singleton are now in ./registry.ts
 // Re-export for backwards compatibility
@@ -116,353 +85,233 @@ export function setGatewayServices(services: GatewayServices): void {
 }
 
 export function createWebSocketServer(server: HTTPServer, agentService?: AgentService, orchestrator?: Orchestrator): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
   const agent = agentService ?? new AgentService();
-  const config = getResonantConfig();
-  const appPassword = config.auth.password;
+  return createSocketLifecycleServer(server, agent, orchestrator, {
+    buildConnectedMessage: () => {
+      const threads = listThreads({ includeArchived: false });
+      const today = getTodayThread();
 
-  if (!appPassword) {
-    console.warn('\u26a0\ufe0f  WARNING: No auth password configured \u2014 WebSocket connections are unauthenticated.');
-    console.warn('   Set auth.password in resonant.yaml or APP_PASSWORD env var for production.');
-  }
-
-  // Handle upgrade
-  server.on('upgrade', (request: IncomingMessage, socket, head) => {
-    const origin = request.headers.origin;
-    const allowedOrigins = getAllowedOrigins();
-
-    // Allow localhost connections without origin (CLI tools, internal)
-    const remoteAddr = (socket as Socket).remoteAddress || '';
-    const isLocalhost = remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1';
-
-    // Validate origin — require valid origin for non-localhost connections
-    if (!isLocalhost) {
-      if (!origin || !allowedOrigins.includes(origin)) {
-        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-    } else if (origin && !allowedOrigins.includes(origin)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    // Validate session if password is set
-    if (appPassword) {
-      const cookieHeader = request.headers.cookie;
-      if (!cookieHeader) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-
-      const cookies = parseCookie(cookieHeader);
-      const sessionToken = cookies[COOKIE_NAME];
-
-      if (!sessionToken) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-
-      const session = getWebSession(sessionToken);
-      if (!session || new Date(session.expires_at) < new Date()) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-    }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
-    });
+      return {
+        type: 'connected',
+        sessionStatus: agent.getPresenceStatus(),
+        threads: threadsToSummaries(threads),
+        activeThreadId: today?.id ?? null,
+        commands: buildCommandRegistry(),
+      };
+    },
+    buildCanvasListMessage: () => {
+      const canvases = listCanvases();
+      return canvases.length > 0 ? { type: 'canvas_list', canvases } : null;
+    },
+    attachMessageHandler: (ws, context) => {
+      attachMessageHandler(ws, context.agent, context.orchestrator);
+    },
   });
-
-  // Connection handler
-  wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
-    const ip = request.socket.remoteAddress || '';
-
-    // Per-IP connection limit
-    if (!registry.canAcceptConnection(ip)) {
-      ws.close(1008, 'Too many connections from this IP');
-      return;
-    }
-
-    const extWs = ws as ExtendedWebSocket;
-    extWs.isAlive = true;
-    extWs.userId = 'user';
-    extWs.remoteIp = ip;
-    extWs.voiceModeEnabled = false;
-    extWs.audioChunks = [];
-    extWs.isRecording = false;
-    extWs.audioMimeType = 'audio/webm';
-    extWs.userAgent = request.headers['user-agent'] || '';
-    extWs.deviceType = parseDeviceType(extWs.userAgent);
-    extWs.tabVisible = true;
-    extWs.messageCount = 0;
-    extWs.messageWindowStart = Date.now();
-    extWs.prosodyAbort = null;
-
-    registry.add(extWs.userId, extWs, ip);
-
-    // Send connected message with thread list and status
-    const threads = listThreads({ includeArchived: false });
-    const today = getTodayThread();
-
-    const connectedMsg: ServerMessage = {
-      type: 'connected',
-      sessionStatus: agent.getPresenceStatus(),
-      threads: threadsToSummaries(threads),
-      activeThreadId: today?.id ?? null,
-      commands: buildCommandRegistry(),
-    };
-    extWs.send(JSON.stringify(connectedMsg));
-
-    // Send canvas list
-    const canvases = listCanvases();
-    if (canvases.length > 0) {
-      const canvasListMsg: ServerMessage = { type: 'canvas_list', canvases };
-      extWs.send(JSON.stringify(canvasListMsg));
-    }
-
-    // Heartbeat
-    extWs.on('pong', () => {
-      extWs.isAlive = true;
-    });
-
-    // Message handler
-    extWs.on('message', async (data: Buffer) => {
-      try {
-        // Peek at message type for size limit selection
-        const rawMessage = data.toString();
-        let msgType: string | undefined;
-        try {
-          const peek = JSON.parse(rawMessage);
-          msgType = peek?.type;
-        } catch {
-          sendError(extWs, 'invalid_message', 'Invalid JSON');
-          return;
-        }
-
-        // Rate limit (120 msgs/min, exempt system messages)
-        if (msgType !== 'pong' && msgType !== 'visibility') {
-          const now = Date.now();
-          if (now - extWs.messageWindowStart > 60000) {
-            extWs.messageCount = 0;
-            extWs.messageWindowStart = now;
-          }
-          extWs.messageCount++;
-          if (extWs.messageCount > 120) {
-            sendError(extWs, 'rate_limited', 'Too many messages');
-            return;
-          }
-        }
-
-        const maxSize = msgType === 'voice_audio' ? MAX_VOICE_MESSAGE_SIZE : MAX_TEXT_MESSAGE_SIZE;
-        if (data.length > maxSize) {
-          sendError(extWs, 'message_too_large', `Message exceeds ${maxSize / 1024}KB limit`);
-          return;
-        }
-
-        const clientMsg = JSON.parse(rawMessage) as ClientMessage;
-
-        switch (clientMsg.type) {
-          case 'ping':
-            extWs.send(JSON.stringify({ type: 'pong' }));
-            break;
-          case 'message':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            await handleMessageSend(clientMsg, extWs, agent);
-            break;
-          case 'sync':
-            handleSync(clientMsg, extWs);
-            break;
-          case 'read':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleRead(clientMsg);
-            break;
-          case 'switch_thread':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleSwitchThread(clientMsg, extWs);
-            break;
-          case 'create_thread':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCreateThread(clientMsg);
-            break;
-          case 'request_status':
-            handleRequestStatus(extWs, agent, orchestrator);
-            break;
-          case 'voice_start':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleVoiceStart(extWs, clientMsg);
-            break;
-          case 'voice_audio':
-            handleVoiceAudio(extWs, clientMsg);
-            break;
-          case 'voice_stop':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleVoiceStop(extWs);
-            break;
-          case 'voice_mode':
-            handleVoiceMode(extWs, clientMsg);
-            break;
-          case 'voice_interrupt':
-            // Client wants to stop TTS playback — no server action needed
-            break;
-          case 'canvas_create':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCanvasCreate(clientMsg, extWs);
-            break;
-          case 'canvas_update':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCanvasUpdate(clientMsg, extWs);
-            break;
-          case 'canvas_update_title':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCanvasUpdateTitle(clientMsg, extWs);
-            break;
-          case 'canvas_update_tags':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCanvasUpdateTags(clientMsg, extWs);
-            break;
-          case 'canvas_delete':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleCanvasDelete(clientMsg, extWs);
-            break;
-          case 'canvas_list':
-            handleCanvasList(extWs);
-            break;
-          case 'add_reaction':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleAddReaction(clientMsg, extWs);
-            break;
-          case 'remove_reaction':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleRemoveReaction(clientMsg, extWs);
-            break;
-          case 'pin_thread':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handlePinThread(clientMsg);
-            break;
-          case 'unpin_thread':
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            handleUnpinThread(clientMsg);
-            break;
-          case 'visibility':
-            extWs.tabVisible = clientMsg.visible;
-            break;
-          case 'stop_generation':
-            agent.stopGeneration();
-            break;
-          case 'mcp_reconnect': {
-            const result = await agent.reconnectMcpServer(clientMsg.serverName);
-            if (result.success) {
-              registry.broadcast({ type: 'mcp_status_updated', servers: agent.getMcpStatus() });
-            } else {
-              sendError(extWs, 'mcp_error', result.error || 'Reconnect failed');
-            }
-            break;
-          }
-          case 'mcp_toggle': {
-            const result = await agent.toggleMcpServer(clientMsg.serverName, clientMsg.enabled);
-            if (result.success) {
-              registry.broadcast({ type: 'mcp_status_updated', servers: agent.getMcpStatus() });
-            } else {
-              sendError(extWs, 'mcp_error', result.error || 'Toggle failed');
-            }
-            break;
-          }
-          case 'rewind_files': {
-            const result = await agent.rewindFiles(clientMsg.userMessageId, clientMsg.dryRun);
-            const rewindMsg: import('@resonant/shared').ServerMessage = {
-              type: 'rewind_result',
-              canRewind: result.canRewind,
-              filesChanged: result.filesChanged,
-              insertions: result.insertions,
-              deletions: result.deletions,
-              error: result.error,
-            };
-            extWs.send(JSON.stringify(rewindMsg));
-            break;
-          }
-          case 'command': {
-            registry.touchUserActivity();
-            registry.touchUserWebActivity();
-            const cmdResult = await handleCommand(
-              clientMsg.name,
-              clientMsg.args,
-              clientMsg.threadId,
-              { agent, orchestrator, registry },
-            );
-            extWs.send(JSON.stringify(cmdResult));
-
-            // If command created/renamed a thread, broadcast updated list
-            if (clientMsg.name === 'new' || clientMsg.name === 'rename') {
-              const updatedThreads = listThreads({ includeArchived: false });
-              registry.broadcast({ type: 'thread_list', threads: threadsToSummaries(updatedThreads) });
-            }
-            break;
-          }
-          default:
-            console.warn('Unhandled message type:', (clientMsg as any).type);
-        }
-      } catch (error) {
-        console.error('Error processing WebSocket message:', error);
-        sendError(extWs, 'invalid_message', 'Invalid message format');
-      }
-    });
-
-    extWs.on('close', () => {
-      if (extWs.prosodyAbort) {
-        extWs.prosodyAbort.abort();
-        extWs.prosodyAbort = null;
-      }
-      registry.remove(extWs.userId, extWs, extWs.remoteIp);
-    });
-
-    extWs.on('error', (err) => {
-      console.error('WebSocket error:', err instanceof Error ? err.message : err);
-      registry.remove(extWs.userId, extWs, extWs.remoteIp);
-      try { extWs.terminate(); } catch {}
-    });
-  });
-
-  // Heartbeat interval — terminate dead connections every 30s
-  const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-      const extWs = ws as ExtendedWebSocket;
-      if (!extWs.isAlive) {
-        return extWs.terminate();
-      }
-      extWs.isAlive = false;
-      extWs.ping();
-    });
-  }, 30000);
-
-  wss.on('close', () => {
-    clearInterval(heartbeatInterval);
-  });
-
-  return wss;
 }
 
 // --- Handlers ---
+
+function attachMessageHandler(
+  extWs: ExtendedWebSocket,
+  agent: AgentService,
+  orchestrator?: Orchestrator
+): void {
+  extWs.on('message', async (data: Buffer) => {
+    try {
+      // Peek at message type for size limit selection
+      const rawMessage = data.toString();
+      let msgType: string | undefined;
+      try {
+        const peek = JSON.parse(rawMessage);
+        msgType = peek?.type;
+      } catch {
+        sendError(extWs, 'invalid_message', 'Invalid JSON');
+        return;
+      }
+
+      // ORDER: rate limiter counters live on the connection object and are
+      // initialized during socket bootstrap in ws/socket.ts.
+      if (msgType !== 'pong' && msgType !== 'visibility') {
+        const now = Date.now();
+        if (now - extWs.messageWindowStart > 60000) {
+          extWs.messageCount = 0;
+          extWs.messageWindowStart = now;
+        }
+        extWs.messageCount++;
+        if (extWs.messageCount > 120) {
+          sendError(extWs, 'rate_limited', 'Too many messages');
+          return;
+        }
+      }
+
+      const maxSize = msgType === 'voice_audio' ? MAX_VOICE_MESSAGE_SIZE : MAX_TEXT_MESSAGE_SIZE;
+      if (data.length > maxSize) {
+        sendError(extWs, 'message_too_large', `Message exceeds ${maxSize / 1024}KB limit`);
+        return;
+      }
+
+      const clientMsg = JSON.parse(rawMessage) as ClientMessage;
+
+      switch (clientMsg.type) {
+        case 'ping':
+          extWs.send(JSON.stringify({ type: 'pong' }));
+          break;
+        case 'message':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          await handleMessageSend(clientMsg, extWs, agent);
+          break;
+        case 'sync':
+          handleSync(clientMsg, extWs);
+          break;
+        case 'read':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleRead(clientMsg);
+          break;
+        case 'switch_thread':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleSwitchThread(clientMsg, extWs);
+          break;
+        case 'create_thread':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCreateThread(clientMsg);
+          break;
+        case 'request_status':
+          handleRequestStatus(extWs, agent, orchestrator);
+          break;
+        case 'voice_start':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleVoiceStart(extWs, clientMsg);
+          break;
+        case 'voice_audio':
+          handleVoiceAudio(extWs, clientMsg);
+          break;
+        case 'voice_stop':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleVoiceStop(extWs);
+          break;
+        case 'voice_mode':
+          handleVoiceMode(extWs, clientMsg);
+          break;
+        case 'voice_interrupt':
+          // Client wants to stop TTS playback — no server action needed
+          break;
+        case 'canvas_create':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCanvasCreate(clientMsg, extWs);
+          break;
+        case 'canvas_update':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCanvasUpdate(clientMsg, extWs);
+          break;
+        case 'canvas_update_title':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCanvasUpdateTitle(clientMsg, extWs);
+          break;
+        case 'canvas_update_tags':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCanvasUpdateTags(clientMsg, extWs);
+          break;
+        case 'canvas_delete':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleCanvasDelete(clientMsg, extWs);
+          break;
+        case 'canvas_list':
+          handleCanvasList(extWs);
+          break;
+        case 'add_reaction':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleAddReaction(clientMsg, extWs);
+          break;
+        case 'remove_reaction':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleRemoveReaction(clientMsg, extWs);
+          break;
+        case 'pin_thread':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handlePinThread(clientMsg);
+          break;
+        case 'unpin_thread':
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          handleUnpinThread(clientMsg);
+          break;
+        case 'visibility':
+          extWs.tabVisible = clientMsg.visible;
+          break;
+        case 'stop_generation':
+          agent.stopGeneration();
+          break;
+        case 'mcp_reconnect': {
+          const result = await agent.reconnectMcpServer(clientMsg.serverName);
+          if (result.success) {
+            registry.broadcast({ type: 'mcp_status_updated', servers: agent.getMcpStatus() });
+          } else {
+            sendError(extWs, 'mcp_error', result.error || 'Reconnect failed');
+          }
+          break;
+        }
+        case 'mcp_toggle': {
+          const result = await agent.toggleMcpServer(clientMsg.serverName, clientMsg.enabled);
+          if (result.success) {
+            registry.broadcast({ type: 'mcp_status_updated', servers: agent.getMcpStatus() });
+          } else {
+            sendError(extWs, 'mcp_error', result.error || 'Toggle failed');
+          }
+          break;
+        }
+        case 'rewind_files': {
+          const result = await agent.rewindFiles(clientMsg.userMessageId, clientMsg.dryRun);
+          const rewindMsg: import('@resonant/shared').ServerMessage = {
+            type: 'rewind_result',
+            canRewind: result.canRewind,
+            filesChanged: result.filesChanged,
+            insertions: result.insertions,
+            deletions: result.deletions,
+            error: result.error,
+          };
+          extWs.send(JSON.stringify(rewindMsg));
+          break;
+        }
+        case 'command': {
+          registry.touchUserActivity();
+          registry.touchUserWebActivity();
+          const cmdResult = await handleCommand(
+            clientMsg.name,
+            clientMsg.args,
+            clientMsg.threadId,
+            { agent, orchestrator, registry },
+          );
+          extWs.send(JSON.stringify(cmdResult));
+
+          if (clientMsg.name === 'new' || clientMsg.name === 'rename') {
+            const updatedThreads = listThreads({ includeArchived: false });
+            registry.broadcast({ type: 'thread_list', threads: threadsToSummaries(updatedThreads) });
+          }
+          break;
+        }
+        default:
+          console.warn('Unhandled message type:', (clientMsg as any).type);
+      }
+    } catch (error) {
+      console.error('Error processing WebSocket message:', error);
+      sendError(extWs, 'invalid_message', 'Invalid message format');
+    }
+  });
+}
 
 async function handleMessageSend(
   msg: Extract<ClientMessage, { type: 'message' }>,
