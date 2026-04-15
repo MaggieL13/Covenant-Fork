@@ -25,3 +25,4 @@ screenshots/
 !docs/screenshots/
 docs/DESIGN-SPEC.md
 .claude/
+shared/
