@@ -13,8 +13,8 @@
   import { loadStickers } from '$lib/stores/stickers.svelte';
   import Canvas from '$lib/components/Canvas.svelte';
   import CanvasList from '$lib/components/CanvasList.svelte';
-  import SearchPanel from '$lib/components/SearchPanel.svelte';
   import NewThreadModal from '$lib/components/chat/NewThreadModal.svelte';
+  import SearchOverlay from '$lib/components/chat/SearchOverlay.svelte';
   import {
     connect,
     disconnect,
@@ -744,10 +744,11 @@
     </div>
   {/if}
 
-  <!-- Search overlay -->
-  {#if searchOpen}
-    <SearchPanel onresult={handleSearchResult} onclose={() => searchOpen = false} />
-  {/if}
+  <SearchOverlay
+    open={searchOpen}
+    onresult={handleSearchResult}
+    onclose={() => searchOpen = false}
+  />
 
   <NewThreadModal
     open={newThreadOpen}
