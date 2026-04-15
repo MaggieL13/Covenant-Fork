@@ -60,6 +60,17 @@
     animation: modalRise 0.2s ease-out;
   }
 
+  @keyframes modalRise {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
   @media (max-width: 768px) {
     .canvas-sheet {
       inset: 0;
