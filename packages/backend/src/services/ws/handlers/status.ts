@@ -5,7 +5,7 @@ import { Orchestrator } from '../../orchestrator.js';
 import type { DiscordService } from '../../discord/index.js';
 import type { TelegramService } from '../../telegram/index.js';
 
-export interface GatewayServicesLike {
+export interface GatewayServices {
   discord?: DiscordService | null;
   telegram?: TelegramService | null;
 }
@@ -13,7 +13,7 @@ export interface GatewayServicesLike {
 export async function handleRequestStatus(
   ws: ExtendedWebSocket,
   agent: AgentService,
-  gatewayServices: GatewayServicesLike,
+  gatewayServices: GatewayServices,
   orchestrator?: Orchestrator
 ): Promise<void> {
   const mem = process.memoryUsage();
