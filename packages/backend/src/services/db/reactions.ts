@@ -1,3 +1,4 @@
+import type { Reaction } from '@resonant/shared';
 import { getDb } from './state.js';
 import { getMessage } from './messages.js';
 
@@ -8,7 +9,7 @@ export function addReaction(messageId: string, emoji: string, user: 'companion' 
     if (!msg) return;
 
     const metadata = (msg.metadata && typeof msg.metadata === 'object') ? { ...msg.metadata } : {};
-    const reactions: Array<{ emoji: string; user: string; created_at: string }> = Array.isArray(metadata.reactions) ? [...metadata.reactions] : [];
+    const reactions: Reaction[] = Array.isArray(metadata.reactions) ? [...metadata.reactions] as Reaction[] : [];
 
     if (reactions.some((reaction) => reaction.emoji === emoji && reaction.user === user)) return;
 
@@ -27,7 +28,7 @@ export function removeReaction(messageId: string, emoji: string, user: 'companio
     if (!msg) return;
 
     const metadata = (msg.metadata && typeof msg.metadata === 'object') ? { ...msg.metadata } : {};
-    const reactions: Array<{ emoji: string; user: string; created_at: string }> = Array.isArray(metadata.reactions) ? [...metadata.reactions] : [];
+    const reactions: Reaction[] = Array.isArray(metadata.reactions) ? [...metadata.reactions] as Reaction[] : [];
 
     const filtered = reactions.filter((reaction) => !(reaction.emoji === emoji && reaction.user === user));
     if (filtered.length === reactions.length) return;

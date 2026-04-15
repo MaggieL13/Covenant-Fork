@@ -1,4 +1,4 @@
-import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry } from '@resonant/shared';
+import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry, Reaction } from '@resonant/shared';
 import { setSystemStatus } from './settings.svelte';
 import { apiFetch } from '$lib/utils/api';
 
@@ -297,9 +297,10 @@ function handleMessage(event: MessageEvent) {
         if (idx !== -1) {
           const m = messages[idx];
           const meta = (m.metadata && typeof m.metadata === 'object') ? { ...m.metadata } : {};
-          const reactions: Array<{ emoji: string; user: string; created_at: string }> = Array.isArray(meta.reactions) ? [...meta.reactions] : [];
-          if (!reactions.some(r => r.emoji === msg.emoji && r.user === msg.user)) {
-            reactions.push({ emoji: msg.emoji, user: msg.user, created_at: msg.createdAt });
+          const reactions: Reaction[] = Array.isArray(meta.reactions) ? [...meta.reactions] as Reaction[] : [];
+          const reactionUser = msg.user as Reaction['user'];
+          if (!reactions.some(r => r.emoji === msg.emoji && r.user === reactionUser)) {
+            reactions.push({ emoji: msg.emoji, user: reactionUser, created_at: msg.createdAt });
             const updated = { ...m, metadata: { ...meta, reactions } };
             messages = [...messages.slice(0, idx), updated, ...messages.slice(idx + 1)];
           }
@@ -312,7 +313,7 @@ function handleMessage(event: MessageEvent) {
         if (idx !== -1) {
           const m = messages[idx];
           const meta = (m.metadata && typeof m.metadata === 'object') ? { ...m.metadata } : {};
-          const reactions: Array<{ emoji: string; user: string; created_at: string }> = Array.isArray(meta.reactions) ? [...meta.reactions] : [];
+          const reactions: Reaction[] = Array.isArray(meta.reactions) ? [...meta.reactions] as Reaction[] : [];
           const filtered = reactions.filter(r => !(r.emoji === msg.emoji && r.user === msg.user));
           const updated = { ...m, metadata: { ...meta, reactions: filtered } };
           messages = [...messages.slice(0, idx), updated, ...messages.slice(idx + 1)];
