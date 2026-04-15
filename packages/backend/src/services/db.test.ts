@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { Reaction } from '@resonant/shared';
 
 // Mock embeddings to avoid loading HuggingFace ML model
 vi.mock('./embeddings.js', () => ({
@@ -244,7 +245,7 @@ describe('Reaction operations', () => {
     addReaction('msg-react', '👍', 'user');
 
     const msg = getMessage('msg-react');
-    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Array<{ emoji: string; user: string }>;
+    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Reaction[];
     expect(reactions).toHaveLength(1);
     expect(reactions[0].emoji).toBe('👍');
     expect(reactions[0].user).toBe('user');
@@ -258,7 +259,7 @@ describe('Reaction operations', () => {
     addReaction('msg-dedup', '👍', 'user');
 
     const msg = getMessage('msg-dedup');
-    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Array<{ emoji: string; user: string }>;
+    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Reaction[];
     expect(reactions).toHaveLength(1);
   });
 
@@ -270,7 +271,7 @@ describe('Reaction operations', () => {
     addReaction('msg-diff', '👍', 'companion');
 
     const msg = getMessage('msg-diff');
-    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Array<{ emoji: string; user: string }>;
+    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Reaction[];
     expect(reactions).toHaveLength(2);
   });
 
@@ -283,7 +284,7 @@ describe('Reaction operations', () => {
     removeReaction('msg-rm', '👍', 'user');
 
     const msg = getMessage('msg-rm');
-    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Array<{ emoji: string; user: string }>;
+    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Reaction[];
     expect(reactions).toHaveLength(1);
     expect(reactions[0].emoji).toBe('❤️');
   });
@@ -296,7 +297,7 @@ describe('Reaction operations', () => {
     removeReaction('msg-noop', '❤️', 'user');
 
     const msg = getMessage('msg-noop');
-    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Array<{ emoji: string; user: string }>;
+    const reactions = (msg!.metadata as Record<string, unknown>)?.reactions as Reaction[];
     expect(reactions).toHaveLength(1);
   });
 

@@ -12,6 +12,7 @@ import type {
   NotificationHookInput,
   HookInput,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { Reaction } from '@resonant/shared';
 import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas, getAllStickersWithPacks } from './db.js';
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
@@ -395,7 +396,7 @@ function buildEmotionalContext(threadId: string): string {
     if (m.metadata && typeof m.metadata === 'object') {
       const meta = m.metadata as Record<string, unknown>;
       if (Array.isArray(meta.reactions) && meta.reactions.length > 0) {
-        const rxns = (meta.reactions as Array<{ emoji: string; user: string }>)
+        const rxns = (meta.reactions as Reaction[])
           .map(r => `${r.user === 'user' ? userName : companionName} reacted ${r.emoji}`)
           .join(', ');
         line += ` [${rxns}]`;
@@ -411,7 +412,7 @@ function buildEmotionalContext(threadId: string): string {
       const meta = m.metadata as Record<string, unknown>;
       if (Array.isArray(meta.reactions) && meta.reactions.length > 0) {
         const preview = m.content.substring(0, 40) + (m.content.length > 40 ? '...' : '');
-        for (const r of meta.reactions as Array<{ emoji: string; user: string }>) {
+        for (const r of meta.reactions as Reaction[]) {
           const reactor = r.user === 'user' ? userName : companionName;
           const whose = m.role === 'user' ? 'their own' : 'your';
           recentReactions.push(`${reactor} reacted ${r.emoji} to ${whose} message: "${preview}" (id: ${m.id})`);
@@ -1006,7 +1007,7 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
         const meta = m.metadata as Record<string, unknown>;
         if (Array.isArray(meta.reactions) && meta.reactions.length > 0) {
           const preview = m.content.substring(0, 50) + (m.content.length > 50 ? '...' : '');
-          for (const r of meta.reactions as Array<{ emoji: string; user: string }>) {
+          for (const r of meta.reactions as Reaction[]) {
             const reactor = r.user === 'user' ? userName : companionName;
             const whose = m.role === 'user' ? 'their own' : 'your';
             rxnLines.push(`  ${reactor} reacted ${r.emoji} to ${whose} message: "${preview}" (msg id: ${m.id})`);

@@ -35,6 +35,14 @@ export interface Message {
   read_at: string | null;
 }
 
+export type ReactionUser = 'companion' | 'user';
+
+export interface Reaction {
+  emoji: string;
+  user: ReactionUser;
+  created_at: string;
+}
+
 export interface OutboundMessage {
   id: string;
   thread_id: string;

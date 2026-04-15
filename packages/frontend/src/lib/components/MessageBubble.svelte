@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Message, MessageSegment } from '@resonant/shared';
+  import type { Message, MessageSegment, Reaction } from '@resonant/shared';
   import type { ToolEvent } from '$lib/stores/websocket.svelte';
   import { send } from '$lib/stores/websocket.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
@@ -202,7 +202,6 @@
   }
 
   // Reactions
-  interface Reaction { emoji: string; user: string; created_at: string }
   const reactions = $derived(() => {
     const meta = message.metadata as Record<string, unknown> | null;
     if (!meta || !Array.isArray(meta.reactions)) return [] as Reaction[];
