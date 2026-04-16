@@ -47,34 +47,40 @@ Do these after every UI-touching batch.
 - [ ] Toggle the desktop sidebar collapse button and confirm the thread list hides/shows cleanly
 - [ ] Confirm header buttons still open search, canvas, files, settings, and theme toggle correctly
 
+### 8. Chat interaction behavior
+- [ ] Scroll up in an active thread until the jump-to-bottom button appears, then click it and confirm chat snaps back to the latest messages
+- [ ] In a long thread, scroll near the top and confirm older messages load without the viewport jumping to a different spot
+- [ ] Open search with `Ctrl+K` or `Cmd+K`, then confirm `Escape` still closes the canvas drawer, mobile sidebar, and new-thread modal in the same order they used to
+- [ ] Open a thread with unread companion messages, scroll to the bottom, and confirm the unread badge clears
+
 ---
 
 ## 🔍 Deeper Checks (≤ 5 minutes)
 
 Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 
-### 8. Thread list behavior
+### 9. Thread list behavior
 - [ ] Pin a thread → moves to top of list, stays after refresh
 - [ ] Unpin → drops back into chronological position
 - [ ] Archive a thread → disappears from main list
 - [ ] Toggle "show archived" → archived thread reappears
 - [ ] Unarchive → thread returns to main list
 
-### 9. Canvas
+### 10. Canvas
 - [ ] Create a canvas inside a thread
 - [ ] Canvas appears in canvas list
 - [ ] Delete the thread that owns the canvas
 - [ ] **Canvas still exists** in the canvas list (detached, not deleted)
 - [ ] Open the detached canvas — still readable
 
-### 10. Reactions
+### 11. Reactions
 - [ ] React to a message with an emoji
 - [ ] Reaction appears on the message, persists after refresh
 - [ ] Add a second different emoji → both show
 - [ ] Remove a reaction → only the remaining one shows
 - [ ] Companion reacting shows distinct attribution (not user)
 
-### 11. Streaming feel
+### 12. Streaming feel
 - [ ] Send a message that triggers a companion response
 - [ ] Response streams in character-by-character (not all at once at the end)
 - [ ] Tool use shows an indicator (thinking, searching, etc.)

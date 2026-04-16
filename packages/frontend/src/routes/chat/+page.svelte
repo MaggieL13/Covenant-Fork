@@ -12,6 +12,10 @@
   import CanvasDrawer from '$lib/components/chat/CanvasDrawer.svelte';
   import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
   import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+  import { createAutoScrollController } from '$lib/chat/auto-scroll.svelte';
+  import { createOlderMessagesController } from '$lib/chat/older-messages.svelte';
+  import { createReadObserverController } from '$lib/chat/read-observer.svelte';
+  import { createKeyboardShortcutsController } from '$lib/chat/keyboard-shortcuts.svelte';
   import {
     connect,
     disconnect,
@@ -164,26 +168,74 @@
 
   // Local state
   let replyTo = $state<Message | null>(null);
-  let messagesContainer: HTMLDivElement;
-  let messagesEndEl: HTMLDivElement;
-  let shouldAutoScroll = $state(true);
+  let messagesContainer = $state<HTMLDivElement | null>(null);
+  let messagesEndEl = $state<HTMLDivElement | null>(null);
   let sidebarOpen = $state(false); // mobile overlay
   let sidebarCollapsed = $state(false); // desktop collapse
-  let readObserver: IntersectionObserver | null = null;
-  let loadingOlder = $state(false);
-  let hasMoreMessages = $state(true);
 
   // Total unread count
   const totalUnread = $derived(
     Object.values(unreadCounts).reduce((sum, count) => sum + count, 0)
   );
 
+  const getMessagesContainer = () => messagesContainer;
+  const getMessagesEndEl = () => messagesEndEl;
+
+  const olderMessages = createOlderMessagesController({
+    getContainer: getMessagesContainer,
+    getActiveThreadId: () => activeThreadId,
+    loadOlderMessagesForThread: loadOlderMessages,
+  });
+
+  const autoScroll = createAutoScrollController({
+    getContainer: getMessagesContainer,
+    getActiveThreadId: () => activeThreadId,
+    getMessagesLength: () => messages.length,
+    // ORDER: auto-scroll reads the older-message flags through getters so the
+    // shared scroll handler always sees live pagination state across controller
+    // boundaries instead of stale values captured at construction time.
+    getLoadingOlder: () => olderMessages.loadingOlder,
+    getHasMoreMessages: () => olderMessages.hasMoreMessages,
+    onReachTop: () => olderMessages.loadMoreMessages(),
+  });
+
+  const readObserver = createReadObserverController({
+    getSentinel: getMessagesEndEl,
+    getActiveThreadId: () => activeThreadId,
+    getMessages: () => messages,
+    sendRead: (threadId, beforeId) => {
+      send({ type: 'read', threadId, beforeId });
+    },
+  });
+
+  const keyboardShortcuts = createKeyboardShortcutsController({
+    toggleSearch,
+    isCanvasOpen: () => canvasPanelOpen,
+    closeCanvas: closeCanvasPanel,
+    isSidebarOpen: () => sidebarOpen,
+    closeSidebar: () => {
+      sidebarOpen = false;
+    },
+    isNewThreadOpen: () => newThreadOpen,
+    closeNewThread: closeNewThreadModal,
+    isStreaming: () => isStreamingNow,
+    stopGeneration: sendStopGeneration,
+  });
+
+  let shouldAutoScroll = $derived(autoScroll.shouldAutoScroll);
+  let loadingOlder = $derived(olderMessages.loadingOlder);
+  let hasMoreMessages = $derived(olderMessages.hasMoreMessages);
+
   // Handle thread selection
   async function handleThreadSelect(threadId: string) {
-    hasMoreMessages = true;
+    // ORDER: reset pagination state before loading a different thread so the
+    // next scroll interaction starts from the new thread, not stale prior state.
+    olderMessages.reset();
     await loadThread(threadId);
     sidebarOpen = false;
-    shouldAutoScroll = true;
+    // ORDER: re-enable auto-scroll after thread selection so the next render
+    // snaps to the newly loaded thread instead of preserving the old thread's pause state.
+    autoScroll.enableAutoScroll();
   }
 
   // Handle new thread creation
@@ -258,7 +310,7 @@
     }
 
     replyTo = null;
-    shouldAutoScroll = true;
+    autoScroll.enableAutoScroll();
   }
 
   // Handle reply
@@ -301,56 +353,7 @@
       content: text,
       contentType: 'text',
     });
-    shouldAutoScroll = true;
-  }
-
-  // Check if should auto-scroll + load older messages on scroll to top
-  function checkAutoScroll() {
-    if (!messagesContainer) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = messagesContainer;
-    const threshold = 100; // pixels from bottom
-
-    shouldAutoScroll = scrollHeight - scrollTop - clientHeight < threshold;
-
-    // Load older messages when scrolled near top
-    if (scrollTop < 100 && !loadingOlder && hasMoreMessages && activeThreadId && messages.length > 0) {
-      loadMoreMessages();
-    }
-  }
-
-  // Load older messages and preserve scroll position
-  async function loadMoreMessages() {
-    if (!activeThreadId || loadingOlder || !hasMoreMessages) return;
-    loadingOlder = true;
-
-    const prevHeight = messagesContainer?.scrollHeight ?? 0;
-
-    const hasMore = await loadOlderMessages(activeThreadId);
-    hasMoreMessages = hasMore;
-
-    // Preserve scroll position after prepending
-    await new Promise(r => setTimeout(r, 0));
-    if (messagesContainer) {
-      const newHeight = messagesContainer.scrollHeight;
-      messagesContainer.scrollTop = newHeight - prevHeight;
-    }
-
-    loadingOlder = false;
-  }
-
-  // Auto-scroll to bottom
-  function scrollToBottom() {
-    if (!messagesContainer || !shouldAutoScroll) return;
-
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-
-  // Manual scroll to bottom (ignores shouldAutoScroll flag)
-  function jumpToBottom() {
-    if (!messagesContainer) return;
-    shouldAutoScroll = true;
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    autoScroll.enableAutoScroll();
   }
 
   // Toggle sidebar on mobile
@@ -358,54 +361,11 @@
     sidebarOpen = !sidebarOpen;
   }
 
-  // Mark messages as read when bottom of chat is visible
-  function setupReadObserver() {
-    if (readObserver) readObserver.disconnect();
-    readObserver = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting && activeThreadId && messages.length > 0) {
-          const lastMsg = messages[messages.length - 1];
-          if (lastMsg.role === 'companion' && !lastMsg.read_at) {
-            send({ type: 'read', threadId: activeThreadId, beforeId: lastMsg.id });
-          }
-        }
-      }
-    }, { threshold: 0.1 });
-
-    if (messagesEndEl) readObserver.observe(messagesEndEl);
-  }
-
-  // Keyboard shortcuts
-  function handleGlobalKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-      e.preventDefault();
-      searchOpen = !searchOpen;
-    }
-    if (e.key === 'Escape' && canvasPanelOpen) {
-      e.preventDefault();
-      canvasPanelOpen = false;
-      return;
-    }
-    if (e.key === 'Escape' && sidebarOpen) {
-      e.preventDefault();
-      sidebarOpen = false;
-      return;
-    }
-    if (e.key === 'Escape' && newThreadOpen) {
-      e.preventDefault();
-      closeNewThreadModal();
-    }
-    if (e.key === 'Escape' && isStreamingNow) {
-      e.preventDefault();
-      sendStopGeneration();
-    }
-  }
-
   // Load initial data and connect
   onMount(async () => {
     await Promise.all([loadThreads(), loadSettings(), loadStickers()]);
     connect();
-    window.addEventListener('keydown', handleGlobalKeydown);
+    window.addEventListener('keydown', keyboardShortcuts.handleGlobalKeydown);
 
     // Load today's thread if available
     const todayThread = threads.find(t =>
@@ -417,25 +377,34 @@
     } else if (threads.length > 0) {
       await handleThreadSelect(threads[0].id);
     }
-
-    setupReadObserver();
   });
 
   // Disconnect on unmount
   onDestroy(() => {
     disconnect();
-    readObserver?.disconnect();
-    window.removeEventListener('keydown', handleGlobalKeydown);
+    window.removeEventListener('keydown', keyboardShortcuts.handleGlobalKeydown);
   });
 
   // Auto-scroll effect
   $effect(() => {
     messages; // Track changes
     streaming; // Track streaming changes
-    setTimeout(scrollToBottom, 50);
+    // ORDER: defer scroll-to-bottom until after DOM updates from message and
+    // streaming changes have painted, so the controller measures the real layout.
+    const timeout = setTimeout(() => autoScroll.scrollToBottom(), 50);
+    return () => clearTimeout(timeout);
   });
 
   $effect(() => {
+    messagesEndEl;
+    // ORDER: the bottom sentinel must exist before attaching the read observer.
+    readObserver.setup();
+    return () => readObserver.cleanup();
+  });
+
+  $effect(() => {
+    // ORDER: auto-open the canvas drawer after activeCanvasId updates so the
+    // header active state and drawer visibility stay in sync.
     if (activeCanvasId) {
       canvasPanelOpen = true;
     }
@@ -516,7 +485,7 @@
     <div
       class="messages-container"
       bind:this={messagesContainer}
-      onscroll={checkAutoScroll}
+      onscroll={autoScroll.checkAutoScroll}
     >
       <div class="messages-list">
         {#if loadingOlder}
@@ -629,7 +598,7 @@
     <!-- Scroll to bottom button -->
     {#if !shouldAutoScroll}
       <div class="scroll-to-bottom-wrapper">
-        <button class="scroll-to-bottom" onclick={jumpToBottom} aria-label="Scroll to bottom">
+        <button class="scroll-to-bottom" onclick={autoScroll.jumpToBottom} aria-label="Scroll to bottom">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
           </svg>
