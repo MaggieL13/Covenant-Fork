@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { goto } from '$app/navigation';
   import MessageInput from '$lib/components/MessageInput.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import AudioAutoPlayer from '$lib/components/AudioAutoPlayer.svelte';
@@ -84,10 +83,6 @@
 
   function toggleSearch() {
     searchOpen = !searchOpen;
-  }
-
-  function openSettings() {
-    goto('/settings');
   }
 
   function toggleCanvasPanel() {
@@ -233,11 +228,6 @@
     autoScroll.enableAutoScroll();
   }
 
-  // Handle new thread creation
-  async function handleNewThread() {
-    openNewThreadModal();
-  }
-
   // Handle batched send — text and/or files all go as one message → one agent query
   async function handleBatchSend(
     content: string,
@@ -308,16 +298,6 @@
     autoScroll.enableAutoScroll();
   }
 
-  // Handle reply
-  function handleReply(message: Message) {
-    replyTo = message;
-  }
-
-  // Cancel reply
-  function handleCancelReply() {
-    replyTo = null;
-  }
-
   // Send a suggested prompt — auto-create thread if none selected
   async function sendSuggested(text: string) {
     let threadId = activeThreadId;
@@ -358,6 +338,8 @@
 
   // Load initial data and connect
   onMount(async () => {
+    // ORDER: hydrate the initial HTTP-backed chat state before connecting so
+    // first render and initial thread selection do not race the live WS sync.
     await Promise.all([loadThreads(), loadSettings(), loadStickers()]);
     connect();
     window.addEventListener('keydown', keyboardShortcuts.handleGlobalKeydown);
@@ -418,7 +400,7 @@
     {activeThreadId}
     ontogglesidebar={toggleSidebar}
     onselect={handleThreadSelect}
-    oncreate={handleNewThread}
+    oncreate={openNewThreadModal}
     ondelete={(id) => { threads = threads.filter(t => t.id !== id); }}
     {loadThreads}
   />
@@ -487,11 +469,15 @@
       {loadingOlder}
       {hasMoreMessages}
       {shouldAutoScroll}
-      onreply={handleReply}
+      onreply={(message) => {
+        replyTo = message;
+      }}
       onsuggestedprompt={sendSuggested}
       onscroll={autoScroll.checkAutoScroll}
       onjumptobottom={autoScroll.jumpToBottom}
       onregisterrefs={({ getContainer, getSentinel }) => {
+        // ORDER: update the getter-state only after MessageList has registered
+        // its bound refs, so the page-owned controllers immediately read the live DOM.
         getMessagesContainer = getContainer;
         getMessagesEndEl = getSentinel;
       }}
@@ -504,7 +490,9 @@
       isStreaming={isStreamingNow}
       activeThreadId={activeThreadId}
       onbatchsend={handleBatchSend}
-      oncancelreply={handleCancelReply}
+      oncancelreply={() => {
+        replyTo = null;
+      }}
       onstop={sendStopGeneration}
     />
 
