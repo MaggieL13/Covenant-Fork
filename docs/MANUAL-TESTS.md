@@ -52,6 +52,8 @@ Do these after every UI-touching batch.
 - [ ] In a long thread, scroll near the top and confirm older messages load without the viewport jumping to a different spot
 - [ ] Open search with `Ctrl+K` or `Cmd+K`, then confirm `Escape` still closes the canvas drawer, mobile sidebar, and new-thread modal in the same order they used to
 - [ ] Open a thread with unread companion messages, scroll to the bottom, and confirm the unread badge clears
+- [ ] Use message context menu or keyboard activation on a message and confirm reply-to appears correctly in the composer
+- [ ] In the empty state, click a suggested prompt and confirm the expected prompt text sends
 
 ---
 

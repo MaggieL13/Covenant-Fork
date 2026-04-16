@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import MessageBubble from '$lib/components/MessageBubble.svelte';
   import MessageInput from '$lib/components/MessageInput.svelte';
   import ConnectionStatus from '$lib/components/ConnectionStatus.svelte';
   import AudioAutoPlayer from '$lib/components/AudioAutoPlayer.svelte';
@@ -12,6 +11,7 @@
   import CanvasDrawer from '$lib/components/chat/CanvasDrawer.svelte';
   import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
   import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
+  import MessageList from '$lib/components/chat/MessageList.svelte';
   import { createAutoScrollController } from '$lib/chat/auto-scroll.svelte';
   import { createOlderMessagesController } from '$lib/chat/older-messages.svelte';
   import { createReadObserverController } from '$lib/chat/read-observer.svelte';
@@ -36,7 +36,6 @@
     getContextUsage,
     getCompactionNotice,
     getActiveCanvasId,
-    getCanvases,
     getStreamingSegments,
     sendStopGeneration,
     isStreaming,
@@ -62,8 +61,6 @@
   let contextUsage = $derived(getContextUsage());
   let compactionNotice = $derived(getCompactionNotice());
   let activeCanvasId = $derived(getActiveCanvasId());
-  let canvases = $derived(getCanvases());
-  let activeCanvas = $derived(canvases.find((canvas) => canvas.id === activeCanvasId) ?? null);
   let streamingSegments = $derived(getStreamingSegments());
   let isStreamingNow = $derived(isStreaming());
   let rateLimitInfo = $derived(getRateLimitInfo());
@@ -168,8 +165,6 @@
 
   // Local state
   let replyTo = $state<Message | null>(null);
-  let messagesContainer = $state<HTMLDivElement | null>(null);
-  let messagesEndEl = $state<HTMLDivElement | null>(null);
   let sidebarOpen = $state(false); // mobile overlay
   let sidebarCollapsed = $state(false); // desktop collapse
 
@@ -178,17 +173,17 @@
     Object.values(unreadCounts).reduce((sum, count) => sum + count, 0)
   );
 
-  const getMessagesContainer = () => messagesContainer;
-  const getMessagesEndEl = () => messagesEndEl;
+  let getMessagesContainer = $state<() => HTMLDivElement | null>(() => null);
+  let getMessagesEndEl = $state<() => HTMLDivElement | null>(() => null);
 
   const olderMessages = createOlderMessagesController({
-    getContainer: getMessagesContainer,
+    getContainer: () => getMessagesContainer(),
     getActiveThreadId: () => activeThreadId,
     loadOlderMessagesForThread: loadOlderMessages,
   });
 
   const autoScroll = createAutoScrollController({
-    getContainer: getMessagesContainer,
+    getContainer: () => getMessagesContainer(),
     getActiveThreadId: () => activeThreadId,
     getMessagesLength: () => messages.length,
     // ORDER: auto-scroll reads the older-message flags through getters so the
@@ -200,7 +195,7 @@
   });
 
   const readObserver = createReadObserverController({
-    getSentinel: getMessagesEndEl,
+    getSentinel: () => getMessagesEndEl(),
     getActiveThreadId: () => activeThreadId,
     getMessages: () => messages,
     sendRead: (threadId, beforeId) => {
@@ -396,8 +391,9 @@
   });
 
   $effect(() => {
-    messagesEndEl;
-    // ORDER: the bottom sentinel must exist before attaching the read observer.
+    getMessagesEndEl;
+    // ORDER: the registered sentinel getter must be in place before attaching
+    // the read observer, because the page no longer owns the sentinel DOM ref.
     readObserver.setup();
     return () => readObserver.cleanup();
   });
@@ -481,130 +477,25 @@
       </div>
     {/if}
 
-    <!-- Messages area -->
-    <div
-      class="messages-container"
-      bind:this={messagesContainer}
+    <MessageList
+      {messages}
+      {companionName}
+      {toolEventsMap}
+      {streaming}
+      {streamingSegments}
+      {activeThreadId}
+      {loadingOlder}
+      {hasMoreMessages}
+      {shouldAutoScroll}
+      onreply={handleReply}
+      onsuggestedprompt={sendSuggested}
       onscroll={autoScroll.checkAutoScroll}
-    >
-      <div class="messages-list">
-        {#if loadingOlder}
-          <div class="loading-older">Loading older messages...</div>
-        {:else if !hasMoreMessages && messages.length > 0}
-          <div class="thread-start">Beginning of conversation</div>
-        {/if}
-        {#if messages.length === 0}
-          <div class="empty-state">
-            <div class="empty-icon">&#128172;</div>
-            <h3 class="empty-title">Start a conversation</h3>
-            <p class="empty-subtitle">Say hello, ask a question, or try one of these:</p>
-            <div class="suggested-prompts">
-              <button class="prompt-chip" onclick={() => sendSuggested('How are you today?')}>
-                How are you today?
-              </button>
-              <button class="prompt-chip" onclick={() => sendSuggested('Tell me something interesting')}>
-                Tell me something interesting
-              </button>
-              <button class="prompt-chip" onclick={() => sendSuggested('What can you help me with?')}>
-                What can you help me with?
-              </button>
-            </div>
-          </div>
-        {:else}
-          {#each messages as message (message.id)}
-            <div
-              id="msg-{message.id}"
-              class="message-wrapper"
-              role="button"
-              tabindex="0"
-              aria-label={`Reply to ${message.role === 'companion' ? companionName : 'You'} message`}
-              oncontextmenu={(e) => { e.preventDefault(); handleReply(message); }}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  handleReply(message);
-                }
-              }}
-            >
-              <MessageBubble message={message} toolEvents={toolEventsMap[message.id] || []} segments={message.metadata?.segments as any || null} {companionName} />
-            </div>
-          {/each}
-
-          {#if streaming.messageId}
-            {@const liveTools = toolEventsMap[streaming.messageId] || []}
-            <div class="message-wrapper">
-              {#if streaming.tokens}
-                <MessageBubble
-                  message={{
-                    id: streaming.messageId,
-                    thread_id: activeThreadId ?? '',
-                    sequence: 0,
-                    role: 'companion',
-                    content: streaming.tokens,
-                    content_type: 'text',
-                    platform: 'web',
-                    metadata: null,
-                    reply_to_id: null,
-                    reply_to_preview: null,
-                    edited_at: null,
-                    deleted_at: null,
-                    original_content: null,
-                    created_at: new Date().toISOString(),
-                    delivered_at: null,
-                    read_at: null,
-                  }}
-                  isStreaming={true}
-                  streamTokens={streaming.tokens}
-                  toolEvents={liveTools}
-                  segments={streamingSegments}
-                  {companionName}
-                />
-              {:else}
-                <!-- Live activity panel while companion is working -->
-                <div class="activity-panel" aria-label="Companion is working">
-                  <div class="activity-header">
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
-                    <span class="activity-label">{companionName} is thinking...</span>
-                  </div>
-                  {#if liveTools.length > 0}
-                    <div class="activity-tools">
-                      {#each liveTools as tool}
-                        <div class="activity-tool" class:complete={tool.isComplete} class:error={tool.isError}>
-                          <span class="tool-status">{tool.isComplete ? (tool.isError ? '!' : '') : ''}</span>
-                          <span class="tool-name">{tool.toolName}</span>
-                          {#if tool.input}
-                            <span class="tool-input">{tool.input}</span>
-                          {/if}
-                          {#if tool.elapsed}
-                            <span class="tool-elapsed">{tool.elapsed.toFixed(1)}s</span>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        {/if}
-
-        <!-- Sentinel for read receipt IntersectionObserver -->
-        <div bind:this={messagesEndEl} class="messages-end-sentinel"></div>
-      </div>
-    </div>
-
-    <!-- Scroll to bottom button -->
-    {#if !shouldAutoScroll}
-      <div class="scroll-to-bottom-wrapper">
-        <button class="scroll-to-bottom" onclick={autoScroll.jumpToBottom} aria-label="Scroll to bottom">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
-          </svg>
-        </button>
-      </div>
-    {/if}
+      onjumptobottom={autoScroll.jumpToBottom}
+      onregisterrefs={({ getContainer, getSentinel }) => {
+        getMessagesContainer = getContainer;
+        getMessagesEndEl = getSentinel;
+      }}
+    />
 
     <!-- Input area -->
     <MessageInput
@@ -747,260 +638,6 @@
 
   .command-toast-close:hover {
     opacity: 1;
-  }
-
-  .messages-container {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    background: var(--bg-primary);
-  }
-
-  .scroll-to-bottom-wrapper {
-    display: flex;
-    justify-content: center;
-    padding: 0.5rem 0;
-    flex-shrink: 0;
-  }
-
-  .scroll-to-bottom {
-    width: 2.25rem;
-    height: 2.25rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    color: var(--text-muted);
-    cursor: pointer;
-    box-shadow: var(--shadow-md);
-    transition: all 0.15s;
-    opacity: 0.85;
-  }
-
-  .scroll-to-bottom:hover {
-    opacity: 1;
-    color: var(--text-primary);
-    transform: translateY(1px);
-  }
-
-  .messages-list {
-    display: flex;
-    flex-direction: column;
-    padding: 1.5rem 1rem;
-    min-height: 100%;
-    max-width: 48rem;
-    margin: 0 auto;
-    width: 100%;
-  }
-
-  .loading-older,
-  .thread-start {
-    text-align: center;
-    padding: 1rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    letter-spacing: 0.04em;
-  }
-
-  .loading-older {
-    font-style: italic;
-  }
-
-  .thread-start {
-    font-family: var(--font-heading);
-    opacity: 0.5;
-  }
-
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    flex: 1;
-    gap: 0.5rem;
-    padding: 2rem;
-    text-align: center;
-  }
-
-  .empty-icon {
-    font-size: 3rem;
-    line-height: 1;
-    margin-bottom: 0.25rem;
-    opacity: 0.7;
-  }
-
-  .empty-title {
-    font-family: var(--font-heading);
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-  }
-
-  .empty-subtitle {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-    margin: 0 0 0.75rem;
-  }
-
-  .suggested-prompts {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.5rem;
-    max-width: 480px;
-  }
-
-  .prompt-chip {
-    padding: 0.5rem 1rem;
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    font-size: 0.8125rem;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .prompt-chip:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-    border-color: var(--border-hover);
-  }
-
-  .message-wrapper {
-    width: 100%;
-    min-width: 0;
-    display: flex;
-  }
-
-  :global(.message-wrapper.highlight-flash) {
-    animation: highlightFlash 2s ease-out;
-  }
-
-  @keyframes highlightFlash {
-    0% { background: rgba(155, 114, 207, 0.2); }
-    100% { background: transparent; }
-  }
-
-  .activity-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem 1.25rem;
-    border-radius: 0;
-    align-self: flex-start;
-    margin: 0.75rem 0;
-    width: 100%;
-  }
-
-  .activity-header {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .activity-label {
-    font-size: 0.8125rem;
-    color: var(--text-muted);
-    margin-left: 0.25rem;
-    font-style: italic;
-    letter-spacing: 0.02em;
-  }
-
-  .activity-tools {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding-top: 0.25rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .activity-tool {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-    opacity: 0.7;
-    animation: fadeIn 0.3s ease-out;
-  }
-
-  .activity-tool.complete {
-    opacity: 0.4;
-  }
-
-  .activity-tool.error {
-    color: var(--error, #ef4444);
-  }
-
-  .tool-status {
-    width: 1rem;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  .activity-tool .tool-name {
-    color: var(--gold-dim);
-    white-space: nowrap;
-  }
-
-  .activity-tool .tool-input {
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tool-elapsed {
-    color: var(--text-muted);
-    font-size: 0.65rem;
-    font-family: var(--font-mono);
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
-  .typing-dot {
-    width: 0.3rem;
-    height: 0.3rem;
-    background: var(--gold-dim);
-    border-radius: 50%;
-    animation: typingBounce 1.4s infinite ease-in-out;
-  }
-
-  .typing-dot:nth-child(2) {
-    animation-delay: 0.2s;
-  }
-
-  .typing-dot:nth-child(3) {
-    animation-delay: 0.4s;
-  }
-
-  @keyframes typingBounce {
-    0%, 60%, 100% {
-      transform: translateY(0);
-      opacity: 0.4;
-    }
-    30% {
-      transform: translateY(-0.375rem);
-      opacity: 1;
-    }
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-0.25rem); }
-    to { opacity: 0.7; }
-  }
-
-  /* Mobile styles */
-  @media (max-width: 768px) {
-    .messages-list {
-      padding: 0.75rem;
-      max-width: 100%;
-    }
-
   }
 
   .toast-error {
