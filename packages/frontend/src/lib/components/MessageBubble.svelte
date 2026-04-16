@@ -2,6 +2,9 @@
   import type { Message, MessageSegment, Reaction } from '@resonant/shared';
   import type { ToolEvent } from '$lib/stores/websocket.svelte';
   import { send } from '$lib/stores/websocket.svelte';
+  import MessageContent from '$lib/components/message-bubble/MessageContent.svelte';
+  import MessageMedia from '$lib/components/message-bubble/MessageMedia.svelte';
+  import MessageMeta from '$lib/components/message-bubble/MessageMeta.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
   import { apiFetch } from '$lib/utils/api';
 
@@ -13,16 +16,6 @@
     segments?: MessageSegment[] | null;
     companionName?: string;
   }>();
-
-  // Format timestamp
-  function formatTime(timestamp: string): string {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-  }
 
   // Determine if message is deleted
   const isDeleted = $derived(!!message.deleted_at);
@@ -47,16 +40,6 @@
     const withRefs = renderCanvasRefs(message.content);
     return renderMarkdown(withRefs);
   });
-
-  // Image lightbox state
-  let showLightbox = $state(false);
-
-  // Format file size for display
-  function formatFileSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
 
   function formatToolOutput(raw: string): string {
     if (!raw) return '';
@@ -94,48 +77,6 @@
     if (next.has(toolId)) next.delete(toolId);
     else next.add(toolId);
     expandedToolIds = next;
-  }
-
-  // Custom audio player state
-  let audioEl: HTMLAudioElement | null = $state(null);
-  let audioPlaying = $state(false);
-  let audioDuration = $state(0);
-  let audioCurrentTime = $state(0);
-
-  function toggleAudio() {
-    if (!audioEl) return;
-    if (audioPlaying) {
-      audioEl.pause();
-    } else {
-      audioEl.play();
-    }
-  }
-
-  function onAudioTimeUpdate() {
-    if (audioEl) audioCurrentTime = audioEl.currentTime;
-  }
-
-  function onAudioLoaded() {
-    if (audioEl && isFinite(audioEl.duration)) audioDuration = audioEl.duration;
-  }
-
-  function onAudioEnded() {
-    audioPlaying = false;
-    audioCurrentTime = 0;
-  }
-
-  function onAudioSeek(e: MouseEvent) {
-    if (!audioEl || !audioDuration) return;
-    const bar = e.currentTarget as HTMLElement;
-    const rect = bar.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    audioEl.currentTime = pct * audioDuration;
-  }
-
-  function formatAudioTime(seconds: number): string {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
   // Read aloud (on-demand TTS) — cache blob URLs by message ID across instances
@@ -264,6 +205,8 @@
   let messageContentEl: HTMLDivElement | undefined = $state();
 
   $effect(() => {
+    // ORDER: keep copy-button registration parent-owned and run after child content/media
+    // markup renders so every <pre> inside the shared message-content wrapper is present.
     if (!messageContentEl) return;
     const codeBlocks = messageContentEl.querySelectorAll('pre');
     codeBlocks.forEach((pre) => {
@@ -307,34 +250,20 @@
     class:sticker-only={contentType === 'sticker'}
     aria-label="{message.role} message"
   >
-    <div class="message-header">
-      <span class="role">{message.role === 'companion' ? companionName : 'You'}</span>
-      <span class="time">{formatTime(message.created_at)}</span>
-      {#if message.edited_at && !isDeleted}
-        <span class="edited">(edited)</span>
-      {/if}
-      {#if message.role === 'companion'}
-        {#if hasSegments}
-          <button
-            class="tools-toggle"
-            onclick={(e) => { e.stopPropagation(); hideInlineTools = !hideInlineTools; }}
-            title="Toggle inline tools"
-            aria-label="Toggle inline tools"
-          >
-            {hideInlineTools ? 'show tools' : 'hide tools'}
-          </button>
-        {:else if hasTools}
-          <button
-            class="tools-toggle"
-            onclick={(e) => { e.stopPropagation(); showTools = !showTools; }}
-            title="Toggle tool activity"
-            aria-label="Toggle tool activity"
-          >
-            {showTools ? 'hide tools' : `${toolEvents.length} tool${toolEvents.length === 1 ? '' : 's'}`}
-          </button>
-        {/if}
-      {/if}
-    </div>
+    <MessageMeta
+      role={message.role}
+      companionName={companionName}
+      createdAt={message.created_at}
+      editedAt={message.edited_at}
+      isDeleted={isDeleted}
+      hasSegments={hasSegments}
+      hasTools={hasTools}
+      hideInlineTools={hideInlineTools}
+      showTools={showTools}
+      toolEventsCount={toolEvents.length}
+      onToggleInlineTools={(e) => { e.stopPropagation(); hideInlineTools = !hideInlineTools; }}
+      onToggleTools={(e) => { e.stopPropagation(); showTools = !showTools; }}
+    />
 
     {#if message.reply_to_preview && !isDeleted}
       <div class="reply-preview">
@@ -345,83 +274,15 @@
 
     <div class="message-content" bind:this={messageContentEl}>
       {#if isDeleted}
-        <span class="deleted-text">This message was deleted</span>
-      {:else if contentType === 'sticker'}
-        <div class="sticker-message">
-          <img src={message.content} alt={metadata?.stickerName ? `:${metadata.packName}_${metadata.stickerName}:` : 'sticker'} class="standalone-sticker" />
-        </div>
-      {:else if contentType === 'image'}
-        <div class="media-image">
-          <button class="image-button" onclick={() => showLightbox = true} aria-label="View full size">
-            <img src={message.content} alt="" loading="lazy" />
-          </button>
-        </div>
-        {#if showLightbox}
-          <div class="lightbox" role="dialog" aria-label="Full size image">
-            <button class="lightbox-close" onclick={() => showLightbox = false} aria-label="Close">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-            </button>
-            <button class="lightbox-backdrop" onclick={() => showLightbox = false} aria-label="Close lightbox"></button>
-            <img src={message.content} alt="" />
-          </div>
-        {/if}
-      {:else if contentType === 'audio'}
-        <div class="media-audio">
-          <audio
-            bind:this={audioEl}
-            preload="metadata"
-            src={message.content}
-            ontimeupdate={onAudioTimeUpdate}
-            onloadedmetadata={onAudioLoaded}
-            ondurationchange={onAudioLoaded}
-            onplay={() => audioPlaying = true}
-            onpause={() => audioPlaying = false}
-            onended={onAudioEnded}
-          >
-            <track kind="captions" />
-          </audio>
-          <div class="audio-player">
-            <button class="audio-play-btn" onclick={toggleAudio} aria-label={audioPlaying ? 'Pause' : 'Play'}>
-              {#if audioPlaying}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-              {:else}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-              {/if}
-            </button>
-            <span class="audio-time">{formatAudioTime(audioCurrentTime)}</span>
-            <button class="audio-bar" onclick={onAudioSeek} aria-label="Seek">
-              <div class="audio-track">
-                <div class="audio-progress" style:width="{audioDuration ? (audioCurrentTime / audioDuration) * 100 : 0}%"></div>
-              </div>
-            </button>
-            <span class="audio-time">{formatAudioTime(audioDuration)}</span>
-          </div>
-          {#if metadata?.transcript}
-            <div class="audio-transcript">{metadata.transcript}</div>
-          {/if}
-        </div>
-      {:else if contentType === 'file'}
-        <div class="media-file">
-          <a href={message.content} download={metadata?.filename || 'download'} class="file-link">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/>
-            </svg>
-            <div class="file-info">
-              <span class="file-name">{metadata?.filename || 'File'}</span>
-              {#if metadata?.size}
-                <span class="file-size">{formatFileSize(metadata.size as number)}</span>
-              {/if}
-            </div>
-          </a>
-        </div>
+        <MessageContent deleted />
+      {:else if contentType === 'sticker' || contentType === 'image' || contentType === 'audio' || contentType === 'file'}
+        <MessageMedia contentType={contentType} content={message.content} metadata={metadata} alignRight={message.role === 'user'} />
       {:else if hasSegments && !hideInlineTools}
         <!-- Interleaved mode: text, tools, and thinking inline -->
         <div class="interleaved-content">
           {#each segments as seg, i (seg.type === 'tool' ? seg.toolId : `${seg.type}-${i}`)}
             {#if seg.type === 'text'}
-              <div class="markdown-content">
-                {@html renderMarkdown(seg.content)}
-              </div>
+              <MessageContent html={renderMarkdown(seg.content)} />
             {:else if seg.type === 'thinking'}
               <div class="thinking-block">
                 <button class="thinking-header" onclick={(e) => { e.stopPropagation(); toggleThinking(i); }}>
@@ -465,12 +326,7 @@
           {/if}
         </div>
       {:else}
-        <div class="markdown-content">
-          {@html renderedContent()}
-        </div>
-        {#if isStreaming}
-          <span class="cursor">|</span>
-        {/if}
+        <MessageContent html={renderedContent()} showCursor={isStreaming} />
       {/if}
     </div>
 
@@ -600,7 +456,7 @@
           {/if}
         </div>
         <div class="user-footer-right">
-          <span class="time-inline">{formatTime(message.created_at)}</span>
+          <span class="time-inline">{new Date(message.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
           {#if readStatus()}
             {#if readStatus() === 'read'}
               <span class="check read" title="Read">&#10003;&#10003;</span>
@@ -629,30 +485,6 @@
     border: none !important;
     box-shadow: none !important;
     padding: 0.4rem 1.1rem !important;
-  }
-
-  .message.sticker-only .message-header {
-    padding: 0;
-  }
-
-  .sticker-message {
-    display: flex;
-    padding: 0;
-  }
-
-  .message.user .sticker-message {
-    justify-content: flex-end;
-  }
-
-  .standalone-sticker {
-    max-width: 180px;
-    max-height: 180px;
-    border-radius: 0.5rem;
-    transition: transform 0.1s ease;
-  }
-
-  .standalone-sticker:hover {
-    transform: scale(1.05);
   }
 
   :global(.inline-sticker) {
@@ -724,47 +556,6 @@
     opacity: 0.6;
   }
 
-  .message-header {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    font-size: 0.875rem;
-    flex-wrap: wrap;
-  }
-
-  .role {
-    display: none;
-  }
-
-  .time {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-  }
-
-  .edited {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    font-style: italic;
-  }
-
-  .tools-toggle {
-    margin-left: auto;
-    font-size: 0.625rem;
-    color: var(--text-muted);
-    background: transparent;
-    border: 1px solid var(--border);
-    padding: 0.125rem 0.5rem;
-    border-radius: 0.25rem;
-    font-family: var(--font-mono);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .tools-toggle:hover {
-    color: var(--text-secondary);
-    border-color: var(--border-hover);
-  }
-
   .reply-preview {
     display: flex;
     gap: 0.5rem;
@@ -822,11 +613,6 @@
   .message-content :global(.copy-btn:hover) {
     background: rgba(255, 255, 255, 0.15);
     color: var(--text-primary, #e0e0e0);
-  }
-
-  .deleted-text {
-    font-style: italic;
-    color: var(--text-muted);
   }
 
   /* Tools panel */
@@ -1184,10 +970,6 @@
   }
 
   /* Hide header for user messages — time + checks shown inline instead */
-  .message.user .message-header {
-    display: none;
-  }
-
   .user-footer {
     display: flex;
     align-items: center;
@@ -1224,315 +1006,6 @@
     color: var(--accent);
   }
 
-  .markdown-content :global(p) {
-    margin: 0.5rem 0;
-  }
-
-  .markdown-content :global(p:first-child) {
-    margin-top: 0;
-  }
-
-  .markdown-content :global(p:last-child) {
-    margin-bottom: 0;
-  }
-
-  .markdown-content :global(code) {
-    background: var(--bg-tertiary);
-    padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-    font-family: var(--font-mono);
-    font-size: 0.875em;
-  }
-
-  .markdown-content :global(pre) {
-    background: var(--bg-tertiary);
-    padding: 0.75rem;
-    border-radius: var(--radius-sm);
-    overflow-x: auto;
-    margin: 0.5rem 0;
-  }
-
-  .markdown-content :global(pre code) {
-    background: none;
-    padding: 0;
-  }
-
-  .markdown-content :global(a) {
-    color: var(--accent);
-    text-decoration: underline;
-    text-decoration-color: var(--accent-muted);
-  }
-
-  .markdown-content :global(strong) {
-    font-weight: 600;
-  }
-
-  .markdown-content :global(em) {
-    font-style: italic;
-  }
-
-  .markdown-content :global(ul),
-  .markdown-content :global(ol) {
-    margin: 0.5rem 0;
-    padding-left: 1.5rem;
-  }
-
-  .markdown-content :global(blockquote) {
-    border-left: 2px solid var(--accent-muted);
-    padding-left: 1rem;
-    margin: 0.5rem 0;
-    color: var(--text-secondary);
-  }
-
-  .markdown-content :global(table) {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 0.75rem 0;
-    font-size: 0.875rem;
-  }
-
-  .markdown-content :global(thead) {
-    background: var(--bg-tertiary);
-  }
-
-  .markdown-content :global(th) {
-    padding: 0.5rem 0.75rem;
-    text-align: left;
-    border: 1px solid var(--border);
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .markdown-content :global(td) {
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-  }
-
-  .markdown-content :global(tbody tr:nth-child(even)) {
-    background: var(--bg-hover);
-  }
-
-  .markdown-content :global(hr) {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 1rem 0;
-  }
-
-  .markdown-content :global(li:has(> input[type="checkbox"])) {
-    list-style: none;
-    margin-left: -1.25rem;
-  }
-
-  .markdown-content :global(input[type="checkbox"]) {
-    margin-right: 0.375rem;
-    accent-color: var(--accent);
-    pointer-events: none;
-  }
-
-  /* Media: Image */
-  .media-image {
-    margin: 0.25rem 0;
-  }
-
-  .image-button {
-    display: block;
-    padding: 0;
-    background: none;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-
-  .media-image img {
-    max-width: 100%;
-    max-height: 400px;
-    border-radius: var(--radius-sm);
-    display: block;
-    object-fit: contain;
-  }
-
-  .lightbox {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
-  }
-
-  .lightbox-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.85);
-  }
-
-  .lightbox-close {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    z-index: 1001;
-    padding: 0.5rem;
-    color: white;
-    background: var(--bg-active);
-    border-radius: 50%;
-    transition: background 0.2s;
-  }
-
-  .lightbox-close:hover {
-    background: var(--bg-hover);
-  }
-
-  .lightbox img {
-    max-width: 90vw;
-    max-height: 90vh;
-    object-fit: contain;
-    z-index: 1001;
-    border-radius: var(--radius-sm);
-  }
-
-  /* Media: Audio — custom player */
-  .media-audio {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin: 0.25rem 0;
-  }
-
-  .media-audio audio {
-    display: none;
-  }
-
-  .audio-player {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 0.5rem 0.25rem;
-    min-width: 220px;
-    max-width: 320px;
-  }
-
-  .audio-play-btn {
-    width: 2rem;
-    height: 2rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--bg-primary);
-    flex-shrink: 0;
-    transition: all var(--transition);
-    cursor: pointer;
-  }
-
-  .audio-play-btn:hover {
-    background: var(--accent-hover);
-  }
-
-  .audio-time {
-    font-size: 0.6875rem;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-    min-width: 2.25rem;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  .audio-bar {
-    flex: 1;
-    padding: 0.5rem 0;
-    cursor: pointer;
-    background: none;
-  }
-
-  .audio-track {
-    height: 3px;
-    background: var(--border-hover);
-    border-radius: 2px;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .audio-progress {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.1s linear;
-  }
-
-  .audio-bar:hover .audio-track {
-    height: 4px;
-  }
-
-  .audio-bar:hover .audio-progress {
-    background: var(--accent-hover);
-  }
-
-  .audio-transcript {
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    font-style: italic;
-  }
-
-  /* Media: File */
-  .media-file {
-    margin: 0.25rem 0;
-  }
-
-  .file-link {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    text-decoration: none;
-    transition: background 0.2s;
-  }
-
-  .file-link:hover {
-    background: var(--bg-hover);
-  }
-
-  .file-link svg {
-    flex-shrink: 0;
-    color: var(--accent);
-  }
-
-  .file-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    overflow: hidden;
-  }
-
-  .file-name {
-    font-size: 0.875rem;
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .file-size {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-  }
-
-  .cursor {
-    display: inline-block;
-    animation: blink 1s infinite;
-    color: var(--accent);
-    margin-left: 0.125rem;
-  }
-
-  @keyframes blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
-  }
-
   @media (max-width: 768px) {
     .message.user {
       max-width: 85%;
@@ -1550,10 +1023,6 @@
       max-width: calc(100vw - 4rem);
     }
 
-    .markdown-content :global(pre) {
-      max-width: calc(100vw - 4rem);
-    }
-
     .tools-panel {
       max-width: calc(100vw - 4rem);
       overflow: hidden;
@@ -1564,22 +1033,5 @@
       overflow: hidden;
     }
 
-    .lightbox {
-      padding: 0;
-    }
-
-    .lightbox-close {
-      top: max(env(safe-area-inset-top, 0.5rem), 0.75rem);
-      right: 0.75rem;
-      padding: 0.75rem;
-      background: rgba(0, 0, 0, 0.6);
-      z-index: 1002;
-    }
-
-    .lightbox img {
-      max-width: 100vw;
-      max-height: 100vh;
-      border-radius: 0;
-    }
   }
 </style>
