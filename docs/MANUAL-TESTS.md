@@ -27,34 +27,62 @@ Do these after every UI-touching batch.
 - [ ] Message appears in the correct thread (not a different one)
 - [ ] Message persists after refresh
 
+### 4. New thread modal
+- [ ] Open the new-thread modal from the chat UI
+- [ ] Close it without creating anything
+- [ ] Re-open it, create a named thread, and confirm the new thread opens selected
+
+### 5. Search overlay
+- [ ] Open search from the chat button and close it again
+- [ ] Open search with `Ctrl+K` or `Cmd+K`
+- [ ] Search for a known message, select a result, and confirm chat jumps to the right thread/message
+
+### 6. Canvas drawer
+- [ ] Open the canvas drawer from the chat header button and close it with the overlay
+- [ ] Open an active canvas and confirm the drawer shows the canvas view, not the canvas list
+- [ ] Use the canvas reference action and confirm the canvas is attached into the composer
+
+### 7. Header and sidebar chrome
+- [ ] Open the mobile sidebar from the menu button and close it with the overlay
+- [ ] Toggle the desktop sidebar collapse button and confirm the thread list hides/shows cleanly
+- [ ] Confirm header buttons still open search, canvas, files, settings, and theme toggle correctly
+
+### 8. Chat interaction behavior
+- [ ] Scroll up in an active thread until the jump-to-bottom button appears, then click it and confirm chat snaps back to the latest messages
+- [ ] In a long thread, scroll near the top and confirm older messages load without the viewport jumping to a different spot
+- [ ] Open search with `Ctrl+K` or `Cmd+K`, then confirm `Escape` still closes the canvas drawer, mobile sidebar, and new-thread modal in the same order they used to
+- [ ] Open a thread with unread companion messages, scroll to the bottom, and confirm the unread badge clears
+- [ ] Use message context menu or keyboard activation on a message and confirm reply-to appears correctly in the composer
+- [ ] In the empty state, click a suggested prompt and confirm the expected prompt text sends
+
 ---
 
 ## 🔍 Deeper Checks (≤ 5 minutes)
 
 Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 
-### 4. Thread list behavior
+### 9. Thread list behavior
 - [ ] Pin a thread → moves to top of list, stays after refresh
 - [ ] Unpin → drops back into chronological position
 - [ ] Archive a thread → disappears from main list
 - [ ] Toggle "show archived" → archived thread reappears
 - [ ] Unarchive → thread returns to main list
 
-### 5. Canvas
+### 10. Canvas
 - [ ] Create a canvas inside a thread
 - [ ] Canvas appears in canvas list
 - [ ] Delete the thread that owns the canvas
 - [ ] **Canvas still exists** in the canvas list (detached, not deleted)
 - [ ] Open the detached canvas — still readable
 
-### 6. Reactions
+### 11. Reactions
 - [ ] React to a message with an emoji
 - [ ] Reaction appears on the message, persists after refresh
 - [ ] Add a second different emoji → both show
 - [ ] Remove a reaction → only the remaining one shows
 - [ ] Companion reacting shows distinct attribution (not user)
 
-### 7. Streaming feel
+### 12. Streaming feel
 - [ ] Send a message that triggers a companion response
 - [ ] Response streams in character-by-character (not all at once at the end)
 - [ ] Tool use shows an indicator (thinking, searching, etc.)
