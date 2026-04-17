@@ -88,6 +88,16 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Tool use shows an indicator (thinking, searching, etc.)
 - [ ] After response finishes, thread list updates (last message preview, timestamp)
 
+### 13. Settings basics
+- [ ] Open Settings and confirm current companion name, user name, and timezone render correctly
+- [ ] Change companion name, user name, and timezone; save; refresh; confirm the values persist
+- [ ] Change chat model, autonomous model, and thinking effort; save; refresh; confirm the values persist
+- [ ] Confirm a saved chat model change is reflected in the chat header model indicator
+- [ ] Toggle orchestrator, voice, Discord, and Telegram; save; refresh; confirm each toggle persists
+- [ ] Verify the Voice, Discord, and Telegram setup guides only appear when their related toggles are enabled
+- [ ] Set or change the password; save; confirm the success behavior is unchanged and the explanatory text still matches whether a password exists
+- [ ] Confirm shared save success and error messages still render in the same place at the bottom of the panel
+
 ---
 
 ## 🚨 After Batch 7 (migrations)

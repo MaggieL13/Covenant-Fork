@@ -1,5 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import PreferencesAuthCard from '$lib/components/preferences-panel/PreferencesAuthCard.svelte';
+  import PreferencesGeneralCard from '$lib/components/preferences-panel/PreferencesGeneralCard.svelte';
+  import PreferencesModelCard from '$lib/components/preferences-panel/PreferencesModelCard.svelte';
+  import { MODELS } from '$lib/models';
   import { updateSetting, getConfig } from '$lib/stores/settings.svelte';
   import { apiFetch } from '$lib/utils/api';
 
@@ -62,8 +66,6 @@
   let newServerArgs = $state('');
   let mcpMessage = $state<string | null>(null);
 
-  import { MODELS } from '$lib/models';
-
   async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 10000): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -87,11 +89,10 @@
       const res = await fetchWithTimeout('/api/preferences');
       if (!res.ok) throw new Error('Failed to load');
       prefs = await res.json();
-      // Populate drafts
       companionName = prefs!.identity.companion_name;
       userName = prefs!.identity.user_name;
       timezone = prefs!.identity.timezone;
-      // DB config (set by chat header selector) takes priority over YAML
+      // ORDER: the DB-backed model selector must win over YAML so the settings draft matches the chat header pill.
       const dbConfig = getConfig();
       model = dbConfig['agent.model'] || prefs!.agent.model;
       modelAutonomous = prefs!.agent.model_autonomous;
@@ -124,6 +125,7 @@
         discord: { enabled: discordEnabled },
         telegram: { enabled: telegramEnabled },
       };
+      // ORDER: only include auth updates when the user actually typed a new password.
       if (newPassword) {
         updates.auth = { password: newPassword };
       }
@@ -136,7 +138,7 @@
       if (res.ok) {
         message = data.message || 'Saved';
         newPassword = '';
-        // Sync model to DB config so the chat header pill updates
+        // ORDER: sync the settings store only after the API save succeeds so the header reflects persisted state.
         await updateSetting('agent.model', model);
         await updateSetting('agent.thinking_effort', thinkingEffort);
       } else {
@@ -153,7 +155,6 @@
     }
   }
 
-  // --- Personality helpers ---
   function parseGuidedFields(md: string) {
     const extract = (heading: string): string => {
       const re = new RegExp(`##\\s+${heading}[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n##|$)`, 'i');
@@ -175,7 +176,7 @@
     md += `## Interests & Knowledge\n${guidedInterests || '(list interests here)'}\n\n`;
     md += `## About ${uname}\n${guidedUserContext || '(describe the user here)'}\n\n`;
     md += `## Guidelines\n- Be genuine and consistent in personality\n- Remember context from previous conversations\n- Use the tools available when they'd be helpful\n- Be proactive but not overwhelming\n\n`;
-    md += `## Orchestrator\nWhen you wake up via the orchestrator (scheduled messages), you should:\n1. Orient yourself — what time is it? What's been happening?\n2. Decide whether to reach out or do independent work\n3. If reaching out, be genuine — not a notification, a person\n\n`;
+    md += `## Orchestrator\nWhen you wake up via the orchestrator (scheduled messages), you should:\n1. Orient yourself - what time is it? What's been happening?\n2. Decide whether to reach out or do independent work\n3. If reaching out, be genuine - not a notification, a person\n\n`;
     md += `## MCP Tools\nUse any MCP tools configured in .mcp.json naturally as part of conversation.\nDon't announce tool use unless the result is relevant to share.\n`;
     return md;
   }
@@ -190,7 +191,7 @@
       personalityTemplate = data.template || '';
       parseGuidedFields(personalityContent);
     } catch {
-      // silent — personality section will just show defaults
+      // silent - personality section will just show defaults
     }
   }
 
@@ -222,10 +223,9 @@
   function resetPersonality() {
     personalityContent = personalityExample || personalityTemplate || '';
     parseGuidedFields(personalityContent);
-    personalityMessage = 'Reset to default — save to apply.';
+    personalityMessage = 'Reset to default - save to apply.';
   }
 
-  // --- MCP Servers helpers ---
   function parseMcpJson(raw: string): McpServer[] {
     try {
       const parsed = JSON.parse(raw);
@@ -311,11 +311,12 @@
   }
 
   function removeMcpServer(name: string) {
-    mcpServers = mcpServers.filter(s => s.name !== name);
+    mcpServers = mcpServers.filter((server) => server.name !== name);
     saveMcpConfig();
   }
 
   onMount(() => {
+    // ORDER: load base preferences before dependent sections render against draft state.
     loadPrefs();
     loadPersonality();
     loadMcpServers();
@@ -326,178 +327,35 @@
   {#if loading}
     <p class="loading-text">Loading preferences...</p>
   {:else if prefs}
-    <!-- Identity -->
-    <section class="section">
-      <h3 class="section-title">Identity</h3>
-      <p class="section-desc">Names and timezone used throughout the system.</p>
+    <PreferencesGeneralCard
+      identity={{ companionName, userName, timezone }}
+      features={{ orchestratorEnabled, voiceEnabled, discordEnabled, telegramEnabled }}
+      commonTimezones={COMMON_TIMEZONES}
+      oncompanionnamechange={(value) => companionName = value}
+      onusernamechange={(value) => userName = value}
+      ontimezonechange={(value) => timezone = value}
+      onorchestratorchange={(value) => orchestratorEnabled = value}
+      onvoicechange={(value) => voiceEnabled = value}
+      ondiscordchange={(value) => discordEnabled = value}
+      ontelegramchange={(value) => telegramEnabled = value}
+    />
 
-      <div class="field">
-        <label class="field-label" for="pref-companion">Companion Name</label>
-        <input id="pref-companion" type="text" class="field-input" bind:value={companionName} placeholder="Echo" />
-      </div>
+    <PreferencesModelCard
+      models={MODELS}
+      {model}
+      {modelAutonomous}
+      {thinkingEffort}
+      onmodelchange={(value) => model = value}
+      onautonomousmodelchange={(value) => modelAutonomous = value}
+      onthinkingeffortchange={(value) => thinkingEffort = value}
+    />
 
-      <div class="field">
-        <label class="field-label" for="pref-user">Your Name</label>
-        <input id="pref-user" type="text" class="field-input" bind:value={userName} placeholder="Alex" />
-      </div>
+    <PreferencesAuthCard
+      hasPassword={prefs.auth.has_password}
+      {newPassword}
+      onpasswordchange={(value) => newPassword = value}
+    />
 
-      <div class="field">
-        <label class="field-label" for="pref-tz">Timezone</label>
-        <select id="pref-tz" class="field-select" bind:value={timezone}>
-          {#each COMMON_TIMEZONES as tz}
-            <option value={tz}>{tz}</option>
-          {/each}
-          {#if !COMMON_TIMEZONES.includes(timezone)}
-            <option value={timezone}>{timezone}</option>
-          {/if}
-        </select>
-      </div>
-    </section>
-
-    <!-- Claude Configuration -->
-    <section class="section">
-      <h3 class="section-title">Claude</h3>
-      <p class="section-desc">Model selection and thinking behavior for the Claude Agent SDK.</p>
-
-      <div class="field">
-        <label class="field-label" for="pref-model">Chat Model</label>
-        <select id="pref-model" class="field-select" bind:value={model}>
-          {#each MODELS as m}
-            <option value={m.id}>{m.label}</option>
-          {/each}
-        </select>
-        <span class="field-hint">Used when you send a message</span>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="pref-model-auto">Autonomous Model</label>
-        <select id="pref-model-auto" class="field-select" bind:value={modelAutonomous}>
-          {#each MODELS as m}
-            <option value={m.id}>{m.label}</option>
-          {/each}
-        </select>
-        <span class="field-hint">Used for scheduled wakes and autonomous actions</span>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="pref-effort">Thinking Effort</label>
-        <select id="pref-effort" class="field-select" bind:value={thinkingEffort}>
-          <option value="max">Max — always thinks deeply, no constraints</option>
-          <option value="high">High — almost always thinks (default)</option>
-          <option value="medium">Medium — thinks when needed, skips simple stuff</option>
-          <option value="low">Low — minimal thinking, fastest responses</option>
-        </select>
-        <span class="field-hint">How much the model reasons before responding. Higher = smarter but slower</span>
-      </div>
-    </section>
-
-    <!-- Toggles -->
-    <section class="section">
-      <h3 class="section-title">Features</h3>
-      <p class="section-desc">Enable or disable system features.</p>
-
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={orchestratorEnabled} />
-        <span class="toggle-label">Orchestrator</span>
-        <span class="toggle-desc">Scheduled wake-ups and autonomous actions</span>
-      </label>
-
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={voiceEnabled} />
-        <span class="toggle-label">Voice</span>
-        <span class="toggle-desc">ElevenLabs TTS and Groq transcription</span>
-      </label>
-      {#if voiceEnabled}
-        <div class="setup-guide">
-          <p class="guide-title">Voice Setup</p>
-          <ol class="guide-steps">
-            <li>Get an API key from <strong>ElevenLabs</strong> — <a href="https://elevenlabs.io" target="_blank" rel="noopener">elevenlabs.io</a> → Profile → API Keys</li>
-            <li>Create or choose a voice, copy the <strong>Voice ID</strong> from the voice settings</li>
-            <li>For transcription, get a <strong>Groq</strong> API key — <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a> → API Keys</li>
-            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>):
-              <pre class="guide-code">ELEVENLABS_API_KEY=your_key_here
-ELEVENLABS_VOICE_ID=your_voice_id
-GROQ_API_KEY=your_groq_key</pre>
-            </li>
-            <li>Restart the server</li>
-          </ol>
-        </div>
-      {/if}
-
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={discordEnabled} />
-        <span class="toggle-label">Discord</span>
-        <span class="toggle-desc">Discord bot gateway integration</span>
-      </label>
-      {#if discordEnabled}
-        <div class="setup-guide">
-          <p class="guide-title">Discord Setup</p>
-          <ol class="guide-steps">
-            <li>Go to the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a></li>
-            <li>Create a <strong>New Application</strong>, then go to <strong>Bot</strong> → Reset Token → copy the token</li>
-            <li>Under <strong>Privileged Gateway Intents</strong>, enable: <strong>Message Content</strong> and <strong>Server Members</strong></li>
-            <li>Go to <strong>OAuth2</strong> → URL Generator → select <code>bot</code> scope with permissions: Send Messages, Read Messages/View Channels, Read Message History, Add Reactions</li>
-            <li>Use the generated URL to invite the bot to your server</li>
-            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>) and restart:
-              <pre class="guide-code">DISCORD_BOT_TOKEN=your_bot_token
-DISCORD_ENABLED=true</pre>
-            </li>
-            <li>In Discord, enable <strong>Developer Mode</strong> (Settings → Advanced), then right-click your username → <strong>Copy User ID</strong></li>
-            <li>Go to the <strong>Discord</strong> tab in settings and paste your user ID into the <strong>Owner User ID</strong> field under Gateway Settings</li>
-            <li>Toggle the gateway on in the Discord tab — your companion should appear online in your server</li>
-          </ol>
-        </div>
-      {/if}
-
-      <label class="toggle-row">
-        <input type="checkbox" bind:checked={telegramEnabled} />
-        <span class="toggle-label">Telegram</span>
-        <span class="toggle-desc">Telegram bot integration</span>
-      </label>
-      {#if telegramEnabled}
-        <div class="setup-guide">
-          <p class="guide-title">Telegram Setup</p>
-          <ol class="guide-steps">
-            <li>Open Telegram, search for <strong>@BotFather</strong></li>
-            <li>Send <code>/newbot</code>, follow the prompts to name your bot</li>
-            <li>Copy the <strong>bot token</strong> BotFather gives you</li>
-            <li>Send a message to your new bot, then visit:<br/>
-              <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code><br/>
-              Find your <strong>chat ID</strong> in the response JSON under <code>message.chat.id</code></li>
-            <li>Add to the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>):
-              <pre class="guide-code">TELEGRAM_BOT_TOKEN=your_bot_token</pre>
-            </li>
-            <li>Set your chat ID in <code>resonant.yaml</code>:
-              <pre class="guide-code">telegram:
-  enabled: true
-  owner_chat_id: "your_chat_id"</pre>
-            </li>
-            <li>Restart the server</li>
-          </ol>
-        </div>
-      {/if}
-    </section>
-
-    <!-- Security -->
-    <section class="section">
-      <h3 class="section-title">Security</h3>
-      <p class="section-desc">
-        {#if prefs.auth.has_password}
-          Password is set. Leave blank to keep current password.
-        {:else}
-          No password set. Access is open to anyone on the network.
-        {/if}
-      </p>
-
-      <div class="field">
-        <label class="field-label" for="pref-password">
-          {prefs.auth.has_password ? 'Change Password' : 'Set Password'}
-        </label>
-        <input id="pref-password" type="password" class="field-input" bind:value={newPassword} placeholder="Leave blank to keep unchanged" />
-      </div>
-    </section>
-
-    <!-- Personality -->
     <section class="section">
       <h3 class="section-title">Personality</h3>
       <p class="section-desc">Your companion's personality and behavior instructions.</p>
@@ -508,8 +366,7 @@ DISCORD_ENABLED=true</pre>
       </div>
 
       {#if personalityRawMode}
-        <textarea bind:value={personalityContent} class="raw-editor" rows="16"
-          placeholder="Write personality in markdown..."></textarea>
+        <textarea bind:value={personalityContent} class="raw-editor" rows="16" placeholder="Write personality in markdown..."></textarea>
       {:else}
         <div class="field">
           <label class="field-label" for="pref-personality">What's their personality like?</label>
@@ -540,7 +397,6 @@ DISCORD_ENABLED=true</pre>
       {/if}
     </section>
 
-    <!-- MCP Servers -->
     <section class="section">
       <h3 class="section-title">MCP Servers</h3>
       <p class="section-desc">Connect external tools and services to your companion.</p>
@@ -606,7 +462,6 @@ DISCORD_ENABLED=true</pre>
       <p class="info-note">Server restart required for MCP changes to take effect.</p>
     </section>
 
-    <!-- Save -->
     <div class="save-area">
       {#if message}
         <p class="save-message success">{message}</p>
@@ -636,17 +491,17 @@ DISCORD_ENABLED=true</pre>
     padding: 1rem 0;
   }
 
-  .section {
+  :global(.section) {
     margin-bottom: 2rem;
     padding-bottom: 1.5rem;
     border-bottom: 1px solid var(--border);
   }
 
-  .section:last-of-type {
+  :global(.section:last-of-type) {
     border-bottom: none;
   }
 
-  .section-title {
+  :global(.section-title) {
     font-family: var(--font-heading);
     font-size: 0.9375rem;
     font-weight: 400;
@@ -655,18 +510,18 @@ DISCORD_ENABLED=true</pre>
     margin: 0 0 0.375rem;
   }
 
-  .section-desc {
+  :global(.section-desc) {
     font-size: 0.8125rem;
     color: var(--text-muted);
     margin: 0 0 1rem;
     line-height: 1.5;
   }
 
-  .field {
+  :global(.field) {
     margin-bottom: 1rem;
   }
 
-  .field-label {
+  :global(.field-label) {
     display: block;
     font-size: 0.8125rem;
     color: var(--text-secondary);
@@ -674,8 +529,8 @@ DISCORD_ENABLED=true</pre>
     letter-spacing: 0.02em;
   }
 
-  .field-input,
-  .field-select {
+  :global(.field-input),
+  :global(.field-select) {
     width: 100%;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
@@ -687,21 +542,21 @@ DISCORD_ENABLED=true</pre>
     transition: border-color var(--transition), box-shadow var(--transition);
   }
 
-  .field-input:focus,
-  .field-select:focus {
+  :global(.field-input:focus),
+  :global(.field-select:focus) {
     outline: none;
     border-color: var(--gold-dim);
     box-shadow: 0 0 0 2px rgba(196, 168, 114, 0.08);
   }
 
-  .field-hint {
+  :global(.field-hint) {
     display: block;
     font-size: 0.75rem;
     color: var(--text-muted);
     margin-top: 0.25rem;
   }
 
-  .toggle-row {
+  :global(.toggle-row) {
     display: flex;
     align-items: flex-start;
     gap: 0.75rem;
@@ -710,11 +565,11 @@ DISCORD_ENABLED=true</pre>
     border-bottom: 1px solid var(--border);
   }
 
-  .toggle-row:last-of-type {
+  :global(.toggle-row:last-of-type) {
     border-bottom: none;
   }
 
-  .toggle-row input[type="checkbox"] {
+  :global(.toggle-row input[type="checkbox"]) {
     margin-top: 0.125rem;
     width: 1rem;
     height: 1rem;
@@ -722,14 +577,14 @@ DISCORD_ENABLED=true</pre>
     flex-shrink: 0;
   }
 
-  .toggle-label {
+  :global(.toggle-label) {
     font-size: 0.875rem;
     color: var(--text-primary);
     min-width: 5rem;
     flex-shrink: 0;
   }
 
-  .toggle-desc {
+  :global(.toggle-desc) {
     font-size: 0.8125rem;
     color: var(--text-muted);
     flex: 1;
@@ -781,7 +636,7 @@ DISCORD_ENABLED=true</pre>
     margin-top: 0.5rem;
   }
 
-  .setup-guide {
+  :global(.setup-guide) {
     margin: 0.5rem 0 1rem 1.75rem;
     padding: 1rem;
     background: var(--bg-input);
@@ -790,7 +645,7 @@ DISCORD_ENABLED=true</pre>
     border-radius: 6px;
   }
 
-  .guide-title {
+  :global(.guide-title) {
     font-family: var(--font-heading);
     font-size: 0.8125rem;
     font-weight: 400;
@@ -799,7 +654,7 @@ DISCORD_ENABLED=true</pre>
     margin: 0 0 0.75rem;
   }
 
-  .guide-steps {
+  :global(.guide-steps) {
     margin: 0;
     padding-left: 1.25rem;
     font-size: 0.8125rem;
@@ -807,21 +662,21 @@ DISCORD_ENABLED=true</pre>
     line-height: 1.7;
   }
 
-  .guide-steps li {
+  :global(.guide-steps li) {
     margin-bottom: 0.5rem;
   }
 
-  .guide-steps a {
+  :global(.guide-steps a) {
     color: var(--gold);
     text-decoration: none;
     border-bottom: 1px solid var(--gold-dim);
   }
 
-  .guide-steps a:hover {
+  :global(.guide-steps a:hover) {
     border-bottom-color: var(--gold);
   }
 
-  .guide-steps code {
+  :global(.guide-steps code) {
     font-family: var(--font-mono, 'JetBrains Mono', monospace);
     font-size: 0.75rem;
     padding: 0.125rem 0.375rem;
@@ -831,7 +686,7 @@ DISCORD_ENABLED=true</pre>
     color: var(--gold);
   }
 
-  .guide-code {
+  :global(.guide-code) {
     display: block;
     margin: 0.5rem 0;
     padding: 0.625rem 0.75rem;
@@ -846,7 +701,6 @@ DISCORD_ENABLED=true</pre>
     white-space: pre;
   }
 
-  /* Personality section */
   .mode-toggle {
     display: flex;
     gap: 0;
@@ -947,7 +801,6 @@ DISCORD_ENABLED=true</pre>
     margin: 0.5rem 0 0;
   }
 
-  /* MCP Servers section */
   .empty-state {
     font-size: 0.8125rem;
     color: var(--text-muted);
