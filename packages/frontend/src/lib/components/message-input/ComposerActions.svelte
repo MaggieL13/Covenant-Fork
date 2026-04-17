@@ -5,32 +5,24 @@
   import StickerPicker from '../StickerPicker.svelte';
 
   let {
-    isStreaming,
     uploading,
     hasStickerPacks,
     showStickerPicker,
-    canSend,
     onopenfilepicker,
     onstickerbuttontoggle,
     onstickerselect,
     onstickerclose,
-    onsend,
-    onstop,
     ontranscript,
     onfilechange,
     onregisterrefs,
   } = $props<{
-    isStreaming: boolean;
     uploading: boolean;
     hasStickerPacks: boolean;
     showStickerPicker: boolean;
-    canSend: boolean;
     onopenfilepicker?: () => void;
     onstickerbuttontoggle?: () => void;
     onstickerselect?: (sticker: Sticker) => void;
     onstickerclose?: () => void;
-    onsend?: () => void;
-    onstop?: () => void;
     ontranscript?: (text: string, prosody?: Record<string, number> | null) => void;
     onfilechange?: (event: Event) => void;
     onregisterrefs?: (refs: { getFileInput: () => HTMLInputElement | null }) => void;
@@ -98,29 +90,6 @@
 
 <VoiceModeToggle />
 
-{#if isStreaming}
-  <button
-    class="send-button stop-active"
-    onclick={() => onstop?.()}
-    aria-label="Stop generation"
-  >
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-      <rect x="4" y="4" width="16" height="16" rx="2"/>
-    </svg>
-  </button>
-{:else}
-  <button
-    class="send-button"
-    onclick={() => onsend?.()}
-    disabled={!canSend}
-    aria-label="Send message"
-  >
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-    </svg>
-  </button>
-{/if}
-
 <style>
   .attach-button {
     width: 2.75rem;
@@ -180,42 +149,8 @@
     to { transform: rotate(360deg); }
   }
 
-  .send-button {
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    background: var(--accent);
-    color: white;
-    border-radius: 0.875rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition);
-    flex-shrink: 0;
-  }
-
-  .send-button:hover:not(:disabled) {
-    background: var(--accent-hover);
-  }
-
-  .send-button:disabled {
-    opacity: 0.25;
-    cursor: not-allowed;
-  }
-
-  .send-button.stop-active {
-    background: var(--status-error, #ef4444);
-    color: white;
-  }
-
-  .send-button.stop-active:hover {
-    background: #dc2626;
-    box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
-  }
-
   @media (max-width: 768px) {
-    .attach-button,
-    .send-button {
+    .attach-button {
       width: 2.5rem;
       height: 2.5rem;
     }

@@ -439,11 +439,9 @@
 
   <div class="input-bar">
     <ComposerActions
-      isStreaming={isStreaming}
       uploading={uploading}
       hasStickerPacks={hasStickerPacks}
       showStickerPicker={showStickerPicker}
-      canSend={canSend}
       onopenfilepicker={openFilePicker}
       onstickerbuttontoggle={() => {
         showStickerPicker = !showStickerPicker;
@@ -452,8 +450,6 @@
       onstickerclose={() => {
         showStickerPicker = false;
       }}
-      onsend={handleSend}
-      onstop={onstop}
       ontranscript={handleTranscript}
       onfilechange={handleFileSelect}
       onregisterrefs={registerFileInputRefs}
@@ -473,6 +469,31 @@
       }}
       onregisterrefs={registerTextareaRefs}
     />
+
+    {#if isStreaming}
+      <!-- ORDER: this stays inline in the parent because it renders on the right side of the textarea in the existing composer layout. -->
+      <button
+        class="send-button stop-active"
+        onclick={() => onstop?.()}
+        aria-label="Stop generation"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="4" y="4" width="16" height="16" rx="2"/>
+        </svg>
+      </button>
+    {:else}
+      <!-- ORDER: this stays inline in the parent because it renders on the right side of the textarea in the existing composer layout. -->
+      <button
+        class="send-button"
+        onclick={handleSend}
+        disabled={!canSend}
+        aria-label="Send message"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+        </svg>
+      </button>
+    {/if}
   </div>
 
   <div class="composer-hint">
@@ -520,6 +541,39 @@
     box-shadow: 0 0 0 1px rgba(155, 114, 207, 0.18), 0 16px 40px rgba(0, 0, 0, 0.18);
   }
 
+  .send-button {
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    background: var(--accent);
+    color: white;
+    border-radius: 0.875rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition);
+    flex-shrink: 0;
+  }
+
+  .send-button:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .send-button:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+  }
+
+  .send-button.stop-active {
+    background: var(--status-error, #ef4444);
+    color: white;
+  }
+
+  .send-button.stop-active:hover {
+    background: #dc2626;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+  }
+
   .composer-hint {
     display: flex;
     flex-wrap: wrap;
@@ -536,6 +590,11 @@
       padding: 0.55rem 0.6rem;
       gap: 0.375rem;
       border-radius: 1.25rem;
+    }
+
+    .send-button {
+      width: 2.5rem;
+      height: 2.5rem;
     }
 
     .composer-hint {
