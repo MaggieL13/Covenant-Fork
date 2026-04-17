@@ -7,33 +7,34 @@
   let {
     uploading,
     hasStickerPacks,
-    showStickerPicker,
     onopenfilepicker,
-    onstickerbuttontoggle,
     onstickerselect,
-    onstickerclose,
     ontranscript,
     onfilechange,
     onregisterrefs,
   } = $props<{
     uploading: boolean;
     hasStickerPacks: boolean;
-    showStickerPicker: boolean;
     onopenfilepicker?: () => void;
-    onstickerbuttontoggle?: () => void;
     onstickerselect?: (sticker: Sticker) => void;
-    onstickerclose?: () => void;
     ontranscript?: (text: string, prosody?: Record<string, number> | null) => void;
     onfilechange?: (event: Event) => void;
     onregisterrefs?: (refs: { getFileInput: () => HTMLInputElement | null }) => void;
   }>();
 
   let fileInput: HTMLInputElement | null = null;
+  let showStickerPicker = $state(false);
 
   $effect(() => {
     // ORDER: the parent must receive a live file-input getter after binding so attach-button clicks still target the real DOM node.
     onregisterrefs?.({ getFileInput: () => fileInput });
   });
+
+  function handleStickerSelect(sticker: Sticker) {
+    // ORDER: close the local sticker picker before the parent regains textarea focus so picker dismissal and composer focus stay in the current order.
+    showStickerPicker = false;
+    onstickerselect?.(sticker);
+  }
 </script>
 
 <input
@@ -68,7 +69,7 @@
   <div class="sticker-btn-wrap">
     <button
       class="sticker-button"
-      onclick={() => onstickerbuttontoggle?.()}
+      onclick={() => { showStickerPicker = !showStickerPicker; }}
       aria-label="Send sticker"
       title="Stickers"
     >
@@ -81,8 +82,8 @@
     </button>
     {#if showStickerPicker}
       <StickerPicker
-        onselect={onstickerselect}
-        onclose={onstickerclose}
+        onselect={handleStickerSelect}
+        onclose={() => { showStickerPicker = false; }}
       />
     {/if}
   </div>

@@ -1,15 +1,16 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
   import { getCompanionName } from '$lib/stores/settings.svelte';
-  import CommandPalette from './CommandPalette.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
   import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
   import { apiFetch } from '$lib/utils/api';
   import ReplyBanner from './message-input/ReplyBanner.svelte';
   import AttachmentTray from './message-input/AttachmentTray.svelte';
   import CanvasRefTray from './message-input/CanvasRefTray.svelte';
-  import ComposerActions from './message-input/ComposerActions.svelte';
+  import ComposerPickers from './message-input/ComposerPickers.svelte';
   import ComposerTextarea from './message-input/ComposerTextarea.svelte';
+  import StickerAutocomplete from './message-input/StickerAutocomplete.svelte';
+  import ComposerCommandPalette from './message-input/ComposerCommandPalette.svelte';
 
   let companionName = $derived(getCompanionName());
 
@@ -47,14 +48,13 @@
   let pendingCanvasRefs = $state<Array<{ canvasId: string; title: string }>>([]);
   let pendingProsody = $state<Record<string, number> | null>(null);
 
-  let showStickerPicker = $state(false);
   let hasStickerPacks = $derived(getStickerPacks().length > 0);
   let pendingSticker = $state<Sticker | null>(null);
 
   let showCommandPalette = $state(false);
   let commandFilter = $state('');
-  let paletteRef = $state<CommandPalette | undefined>();
   let commandRegistry = $derived(getCommandRegistry());
+  let commandPaletteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
   let canSend = $derived(
     content.trim().length > 0 ||
@@ -74,7 +74,7 @@
   let stickerQuery = $state('');
   let stickerColonPos = $state(-1);
   let showStickerAutocomplete = $state(false);
-  let stickerSelectedIndex = $state(0);
+  let stickerAutocompleteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
   let stickerAutocompleteList = $derived(() => {
     if (!stickerQuery) return [];
@@ -139,7 +139,6 @@
 
     stickerQuery = afterColon;
     stickerColonPos = lastColon;
-    stickerSelectedIndex = 0;
     showStickerAutocomplete = stickerAutocompleteList().length > 0;
   }
 
@@ -278,39 +277,20 @@
 
   function handleStickerSelect(sticker: Sticker) {
     pendingSticker = sticker;
-    showStickerPicker = false;
     getTextarea()?.focus();
   }
 
   function handleKeydown(event: KeyboardEvent) {
     // ORDER: command palette handling must win before normal Enter-send behavior so palette selection keeps consuming its own keyboard flow.
-    if (showCommandPalette && paletteRef) {
-      const handled = paletteRef.handleKey(event);
+    if (showCommandPalette && commandPaletteApi) {
+      const handled = commandPaletteApi.handleKey(event);
       if (handled) return;
     }
 
     // ORDER: sticker autocomplete selection/navigation must resolve before normal Enter-send behavior so choosing a sticker ref never sends the draft early.
-    if (showStickerAutocomplete) {
-      const list = stickerAutocompleteList();
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        stickerSelectedIndex = (stickerSelectedIndex + 1) % list.length;
-        return;
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        stickerSelectedIndex = (stickerSelectedIndex - 1 + list.length) % list.length;
-        return;
-      }
-      if ((event.key === 'Enter' || event.key === 'Tab') && list.length > 0) {
-        event.preventDefault();
-        insertStickerRef(list[stickerSelectedIndex].ref);
-        return;
-      }
-      if (event.key === 'Escape') {
-        showStickerAutocomplete = false;
-        return;
-      }
+    if (showStickerAutocomplete && stickerAutocompleteApi) {
+      const handled = stickerAutocompleteApi.handleKey(event);
+      if (handled) return;
     }
 
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -394,6 +374,14 @@
     getFileInput = refs.getFileInput;
   }
 
+  function registerCommandPaletteApi(api: { handleKey: (event: KeyboardEvent) => boolean }) {
+    commandPaletteApi = api;
+  }
+
+  function registerStickerAutocompleteApi(api: { handleKey: (event: KeyboardEvent) => boolean }) {
+    stickerAutocompleteApi = api;
+  }
+
   function openFilePicker() {
     getFileInput()?.click();
   }
@@ -425,50 +413,45 @@
 
   <CanvasRefTray pendingCanvasRefs={pendingCanvasRefs} onremove={removeCanvasRef} />
 
-  {#if showCommandPalette}
-    <CommandPalette
-      bind:this={paletteRef}
-      filter={commandFilter}
-      commands={commandRegistry}
-      onselect={handleCommandSelect}
-      onclose={() => {
-        showCommandPalette = false;
-      }}
-    />
-  {/if}
+  <ComposerCommandPalette
+    visible={showCommandPalette}
+    filter={commandFilter}
+    commands={commandRegistry}
+    onselect={handleCommandSelect}
+    onclose={() => {
+      showCommandPalette = false;
+    }}
+    onregisterapi={registerCommandPaletteApi}
+  />
 
   <div class="input-bar">
-    <ComposerActions
+    <ComposerPickers
       uploading={uploading}
       hasStickerPacks={hasStickerPacks}
-      showStickerPicker={showStickerPicker}
       onopenfilepicker={openFilePicker}
-      onstickerbuttontoggle={() => {
-        showStickerPicker = !showStickerPicker;
-      }}
       onstickerselect={handleStickerSelect}
-      onstickerclose={() => {
-        showStickerPicker = false;
-      }}
       ontranscript={handleTranscript}
       onfilechange={handleFileSelect}
       onregisterrefs={registerFileInputRefs}
     />
 
-    <ComposerTextarea
-      content={content}
-      showStickerAutocomplete={showStickerAutocomplete}
-      stickerAutocompleteItems={stickerAutocompleteList()}
-      stickerSelectedIndex={stickerSelectedIndex}
-      oninput={handleInput}
-      onkeydown={handleKeydown}
-      onpaste={handlePaste}
-      onselectstickerref={insertStickerRef}
-      onhoverstickerindex={(index) => {
-        stickerSelectedIndex = index;
-      }}
-      onregisterrefs={registerTextareaRefs}
-    />
+    <div class="composer-center">
+      <StickerAutocomplete
+        items={stickerAutocompleteList()}
+        visible={showStickerAutocomplete}
+        onselect={insertStickerRef}
+        onclose={() => { showStickerAutocomplete = false; }}
+        onregisterapi={registerStickerAutocompleteApi}
+      />
+
+      <ComposerTextarea
+        content={content}
+        oninput={handleInput}
+        onkeydown={handleKeydown}
+        onpaste={handlePaste}
+        onregisterrefs={registerTextareaRefs}
+      />
+    </div>
 
     {#if isStreaming}
       <!-- ORDER: this stays inline in the parent because it renders on the right side of the textarea in the existing composer layout. -->
@@ -539,6 +522,12 @@
   .input-bar:focus-within {
     border-color: rgba(155, 114, 207, 0.35);
     box-shadow: 0 0 0 1px rgba(155, 114, 207, 0.18), 0 16px 40px rgba(0, 0, 0, 0.18);
+  }
+
+  .composer-center {
+    position: relative;
+    flex: 1;
+    min-width: 0;
   }
 
   .send-button {
