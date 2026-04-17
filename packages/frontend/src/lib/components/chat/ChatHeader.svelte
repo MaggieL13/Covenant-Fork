@@ -76,6 +76,12 @@
         </svg>
       </a>
     {/if}
+    <a href="/uno" class="header-icon-link" aria-label="Play UNO" title="Play UNO">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="5" y="3" width="14" height="18" rx="2"/>
+        <text x="12" y="16" text-anchor="middle" font-size="10" font-family="serif" font-weight="700" fill="currentColor" stroke="none">U</text>
+      </svg>
+    </a>
     <button class="header-icon-btn" onclick={ontogglesearch} aria-label="Search messages (Ctrl+K)" title="Search (Ctrl+K)">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>

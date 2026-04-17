@@ -22,6 +22,7 @@ import stickersRouter from './stickers.js';
 import canvasesRouter from './canvases.js';
 import pushAdminRouter from './push-admin.js';
 import voiceRouter from './voice.js';
+import unoRouter from './uno.js';
 
 const router = Router();
 
@@ -72,6 +73,7 @@ router.use(stickersRouter);
 router.use(canvasesRouter);
 router.use(pushAdminRouter);
 router.use(voiceRouter);
+router.use(unoRouter);
 
 /** Call after loadConfig() to mount Command Center routes */
 export async function initCcRoutes() {
