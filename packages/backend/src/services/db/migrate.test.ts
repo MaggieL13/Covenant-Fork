@@ -420,6 +420,40 @@ describe('real migrations directory resolves', () => {
   });
 });
 
+describe('integration — bootstrap coverage against real init output', () => {
+  /**
+   * This is the anti-drift proof requested during 7.B review: run the full
+   * current `initDb()` code path against a fresh `:memory:` DB, then assert
+   * every registered predicate (1 through the highest registered version)
+   * returns true against that schema. If a future edit to init.ts removes or
+   * changes a schema element, or if a predicate stops matching what the init
+   * path produces, this test fails loudly — which is the safety net we need
+   * before the 7.D cutover.
+   */
+  it('every registered predicate is satisfied by the schema produced by current initDb(:memory:)', async () => {
+    const { initDb } = await import('./init.js');
+    const db = initDb(':memory:');
+    try {
+      const versions = Object.keys(predicates)
+        .map((v) => Number(v))
+        .filter((v) => Number.isFinite(v))
+        .sort((a, b) => a - b);
+      // 7.B introduces predicates through version 9. If a later sub-batch adds
+      // more, this test auto-expands; no filter needed.
+      expect(versions.length).toBeGreaterThanOrEqual(9);
+      for (const v of versions) {
+        const predicate = predicates[v];
+        expect(predicate).toBeDefined();
+        const result = predicate(db);
+        // Include the version number in the failure message for fast diagnosis.
+        expect(result, `predicate ${v} failed against initDb(':memory:') output`).toBe(true);
+      }
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe('predicates — behavioral probes', () => {
   let db: Database.Database;
 
