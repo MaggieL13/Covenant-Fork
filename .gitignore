@@ -27,4 +27,6 @@ docs/DESIGN-SPEC.md
 .claude/
 shared/
 *.txt
+tmp/
+data/backups/
 
