@@ -110,6 +110,13 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Use Auto-detect Owner and confirm the field fills without moving the save/status area
 - [ ] Change debounce, mention, expiry, owner-active-threshold, defer, and allowed-users settings; save; refresh; confirm each persists
 - [ ] Verify the guild/channel selector still appears inside Gateway Settings in the same place and all toggles behave unchanged
+- [ ] Expand Recent Activity and confirm loading, empty, and populated log states still render correctly
+- [ ] Verify Recent Activity date separators and log row formatting still match the previous UI
+- [ ] Close and reopen Recent Activity and confirm the log view re-renders cleanly without stale rows
+- [ ] Toggle a guild on or off, save, refresh, and confirm the selection persists
+- [ ] Expand a guild's channels, toggle a channel on or off, save, refresh, and confirm the selection persists
+- [ ] Toggle `Anyone can talk` and `Silence bot`, save, refresh, and confirm both guild options persist
+- [ ] Trigger a Discord action that shows status or error feedback and confirm the footer message still appears in the same place
 - [ ] Expand Rules and confirm first-open lazy loading still works
 - [ ] Switch between Servers / Channels / Users tabs and confirm counts and active tab state stay correct
 - [ ] Begin adding a rule, switch tabs, switch back, and confirm the partially filled form is still present on the original tab
