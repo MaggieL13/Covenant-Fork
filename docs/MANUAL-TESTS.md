@@ -102,6 +102,14 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Use Reset to Default in Personality and confirm the editor updates before save
 - [ ] Add an MCP URL/SSE server and a stdio server, refresh, and confirm card rendering still matches the persisted config
 - [ ] Remove an MCP server, refresh, and confirm the removal persists without other MCP entries drifting
+- [ ] In Discord settings, verify the gateway setup guide still appears when the bot token is missing
+- [ ] With Discord enabled, verify the status card still shows bot identity, guild count, ping button, stats, and deferred notice
+- [ ] Approve a pending pairing request and confirm the user moves into Approved Users without other pairing rows drifting
+- [ ] Revoke an approved user and confirm they disappear from Approved Users after refresh
+- [ ] Expand Gateway Settings and confirm lazy-loading still shows the loading state before the form appears on first open
+- [ ] Use Auto-detect Owner and confirm the field fills without moving the save/status area
+- [ ] Change debounce, mention, expiry, owner-active-threshold, defer, and allowed-users settings; save; refresh; confirm each persists
+- [ ] Verify the guild/channel selector still appears inside Gateway Settings in the same place and all toggles behave unchanged
 
 ---
 

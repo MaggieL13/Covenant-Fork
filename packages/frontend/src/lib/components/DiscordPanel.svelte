@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/utils/api';
+  import DiscordPairingsPanel from '$lib/components/discord-panel/DiscordPairingsPanel.svelte';
+  import DiscordSettingsCard from '$lib/components/discord-panel/DiscordSettingsCard.svelte';
+  import DiscordStatusCard from '$lib/components/discord-panel/DiscordStatusCard.svelte';
 
   interface DiscordStatus {
     enabled: boolean;
@@ -146,8 +149,19 @@
 
   let isEnabled = $derived(discordStatus?.enabled ?? false);
 
+  type DiscordSettingsField =
+    | 'ownerUserId'
+    | 'requireMentionInGuilds'
+    | 'debounceMs'
+    | 'pairingExpiryMs'
+    | 'ownerActiveThresholdMin'
+    | 'deferPollIntervalMs'
+    | 'deferMaxAgeMs'
+    | 'allowedUsers';
+
   async function loadData() {
     try {
+      // ORDER: load status and pairings together so the panel reflects one coherent gateway snapshot.
       const [statusRes, pairingsRes] = await Promise.all([
         apiFetch('/api/discord/status'),
         apiFetch('/api/discord/pairings'),
@@ -365,6 +379,7 @@
       statusMessage = newState ? 'Discord gateway starting...' : 'Discord gateway stopped';
       setTimeout(() => statusMessage = null, 3000);
       if (newState) {
+        // ORDER: wait 2000ms for gateway state to materialize before refetching status after enabling.
         await new Promise(r => setTimeout(r, 2000));
       }
       await loadData();
@@ -534,7 +549,18 @@
     }
   }
 
+  function updateSettingsField(key: DiscordSettingsField, value: string | boolean | number | string[]) {
+    if (!settings) return;
+
+    settings = {
+      ...settings,
+      [key]: value,
+    };
+    settingsDirty = true;
+  }
+
   onMount(async () => {
+    // ORDER: load guilds and settings only after status confirms the gateway is connected.
     await loadData();
     if (discordStatus?.connected) {
       loadGuilds();
@@ -547,138 +573,15 @@
   {#if loading}
     <p class="loading">Loading Discord status...</p>
   {:else}
-    <!-- Gateway Toggle -->
-    <section class="section">
-      <h3 class="section-title">Discord Gateway</h3>
-      {#if !discordStatus?.hasToken}
-        <div class="setup-guide">
-          <p class="setup-intro">To connect your companion to Discord, you'll need to create a bot and add its token. Follow these steps:</p>
-
-          <div class="setup-step">
-            <span class="step-number">1</span>
-            <div class="step-content">
-              <strong>Create a Discord Application</strong>
-              <p>Go to the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal</a> and click <strong>New Application</strong>. Give it a name (e.g. your companion's name).</p>
-            </div>
-          </div>
-
-          <div class="setup-step">
-            <span class="step-number">2</span>
-            <div class="step-content">
-              <strong>Create the Bot</strong>
-              <p>In your application, go to <strong>Bot</strong> in the sidebar and click <strong>Add Bot</strong>. Then copy the <strong>Token</strong> — you'll need it in step 5.</p>
-            </div>
-          </div>
-
-          <div class="setup-step">
-            <span class="step-number">3</span>
-            <div class="step-content">
-              <strong>Enable Required Intents</strong>
-              <p>Still on the Bot page, scroll down to <strong>Privileged Gateway Intents</strong> and enable:</p>
-              <ul class="intent-list">
-                <li><code>MESSAGE CONTENT</code> — required to read messages</li>
-                <li><code>SERVER MEMBERS</code> — for user identification</li>
-              </ul>
-            </div>
-          </div>
-
-          <div class="setup-step">
-            <span class="step-number">4</span>
-            <div class="step-content">
-              <strong>Invite the Bot to Your Server</strong>
-              <p>Go to <strong>OAuth2 &rarr; URL Generator</strong>. Select the <code>bot</code> scope, then select these permissions: <em>Send Messages</em>, <em>Read Messages/View Channels</em>, <em>Read Message History</em>, <em>Add Reactions</em>. Open the generated URL to invite the bot.</p>
-            </div>
-          </div>
-
-          <div class="setup-step">
-            <span class="step-number">5</span>
-            <div class="step-content">
-              <strong>Add the Token</strong>
-              <p>Paste your bot token into the <code>.env</code> file in the project root (next to <code>resonant.yaml</code>) and restart:</p>
-              <pre class="code-block">DISCORD_BOT_TOKEN=your_token_here
-DISCORD_ENABLED=true</pre>
-            </div>
-          </div>
-
-          <div class="setup-step">
-            <span class="step-number">6</span>
-            <div class="step-content">
-              <strong>Set Your Owner User ID</strong>
-              <p>In Discord, go to <strong>Settings &rarr; Advanced</strong> and enable <strong>Developer Mode</strong>. Then right-click your own username and select <strong>Copy User ID</strong>. After restarting, paste it into the <em>Owner User ID</em> field in Gateway Settings below.</p>
-            </div>
-          </div>
-        </div>
-      {:else}
-        <div class="toggle-row">
-          <div class="toggle-label">
-            <span class="toggle-text">{isEnabled ? 'Gateway active' : 'Gateway off'}</span>
-            <span class="toggle-desc">Connect to Discord and receive messages</span>
-          </div>
-          <button
-            class="toggle-switch"
-            class:on={isEnabled}
-            onclick={toggleDiscord}
-            disabled={toggling}
-            aria-label={isEnabled ? 'Disable Discord' : 'Enable Discord'}
-          >
-            <span class="toggle-knob"></span>
-          </button>
-        </div>
-      {/if}
-    </section>
-
-    <!-- Connection Status (only when enabled) -->
-    {#if isEnabled}
-      <section class="section">
-        <h3 class="section-title">Connection</h3>
-        <div class="status-row">
-          <span class="status-dot" class:connected={discordStatus?.connected} class:offline={!discordStatus?.connected}></span>
-          {#if discordStatus?.connected}
-            <div class="connection-info">
-              {#if discordStatus.botUser?.avatar}
-                <img class="bot-avatar" src={discordStatus.botUser.avatar} alt="" />
-              {/if}
-              <span class="status-text connected">
-                Connected as <strong>{discordStatus.botUser?.tag || discordStatus.username}</strong> · {discordStatus.guilds} server{discordStatus.guilds !== 1 ? 's' : ''}
-              </span>
-              <button class="btn btn-sm" onclick={testConnection} disabled={pingLoading}>
-                {pingLoading ? 'Pinging...' : pingResult !== null ? (pingResult >= 0 ? `${pingResult}ms` : 'Failed') : 'Test'}
-              </button>
-            </div>
-          {:else}
-            <span class="status-text offline">Connecting...</span>
-          {/if}
-        </div>
-
-        {#if discordStatus?.connected}
-          <div class="stats-grid">
-            <div class="stat-card">
-              <span class="stat-label">Guilds</span>
-              <span class="stat-value">{discordStatus.guilds}</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Received</span>
-              <span class="stat-value">{discordStatus.messagesReceived}</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Processed</span>
-              <span class="stat-value">{discordStatus.messagesProcessed}</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Deferred</span>
-              <span class="stat-value">{discordStatus.deferred ?? 0}</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Errors</span>
-              <span class="stat-value" class:error-count={discordStatus.errors > 0}>{discordStatus.errors}</span>
-            </div>
-          </div>
-          {#if discordStatus.deferredPending > 0}
-            <p class="deferred-notice">{discordStatus.deferredPending} message{discordStatus.deferredPending > 1 ? 's' : ''} held — waiting for Pulse conversation gap</p>
-          {/if}
-        {/if}
-      </section>
-    {/if}
+    <DiscordStatusCard
+      {discordStatus}
+      {isEnabled}
+      {toggling}
+      {pingLoading}
+      {pingResult}
+      ontoggle={toggleDiscord}
+      ontestconnection={testConnection}
+    />
 
     <!-- Activity Log -->
     {#if isEnabled}
@@ -716,267 +619,148 @@ DISCORD_ENABLED=true</pre>
       </section>
     {/if}
 
-    <!-- Pending Pairings -->
-    {#if pendingPairings.length > 0}
-      <section class="section">
-        <h3 class="section-title">Pending Pairing Requests <span class="badge">{pendingPairings.length}</span></h3>
-        <p class="section-desc">Users who sent a pairing code via DM. Approve to allow them to message your companion.</p>
-        <div class="pairing-list">
-          {#each pendingPairings as pairing}
-            <div class="pairing-card">
-              <div class="pairing-info">
-                <span class="pairing-user">{pairing.username || pairing.userId}</span>
-                <span class="pairing-meta">
-                  Code: <code>{pairing.code}</code> &middot;
-                  Expires {new Date(pairing.expiresAt).toLocaleString()}
-                </span>
-              </div>
-              <button
-                class="btn btn-primary"
-                onclick={() => approvePairing(pairing.code)}
-                disabled={actionLoading === `approve-${pairing.code}`}
-              >
-                {actionLoading === `approve-${pairing.code}` ? 'Approving...' : 'Approve'}
-              </button>
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
+    <DiscordPairingsPanel
+      {pendingPairings}
+      {approvedPairings}
+      {actionLoading}
+      onapprove={approvePairing}
+      onrevoke={revokePairing}
+    />
 
-    <!-- Approved Users -->
-    {#if approvedPairings.length > 0}
-      <section class="section">
-        <h3 class="section-title">Approved Users</h3>
-        <p class="section-desc">Users who can message your companion via Discord DMs.</p>
-        <div class="pairing-list">
-          {#each approvedPairings as pairing}
-            <div class="pairing-card">
-              <div class="pairing-info">
-                <span class="pairing-user">{pairing.username || pairing.userId}</span>
-                <span class="pairing-meta">
-                  Approved {pairing.approvedAt ? new Date(pairing.approvedAt).toLocaleDateString() : 'unknown'}
-                </span>
-              </div>
-              <button
-                class="btn btn-danger"
-                onclick={() => revokePairing(pairing.userId)}
-                disabled={actionLoading === `revoke-${pairing.userId}`}
-              >
-                {actionLoading === `revoke-${pairing.userId}` ? 'Revoking...' : 'Revoke'}
-              </button>
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
-    <!-- Gateway Settings -->
-    <section class="section">
-      <button class="collapsible-header" onclick={() => { showSettings = !showSettings; if (showSettings && !settings) loadSettings(); }}>
-        <h3 class="section-title">Gateway Settings</h3>
-        <span class="chevron" class:open={showSettings}>&#9656;</span>
-      </button>
-
-      {#if showSettings}
-        {#if settingsLoading && !settings}
-          <p class="loading">Loading settings...</p>
-        {:else if settings}
-          <div class="settings-form">
-            <div class="form-group">
-              <span class="form-label">Owner User ID</span>
-              <div class="input-with-button">
-                <input type="text" class="form-input" bind:value={settings.ownerUserId} onchange={() => settingsDirty = true} placeholder="e.g. 123456789012345678" />
-                <button class="btn btn-sm" onclick={autoDetectOwner}>Auto-detect</button>
-              </div>
-              <span class="form-hint">Your Discord user ID — right-click your name in Discord (Developer Mode) and Copy User ID</span>
-            </div>
-
-            <label class="form-group">
-              <span class="form-label">Debounce window (ms)</span>
-              <input type="number" class="form-input" bind:value={settings.debounceMs} onchange={() => settingsDirty = true} />
-              <span class="form-hint">Combines rapid messages within this window</span>
-            </label>
-
-            <div class="form-group">
-              <span class="form-label">Require @mention in guilds</span>
-              <div class="toggle-row compact">
-                <button
-                  class="toggle-switch small"
-                  class:on={settings.requireMentionInGuilds}
-                  aria-label="Require @mention in guilds"
-                  aria-pressed={settings.requireMentionInGuilds}
-                  onclick={() => { settings!.requireMentionInGuilds = !settings!.requireMentionInGuilds; settingsDirty = true; }}
-                >
-                  <span class="toggle-knob"></span>
-                </button>
-              </div>
-            </div>
-
-            <label class="form-group">
-              <span class="form-label">Pairing expiry (hours)</span>
-              <input type="number" class="form-input" step="0.5"
-                value={settings.pairingExpiryMs / 3600000}
-                onchange={(e) => { settings!.pairingExpiryMs = parseFloat((e.target as HTMLInputElement).value) * 3600000; settingsDirty = true; }}
-              />
-            </label>
-
-            <label class="form-group">
-              <span class="form-label">Owner active threshold (minutes)</span>
-              <input type="number" class="form-input" bind:value={settings.ownerActiveThresholdMin} onchange={() => settingsDirty = true} />
-              <span class="form-hint">Defer non-owner messages when the owner has been active on the web UI within this window</span>
-            </label>
-
-            <label class="form-group">
-              <span class="form-label">Defer poll interval (seconds)</span>
-              <input type="number" class="form-input"
-                value={settings.deferPollIntervalMs / 1000}
-                onchange={(e) => { settings!.deferPollIntervalMs = parseFloat((e.target as HTMLInputElement).value) * 1000; settingsDirty = true; }}
-              />
-              <span class="form-hint">Requires gateway restart to take effect</span>
-            </label>
-
-            <label class="form-group">
-              <span class="form-label">Defer max age (minutes)</span>
-              <input type="number" class="form-input"
-                value={settings.deferMaxAgeMs / 60000}
-                onchange={(e) => { settings!.deferMaxAgeMs = parseFloat((e.target as HTMLInputElement).value) * 60000; settingsDirty = true; }}
-              />
-              <span class="form-hint">Drop deferred messages older than this</span>
-            </label>
-
-            <!-- Server Selector -->
-            <div class="form-group">
-              <span class="form-label">Servers</span>
-              <span class="form-hint">Toggle servers ON where the bot should respond. OFF = bot ignores that server entirely.</span>
-              {#if guildsLoading}
-                <p class="form-hint">Loading servers...</p>
-              {:else if guilds.length > 0}
-                <div class="selector-list">
-                  {#each guilds as guild}
-                    {@const isAllowed = settings.allowedGuilds.includes(guild.id)}
-                    {@const guildRule = serverRules[guild.id]}
-                    <div class="selector-item" class:active={settings.allowedGuilds.includes(guild.id)}>
-                      <div class="selector-main" role="button" tabindex="0" onclick={() => toggleGuild(guild.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGuild(guild.id); }}>
-                        {#if guild.icon}
-                          <img class="guild-icon" src={guild.icon} alt="" />
-                        {:else}
-                          <span class="guild-icon-fallback">{guild.name.charAt(0)}</span>
-                        {/if}
-                        <div class="selector-info">
-                          <span class="selector-name">{guild.name}</span>
-                          <span class="selector-meta">{guild.memberCount} members</span>
-                        </div>
+    <DiscordSettingsCard
+      settings={settings && {
+        ownerUserId: settings.ownerUserId,
+        requireMentionInGuilds: settings.requireMentionInGuilds,
+        debounceMs: settings.debounceMs,
+        pairingExpiryMs: settings.pairingExpiryMs,
+        ownerActiveThresholdMin: settings.ownerActiveThresholdMin,
+        deferPollIntervalMs: settings.deferPollIntervalMs,
+        deferMaxAgeMs: settings.deferMaxAgeMs,
+        allowedUsers: settings.allowedUsers,
+      }}
+      {settingsLoading}
+      {settingsDirty}
+      {showSettings}
+      ontoggleopen={() => {
+        // ORDER: flip open state before lazy-loading so the loading UI appears immediately on first expand.
+        showSettings = !showSettings;
+        if (showSettings && !settings) loadSettings();
+      }}
+      onupdatefield={updateSettingsField}
+      onsave={saveSettings}
+      onautodetectowner={autoDetectOwner}
+    >
+      <div class="form-group">
+        <span class="form-label">Servers</span>
+        <span class="form-hint">Toggle servers ON where the bot should respond. OFF = bot ignores that server entirely.</span>
+        {#if guildsLoading}
+          <p class="form-hint">Loading servers...</p>
+        {:else if guilds.length > 0 && settings}
+          <div class="selector-list">
+            {#each guilds as guild}
+              {@const isAllowed = settings.allowedGuilds.includes(guild.id)}
+              {@const guildRule = serverRules[guild.id]}
+              <div class="selector-item" class:active={settings.allowedGuilds.includes(guild.id)}>
+                <div class="selector-main" role="button" tabindex="0" onclick={() => toggleGuild(guild.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleGuild(guild.id); }}>
+                  {#if guild.icon}
+                    <img class="guild-icon" src={guild.icon} alt="" />
+                  {:else}
+                    <span class="guild-icon-fallback">{guild.name.charAt(0)}</span>
+                  {/if}
+                  <div class="selector-info">
+                    <span class="selector-name">{guild.name}</span>
+                    <span class="selector-meta">{guild.memberCount} members</span>
+                  </div>
+                  <button
+                    class="toggle-switch small"
+                    class:on={settings.allowedGuilds.includes(guild.id)}
+                    aria-label="Restrict to {guild.name}"
+                    onclick={(e) => { e.stopPropagation(); toggleGuild(guild.id); }}
+                  >
+                    <span class="toggle-knob"></span>
+                  </button>
+                </div>
+                {#if isAllowed}
+                  <div class="guild-options">
+                    <div class="guild-option-block">
+                      <div class="guild-option-row">
+                        <span class="guild-option-label">Anyone can talk</span>
                         <button
-                          class="toggle-switch small"
-                          class:on={settings.allowedGuilds.includes(guild.id)}
-                          aria-label="Restrict to {guild.name}"
-                          onclick={(e) => { e.stopPropagation(); toggleGuild(guild.id); }}
+                          class="toggle-switch tiny"
+                          class:on={guildRule?.allowPublicResponses}
+                          aria-label="Let anyone talk in {guild.name}"
+                          onclick={() => toggleGuildRule(guild.id, 'allowPublicResponses', !guildRule?.allowPublicResponses)}
                         >
                           <span class="toggle-knob"></span>
                         </button>
                       </div>
-                      {#if isAllowed}
-                        <div class="guild-options">
-                          <div class="guild-option-block">
-                            <div class="guild-option-row">
-                              <span class="guild-option-label">Anyone can talk</span>
-                              <button
-                                class="toggle-switch tiny"
-                                class:on={guildRule?.allowPublicResponses}
-                                aria-label="Let anyone talk in {guild.name}"
-                                onclick={() => toggleGuildRule(guild.id, 'allowPublicResponses', !guildRule?.allowPublicResponses)}
-                              >
-                                <span class="toggle-knob"></span>
-                              </button>
-                            </div>
-                            <span class="guild-option-desc">
-                              {guildRule?.allowPublicResponses
-                                ? 'Anyone in this server can message the bot'
-                                : 'Only the owner and approved users get responses'}
-                            </span>
-                          </div>
-                          <div class="guild-option-block">
-                            <div class="guild-option-row">
-                              <span class="guild-option-label">Silence bot</span>
-                              <button
-                                class="toggle-switch tiny"
-                                class:on={guildRule?.muted}
-                                aria-label="Silence bot in {guild.name}"
-                                onclick={() => toggleGuildRule(guild.id, 'muted', !guildRule?.muted)}
-                              >
-                                <span class="toggle-knob"></span>
-                              </button>
-                            </div>
-                            <span class="guild-option-desc">
-                              {guildRule?.muted
-                                ? 'Bot is silent — won\'t auto-respond to anything here'
-                                : 'Bot is active and will respond normally'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <!-- Channel selector for this guild -->
-                        <div class="channel-section">
-                          <button class="channel-expand" onclick={() => loadChannelsForGuild(guild.id)}>
-                            {guildChannels[guild.id] ? '▾' : '▸'} Channels
-                          </button>
-                          <span class="form-hint channel-hint">Toggle channels ON where the bot can respond. OFF = bot ignores that channel.</span>
-                          {#if channelsLoading === guild.id}
-                            <p class="form-hint">Loading channels...</p>
-                          {/if}
-                          {#if guildChannels[guild.id]}
-                            <div class="channel-list">
-                              {#each guildChannels[guild.id] as channel}
-                                <div class="channel-item">
-                                  <span class="channel-name"># {channel.name}</span>
-                                  {#if channel.parentName}
-                                    <span class="channel-category">{channel.parentName}</span>
-                                  {/if}
-                                  <button
-                                    class="toggle-switch tiny"
-                                    class:on={settings.activeChannels.includes(channel.id)}
-                                    aria-label="Always listen in #{channel.name}"
-                                    onclick={() => toggleChannel(channel.id)}
-                                  >
-                                    <span class="toggle-knob"></span>
-                                  </button>
-                                </div>
-                              {/each}
-                            </div>
-                          {/if}
-                        </div>
-                      {/if}
+                      <span class="guild-option-desc">
+                        {guildRule?.allowPublicResponses
+                          ? 'Anyone in this server can message the bot'
+                          : 'Only the owner and approved users get responses'}
+                      </span>
                     </div>
-                  {/each}
-                </div>
-                {#if settings.allowedGuilds.length === 0}
-                  <span class="form-hint warning-hint">No servers enabled — bot won't respond in any server</span>
+                    <div class="guild-option-block">
+                      <div class="guild-option-row">
+                        <span class="guild-option-label">Silence bot</span>
+                        <button
+                          class="toggle-switch tiny"
+                          class:on={guildRule?.muted}
+                          aria-label="Silence bot in {guild.name}"
+                          onclick={() => toggleGuildRule(guild.id, 'muted', !guildRule?.muted)}
+                        >
+                          <span class="toggle-knob"></span>
+                        </button>
+                      </div>
+                      <span class="guild-option-desc">
+                        {guildRule?.muted
+                          ? 'Bot is silent - won\'t auto-respond to anything here'
+                          : 'Bot is active and will respond normally'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="channel-section">
+                    <button class="channel-expand" onclick={() => loadChannelsForGuild(guild.id)}>
+                      {guildChannels[guild.id] ? '▾' : '▸'} Channels
+                    </button>
+                    <span class="form-hint channel-hint">Toggle channels ON where the bot can respond. OFF = bot ignores that channel.</span>
+                    {#if channelsLoading === guild.id}
+                      <p class="form-hint">Loading channels...</p>
+                    {/if}
+                    {#if guildChannels[guild.id]}
+                      <div class="channel-list">
+                        {#each guildChannels[guild.id] as channel}
+                          <div class="channel-item">
+                            <span class="channel-name"># {channel.name}</span>
+                            {#if channel.parentName}
+                              <span class="channel-category">{channel.parentName}</span>
+                            {/if}
+                            <button
+                              class="toggle-switch tiny"
+                              class:on={settings.activeChannels.includes(channel.id)}
+                              aria-label="Always listen in #{channel.name}"
+                              onclick={() => toggleChannel(channel.id)}
+                            >
+                              <span class="toggle-knob"></span>
+                            </button>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
-              {:else}
-                <span class="form-hint">No servers found — is the bot in any servers?</span>
-              {/if}
-            </div>
-
-            <label class="form-group">
-              <span class="form-label">Allowed users (IDs)</span>
-              <input type="text" class="form-input"
-                value={settings.allowedUsers.join(', ')}
-                onchange={(e) => { settings!.allowedUsers = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean); settingsDirty = true; }}
-                placeholder="e.g. 123456789012345678"
-              />
-              <span class="form-hint">Most users should use the pairing system. Only add IDs for pre-approved users. Owner is always allowed.</span>
-            </label>
-
-            {#if settingsDirty}
-              <button class="btn btn-primary save-btn" onclick={saveSettings} disabled={settingsLoading}>
-                {settingsLoading ? 'Saving...' : 'Save Settings'}
-              </button>
-            {/if}
+              </div>
+            {/each}
           </div>
+          {#if settings.allowedGuilds.length === 0}
+            <span class="form-hint warning-hint">No servers enabled - bot won't respond in any server</span>
+          {/if}
+        {:else}
+          <span class="form-hint">No servers found - is the bot in any servers?</span>
         {/if}
-      {/if}
-    </section>
+      </div>
+    </DiscordSettingsCard>
 
     <!-- Rules Editor -->
     <section class="section">
@@ -1304,30 +1088,11 @@ DISCORD_ENABLED=true</pre>
     line-height: 1.5;
   }
 
-  .step-content strong {
-    display: block;
-    margin-bottom: 0.25rem;
-  }
-
-  .step-content p {
-    color: var(--text-secondary);
-    margin: 0.25rem 0;
-  }
-
-  .step-content a {
-    color: var(--accent, #7c5cbf);
-    text-decoration: underline;
-  }
-
   .intent-list {
     margin: 0.375rem 0 0.25rem 1.25rem;
     padding: 0;
     font-size: 0.8125rem;
     color: var(--text-secondary);
-  }
-
-  .intent-list li {
-    margin-bottom: 0.25rem;
   }
 
   .code-block {
@@ -1581,12 +1346,6 @@ DISCORD_ENABLED=true</pre>
     color: var(--text-muted);
   }
 
-  .pairing-meta code {
-    font-size: 0.6875rem;
-    background: var(--bg-tertiary, var(--bg-primary));
-    padding: 0.0625rem 0.25rem;
-    border-radius: 3px;
-  }
 
   /* Buttons */
   .btn {
@@ -1972,10 +1731,6 @@ DISCORD_ENABLED=true</pre>
     align-items: center;
   }
 
-  .input-with-button .form-input {
-    flex: 1;
-  }
-
   /* --- Server/Channel Selectors --- */
   .selector-list {
     display: flex;
@@ -2157,3 +1912,4 @@ DISCORD_ENABLED=true</pre>
     left: 14px;
   }
 </style>
+
