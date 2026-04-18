@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { setDb } from './state.js';
+import { runPendingMigrations } from './migrate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -12,6 +13,13 @@ export function initDb(dbPath: string): Database.Database {
 
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
+
+  // Batch 7.B: run versioned migrations (including 001/002 and 003-009) via the
+  // new ledger-backed runner. Migrations 003-009 correspond to schema changes
+  // NOT already baked into 001_init.sql. Retained inline DDL below still runs
+  // as a temporary safety net — it'll be removed in 7.D once the cutover is
+  // verified. Bootstrap detection means no DDL re-executes on Maggie's prod DB.
+  runPendingMigrations(db, { backup: true, dbPath });
 
   const migrationPath = join(__dirname, '../../../migrations/001_init.sql');
   const migrationSQL = readFileSync(migrationPath, 'utf-8');

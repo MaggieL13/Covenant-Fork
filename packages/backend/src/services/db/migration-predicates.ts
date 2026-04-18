@@ -71,9 +71,26 @@ export const predicates: Record<number, (db: Db) => boolean> = {
   2: (db) =>
     COMMAND_CENTER_TABLES.every((t) => tableExists(db, t)),
 
-  // 003-016 will be registered in subsequent sub-batches as their .sql files
-  // are extracted from init.ts. Keep this section empty for 7.A — the runner
-  // will simply not bootstrap-mark any version without a registered predicate.
+  // 003 — canvases.tags (ALTER ADD COLUMN)
+  3: (db) => columnExists(db, 'canvases', 'tags'),
+
+  // 004 — sticker_packs + stickers (both tables must be present)
+  4: (db) => tableExists(db, 'sticker_packs') && tableExists(db, 'stickers'),
+
+  // 005 — sticker_packs.user_only (ALTER ADD COLUMN)
+  5: (db) => columnExists(db, 'sticker_packs', 'user_only'),
+
+  // 006 — discord_pairings
+  6: (db) => tableExists(db, 'discord_pairings'),
+
+  // 007 — message_embeddings
+  7: (db) => tableExists(db, 'message_embeddings'),
+
+  // 008 — digest_embeddings
+  8: (db) => tableExists(db, 'digest_embeddings'),
+
+  // 009 — idx_session_history_thread_id
+  9: (db) => indexExists(db, 'idx_session_history_thread_id'),
 };
 
 /**

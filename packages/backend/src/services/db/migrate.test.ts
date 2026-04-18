@@ -520,6 +520,81 @@ describe('predicates — behavioral probes', () => {
     expect(predicates[2](db)).toBe(true);
   });
 
+  // Predicates 3-9 — registered in 7.B, one test each for present + absent cases.
+
+  it('predicate 3 checks canvases.tags column', () => {
+    db.exec(`CREATE TABLE canvases (id TEXT PRIMARY KEY, tags TEXT);`);
+    expect(predicates[3](db)).toBe(true);
+  });
+
+  it('predicate 3 returns false when canvases.tags is missing', () => {
+    db.exec(`CREATE TABLE canvases (id TEXT PRIMARY KEY);`);
+    expect(predicates[3](db)).toBe(false);
+  });
+
+  it('predicate 4 checks sticker_packs AND stickers tables', () => {
+    db.exec(`
+      CREATE TABLE sticker_packs (id TEXT PRIMARY KEY);
+      CREATE TABLE stickers (id TEXT PRIMARY KEY);
+    `);
+    expect(predicates[4](db)).toBe(true);
+  });
+
+  it('predicate 4 returns false when only one sticker table exists', () => {
+    db.exec(`CREATE TABLE sticker_packs (id TEXT PRIMARY KEY);`);
+    expect(predicates[4](db)).toBe(false);
+  });
+
+  it('predicate 5 checks sticker_packs.user_only column', () => {
+    db.exec(`CREATE TABLE sticker_packs (id TEXT PRIMARY KEY, user_only INTEGER DEFAULT 0);`);
+    expect(predicates[5](db)).toBe(true);
+  });
+
+  it('predicate 5 returns false when user_only is missing', () => {
+    db.exec(`CREATE TABLE sticker_packs (id TEXT PRIMARY KEY);`);
+    expect(predicates[5](db)).toBe(false);
+  });
+
+  it('predicate 6 checks discord_pairings table', () => {
+    db.exec(`CREATE TABLE discord_pairings (code TEXT PRIMARY KEY);`);
+    expect(predicates[6](db)).toBe(true);
+  });
+
+  it('predicate 6 returns false when discord_pairings is missing', () => {
+    expect(predicates[6](db)).toBe(false);
+  });
+
+  it('predicate 7 checks message_embeddings table', () => {
+    db.exec(`CREATE TABLE message_embeddings (message_id TEXT PRIMARY KEY);`);
+    expect(predicates[7](db)).toBe(true);
+  });
+
+  it('predicate 7 returns false when message_embeddings is missing', () => {
+    expect(predicates[7](db)).toBe(false);
+  });
+
+  it('predicate 8 checks digest_embeddings table', () => {
+    db.exec(`CREATE TABLE digest_embeddings (digest_id TEXT PRIMARY KEY);`);
+    expect(predicates[8](db)).toBe(true);
+  });
+
+  it('predicate 8 returns false when digest_embeddings is missing', () => {
+    expect(predicates[8](db)).toBe(false);
+  });
+
+  it('predicate 9 checks idx_session_history_thread_id index', () => {
+    db.exec(`
+      CREATE TABLE session_history (id TEXT PRIMARY KEY, thread_id TEXT);
+      CREATE INDEX idx_session_history_thread_id ON session_history(thread_id);
+    `);
+    expect(predicates[9](db)).toBe(true);
+  });
+
+  it('predicate 9 returns false when the index is missing', () => {
+    db.exec(`CREATE TABLE session_history (id TEXT PRIMARY KEY, thread_id TEXT);`);
+    expect(predicates[9](db)).toBe(false);
+  });
+
   it('messagesAllowsStickerContentType works correctly with FK enforcement ON', () => {
     // This is the regression test for the FK-masking bug: without FK handling,
     // the probe would fail on FK violation even when sticker is actually allowed.
