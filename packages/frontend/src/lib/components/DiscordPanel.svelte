@@ -2,8 +2,12 @@
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/utils/api';
   import DiscordPairingsPanel from '$lib/components/discord-panel/DiscordPairingsPanel.svelte';
+  import DiscordRulesPanel from '$lib/components/discord-panel/DiscordRulesPanel.svelte';
   import DiscordSettingsCard from '$lib/components/discord-panel/DiscordSettingsCard.svelte';
   import DiscordStatusCard from '$lib/components/discord-panel/DiscordStatusCard.svelte';
+  import ChannelRulesEditor from '$lib/components/discord-panel/ChannelRulesEditor.svelte';
+  import ServerRulesEditor from '$lib/components/discord-panel/ServerRulesEditor.svelte';
+  import UserRulesEditor from '$lib/components/discord-panel/UserRulesEditor.svelte';
 
   interface DiscordStatus {
     enabled: boolean;
@@ -312,6 +316,7 @@
       }
       statusMessage = `${type.charAt(0).toUpperCase() + type.slice(1)} rule deleted`;
       setTimeout(() => statusMessage = null, 3000);
+      // ORDER: remove the expansion key before reloading rules so a deleted card cannot reopen from stale expanded state.
       expandedRules.delete(`${type}-${id}`);
       expandedRules = new Set(expandedRules);
       await loadRules();
@@ -356,10 +361,20 @@
       rule = { id: newRuleId, name: newRuleName, trustLevel: 'standard' as const } as UserRule;
     }
 
+    // ORDER: save the synthesized default rule before expanding/resetting the add form so the next render targets the persisted rule id.
     await saveRule(type as 'server' | 'channel' | 'user', rule);
     expandedRules.add(`${type}-${newRuleId}`);
     expandedRules = new Set(expandedRules);
     cancelAddRule();
+  }
+
+  function updateAddFormField(key: 'newRuleId' | 'newRuleName', value: string) {
+    if (key === 'newRuleId') {
+      newRuleId = value;
+      return;
+    }
+
+    newRuleName = value;
   }
 
   async function toggleDiscord() {
@@ -762,269 +777,68 @@
       </div>
     </DiscordSettingsCard>
 
-    <!-- Rules Editor -->
-    <section class="section">
-      <button class="collapsible-header" onclick={() => { showRules = !showRules; if (showRules && !rules) loadRules(); }}>
-        <h3 class="section-title">Rules</h3>
-        <span class="chevron" class:open={showRules}>&#9656;</span>
-      </button>
+    <DiscordRulesPanel
+      {showRules}
+      {rulesLoading}
+      {rules}
+      {rulesSection}
+      ontoggleopen={() => {
+        // ORDER: flip showRules before lazy-loading so the loading state appears immediately.
+        showRules = !showRules;
+        if (showRules && !rules) loadRules();
+      }}
+      onselectsection={(section) => rulesSection = section}
+    >
+      {#if rules}
+        {#if rulesSection === 'servers'}
+          <ServerRulesEditor
+            rules={Object.values(rules.servers)}
+            {expandedRules}
+            addForm={{ addingRule, newRuleId, newRuleName }}
+            {actionLoading}
+            ontogglerule={toggleRule}
+            onsaverule={(rule) => saveRule('server', rule)}
+            ondeleterule={(id) => deleteRule('server', id)}
+            onstartadd={() => startAddRule('server')}
+            oncanceladd={cancelAddRule}
+            onconfirmadd={confirmAddRule}
+            onaddformupdate={updateAddFormField}
+          />
+        {/if}
 
-      {#if showRules}
-        {#if rulesLoading && !rules}
-          <p class="loading">Loading rules...</p>
-        {:else if rules}
-          <!-- Rules sub-tabs -->
-          <nav class="rules-tabs">
-            <button class="rules-tab" class:active={rulesSection === 'servers'} onclick={() => rulesSection = 'servers'}>
-              Servers ({Object.keys(rules.servers).length})
-            </button>
-            <button class="rules-tab" class:active={rulesSection === 'channels'} onclick={() => rulesSection = 'channels'}>
-              Channels ({Object.keys(rules.channels).length})
-            </button>
-            <button class="rules-tab" class:active={rulesSection === 'users'} onclick={() => rulesSection = 'users'}>
-              Users ({Object.keys(rules.users).length})
-            </button>
-          </nav>
+        {#if rulesSection === 'channels'}
+          <ChannelRulesEditor
+            rules={Object.values(rules.channels)}
+            {expandedRules}
+            addForm={{ addingRule, newRuleId, newRuleName }}
+            {actionLoading}
+            ontogglerule={toggleRule}
+            onsaverule={(rule) => saveRule('channel', rule)}
+            ondeleterule={(id) => deleteRule('channel', id)}
+            onstartadd={() => startAddRule('channel')}
+            oncanceladd={cancelAddRule}
+            onconfirmadd={confirmAddRule}
+            onaddformupdate={updateAddFormField}
+          />
+        {/if}
 
-          <!-- Server Rules -->
-          {#if rulesSection === 'servers'}
-            <div class="rules-list">
-              {#each Object.values(rules.servers) as rule (rule.id)}
-                {@const key = `server-${rule.id}`}
-                <div class="rule-card">
-                  <button class="rule-header" onclick={() => toggleRule(key)}>
-                    <span class="rule-name">{rule.name}</span>
-                    <span class="rule-id">{rule.id}</span>
-                    <span class="chevron small" class:open={expandedRules.has(key)}>&#9656;</span>
-                  </button>
-                  {#if expandedRules.has(key)}
-                    <div class="rule-body">
-                      <label class="form-group">
-                        <span class="form-label">Name</span>
-                        <input type="text" class="form-input" bind:value={rule.name} />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Context</span>
-                        <textarea class="form-textarea" bind:value={rule.context} rows="4"></textarea>
-                      </label>
-                      <div class="form-group">
-                        <span class="form-label">Require @mention</span>
-                        <button class="toggle-switch small" class:on={rule.requireMention ?? true} aria-label="Require @mention" aria-pressed={rule.requireMention ?? true} onclick={() => rule.requireMention = !(rule.requireMention ?? true)}>
-                          <span class="toggle-knob"></span>
-                        </button>
-                      </div>
-                      <div class="form-group">
-                        <span class="form-label">Allow public responses</span>
-                        <button class="toggle-switch small" class:on={rule.allowPublicResponses ?? false} aria-label="Allow public responses" aria-pressed={rule.allowPublicResponses ?? false} onclick={() => rule.allowPublicResponses = !(rule.allowPublicResponses ?? false)}>
-                          <span class="toggle-knob"></span>
-                        </button>
-                      </div>
-                      <label class="form-group">
-                        <span class="form-label">Ignored channels (IDs)</span>
-                        <input type="text" class="form-input"
-                          value={(rule.ignoredChannels || []).join(', ')}
-                          onchange={(e) => rule.ignoredChannels = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean)}
-                        />
-                      </label>
-                      <div class="rule-actions">
-                        <button class="btn btn-primary" onclick={() => saveRule('server', rule)} disabled={actionLoading === `save-server-${rule.id}`}>
-                          {actionLoading === `save-server-${rule.id}` ? 'Saving...' : 'Save'}
-                        </button>
-                        <button class="btn btn-danger" onclick={() => deleteRule('server', rule.id)} disabled={actionLoading === `delete-server-${rule.id}`}>
-                          {actionLoading === `delete-server-${rule.id}` ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-              {#if addingRule === 'server'}
-                <div class="rule-card add-form">
-                  <label class="form-group">
-                    <span class="form-label">Server ID</span>
-                    <input type="text" class="form-input" bind:value={newRuleId} placeholder="Discord server ID" />
-                  </label>
-                  <label class="form-group">
-                    <span class="form-label">Name</span>
-                    <input type="text" class="form-input" bind:value={newRuleName} placeholder="Server name" />
-                  </label>
-                  <div class="rule-actions">
-                    <button class="btn btn-primary" onclick={confirmAddRule} disabled={!newRuleId || !newRuleName}>Add</button>
-                    <button class="btn btn-muted" onclick={cancelAddRule}>Cancel</button>
-                  </div>
-                </div>
-              {:else}
-                <button class="btn btn-muted add-btn" onclick={() => startAddRule('server')}>+ Add server rule</button>
-              {/if}
-            </div>
-          {/if}
-
-          <!-- Channel Rules -->
-          {#if rulesSection === 'channels'}
-            <div class="rules-list">
-              {#each Object.values(rules.channels) as rule (rule.id)}
-                {@const key = `channel-${rule.id}`}
-                <div class="rule-card">
-                  <button class="rule-header" onclick={() => toggleRule(key)}>
-                    <span class="rule-name">#{rule.name}</span>
-                    <span class="rule-id">{rule.id}</span>
-                    <span class="chevron small" class:open={expandedRules.has(key)}>&#9656;</span>
-                  </button>
-                  {#if expandedRules.has(key)}
-                    <div class="rule-body">
-                      <label class="form-group">
-                        <span class="form-label">Name</span>
-                        <input type="text" class="form-input" bind:value={rule.name} />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Server ID</span>
-                        <input type="text" class="form-input" bind:value={rule.serverId} />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Context</span>
-                        <textarea class="form-textarea" bind:value={rule.context} rows="3"></textarea>
-                      </label>
-                      <div class="form-group inline-toggles">
-                        <div class="toggle-item">
-                          <span class="form-label">Require @mention</span>
-                          <button class="toggle-switch small" class:on={rule.requireMention ?? false} aria-label="Require @mention" aria-pressed={rule.requireMention ?? false} onclick={() => rule.requireMention = !(rule.requireMention ?? false)}>
-                            <span class="toggle-knob"></span>
-                          </button>
-                        </div>
-                        <div class="toggle-item">
-                          <span class="form-label">Always listen</span>
-                          <button class="toggle-switch small" class:on={rule.alwaysListen ?? false} aria-label="Always listen" aria-pressed={rule.alwaysListen ?? false} onclick={() => rule.alwaysListen = !(rule.alwaysListen ?? false)}>
-                            <span class="toggle-knob"></span>
-                          </button>
-                        </div>
-                        <div class="toggle-item">
-                          <span class="form-label">Ignore</span>
-                          <button class="toggle-switch small" class:on={rule.ignore ?? false} aria-label="Ignore" aria-pressed={rule.ignore ?? false} onclick={() => rule.ignore = !(rule.ignore ?? false)}>
-                            <span class="toggle-knob"></span>
-                          </button>
-                        </div>
-                        <div class="toggle-item">
-                          <span class="form-label">Read-only</span>
-                          <button class="toggle-switch small" class:on={rule.readOnly ?? false} aria-label="Read-only" aria-pressed={rule.readOnly ?? false} onclick={() => rule.readOnly = !(rule.readOnly ?? false)}>
-                            <span class="toggle-knob"></span>
-                          </button>
-                        </div>
-                      </div>
-                      <div class="rule-actions">
-                        <button class="btn btn-primary" onclick={() => saveRule('channel', rule)} disabled={actionLoading === `save-channel-${rule.id}`}>
-                          {actionLoading === `save-channel-${rule.id}` ? 'Saving...' : 'Save'}
-                        </button>
-                        <button class="btn btn-danger" onclick={() => deleteRule('channel', rule.id)} disabled={actionLoading === `delete-channel-${rule.id}`}>
-                          {actionLoading === `delete-channel-${rule.id}` ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-              {#if addingRule === 'channel'}
-                <div class="rule-card add-form">
-                  <label class="form-group">
-                    <span class="form-label">Channel ID</span>
-                    <input type="text" class="form-input" bind:value={newRuleId} placeholder="Discord channel ID" />
-                  </label>
-                  <label class="form-group">
-                    <span class="form-label">Name</span>
-                    <input type="text" class="form-input" bind:value={newRuleName} placeholder="Channel name" />
-                  </label>
-                  <div class="rule-actions">
-                    <button class="btn btn-primary" onclick={confirmAddRule} disabled={!newRuleId || !newRuleName}>Add</button>
-                    <button class="btn btn-muted" onclick={cancelAddRule}>Cancel</button>
-                  </div>
-                </div>
-              {:else}
-                <button class="btn btn-muted add-btn" onclick={() => startAddRule('channel')}>+ Add channel rule</button>
-              {/if}
-            </div>
-          {/if}
-
-          <!-- User Rules -->
-          {#if rulesSection === 'users'}
-            <div class="rules-list">
-              {#each Object.values(rules.users) as rule (rule.id)}
-                {@const key = `user-${rule.id}`}
-                <div class="rule-card">
-                  <button class="rule-header" onclick={() => toggleRule(key)}>
-                    <span class="rule-name">{rule.name}</span>
-                    <span class="rule-id">{rule.id}</span>
-                    <span class="chevron small" class:open={expandedRules.has(key)}>&#9656;</span>
-                  </button>
-                  {#if expandedRules.has(key)}
-                    <div class="rule-body">
-                      <label class="form-group">
-                        <span class="form-label">Name</span>
-                        <input type="text" class="form-input" bind:value={rule.name} />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Trust level</span>
-                        <select class="form-input" bind:value={rule.trustLevel}>
-                          <option value="full">Full</option>
-                          <option value="standard">Standard</option>
-                          <option value="limited">Limited</option>
-                        </select>
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Relationship</span>
-                        <input type="text" class="form-input" bind:value={rule.relationship} />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Context</span>
-                        <textarea class="form-textarea" bind:value={rule.context} rows="3"></textarea>
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Allowed servers (IDs)</span>
-                        <input type="text" class="form-input"
-                          value={(rule.allowedServers || []).join(', ')}
-                          onchange={(e) => rule.allowedServers = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean)}
-                        />
-                      </label>
-                      <label class="form-group">
-                        <span class="form-label">Blocked servers (IDs)</span>
-                        <input type="text" class="form-input"
-                          value={(rule.blockedServers || []).join(', ')}
-                          onchange={(e) => rule.blockedServers = (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean)}
-                        />
-                      </label>
-                      <div class="rule-actions">
-                        <button class="btn btn-primary" onclick={() => saveRule('user', rule)} disabled={actionLoading === `save-user-${rule.id}`}>
-                          {actionLoading === `save-user-${rule.id}` ? 'Saving...' : 'Save'}
-                        </button>
-                        <button class="btn btn-danger" onclick={() => deleteRule('user', rule.id)} disabled={actionLoading === `delete-user-${rule.id}`}>
-                          {actionLoading === `delete-user-${rule.id}` ? 'Deleting...' : 'Delete'}
-                        </button>
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-              {#if addingRule === 'user'}
-                <div class="rule-card add-form">
-                  <label class="form-group">
-                    <span class="form-label">User ID</span>
-                    <input type="text" class="form-input" bind:value={newRuleId} placeholder="Discord user ID" />
-                  </label>
-                  <label class="form-group">
-                    <span class="form-label">Name</span>
-                    <input type="text" class="form-input" bind:value={newRuleName} placeholder="User name" />
-                  </label>
-                  <div class="rule-actions">
-                    <button class="btn btn-primary" onclick={confirmAddRule} disabled={!newRuleId || !newRuleName}>Add</button>
-                    <button class="btn btn-muted" onclick={cancelAddRule}>Cancel</button>
-                  </div>
-                </div>
-              {:else}
-                <button class="btn btn-muted add-btn" onclick={() => startAddRule('user')}>+ Add user rule</button>
-              {/if}
-            </div>
-          {/if}
+        {#if rulesSection === 'users'}
+          <UserRulesEditor
+            rules={Object.values(rules.users)}
+            {expandedRules}
+            addForm={{ addingRule, newRuleId, newRuleName }}
+            {actionLoading}
+            ontogglerule={toggleRule}
+            onsaverule={(rule) => saveRule('user', rule)}
+            ondeleterule={(id) => deleteRule('user', id)}
+            onstartadd={() => startAddRule('user')}
+            oncanceladd={cancelAddRule}
+            onconfirmadd={confirmAddRule}
+            onaddformupdate={updateAddFormField}
+          />
         {/if}
       {/if}
-    </section>
+    </DiscordRulesPanel>
 
     <!-- Status / Error -->
     {#if statusMessage}
@@ -1399,13 +1213,6 @@
     margin-top: 0.75rem;
   }
 
-  .add-btn {
-    margin-top: 0.5rem;
-    width: 100%;
-    text-align: center;
-    padding: 0.5rem;
-  }
-
   /* Settings form */
   .settings-form {
     margin-top: 0.75rem;
@@ -1447,128 +1254,10 @@
     min-height: 3rem;
   }
 
-  select.form-input {
-    cursor: pointer;
-  }
-
   .form-hint {
     font-size: 0.6875rem;
     color: var(--text-muted);
     font-style: italic;
-  }
-
-  .inline-toggles {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    flex-direction: row;
-  }
-
-  .toggle-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .toggle-item .form-label {
-    margin: 0;
-  }
-
-  /* Rules */
-  .rules-tabs {
-    display: flex;
-    gap: 0;
-    margin: 0.75rem 0 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .rules-tab {
-    padding: 0.5rem 1rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    border-bottom: 2px solid transparent;
-    transition: all var(--transition);
-    background: none;
-    border-top: none;
-    border-left: none;
-    border-right: none;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-  }
-
-  .rules-tab:hover {
-    color: var(--text-secondary);
-  }
-
-  .rules-tab.active {
-    color: var(--text-primary);
-    background: var(--bg-active);
-    border-bottom-color: transparent;
-    border-radius: var(--radius-sm);
-  }
-
-  .rules-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-    margin-top: 0.5rem;
-  }
-
-  .rule-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-
-  .rule-card.add-form {
-    padding: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .rule-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.625rem 0.75rem;
-    width: 100%;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: inherit;
-    text-align: left;
-  }
-
-  .rule-header:hover {
-    background: var(--bg-hover);
-  }
-
-  .rule-name {
-    font-size: 0.8125rem;
-    color: var(--text-primary);
-    flex: 1;
-  }
-
-  .rule-id {
-    font-size: 0.6875rem;
-    color: var(--text-muted);
-    font-family: var(--font-mono, monospace);
-  }
-
-  .rule-body {
-    padding: 0.75rem;
-    border-top: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 0.625rem;
-  }
-
-  .rule-actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
   }
 
   .status-msg {
@@ -1671,10 +1360,6 @@
       text-align: center;
     }
 
-    .inline-toggles {
-      flex-direction: column;
-      gap: 0.5rem;
-    }
   }
 
   /* --- Connection banner --- */

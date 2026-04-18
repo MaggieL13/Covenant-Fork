@@ -110,6 +110,14 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Use Auto-detect Owner and confirm the field fills without moving the save/status area
 - [ ] Change debounce, mention, expiry, owner-active-threshold, defer, and allowed-users settings; save; refresh; confirm each persists
 - [ ] Verify the guild/channel selector still appears inside Gateway Settings in the same place and all toggles behave unchanged
+- [ ] Expand Rules and confirm first-open lazy loading still works
+- [ ] Switch between Servers / Channels / Users tabs and confirm counts and active tab state stay correct
+- [ ] Begin adding a rule, switch tabs, switch back, and confirm the partially filled form is still present on the original tab
+- [ ] Edit and save an existing server rule, refresh, and confirm persistence
+- [ ] Edit and save an existing channel rule including toggle fields, refresh, and confirm persistence
+- [ ] Edit and save an existing user rule, refresh, and confirm persistence
+- [ ] Add a server/channel/user rule and confirm the new rule appears and stays expanded after save
+- [ ] Delete a server/channel/user rule and confirm it disappears without stale expanded state
 
 ---
 
