@@ -30,6 +30,26 @@ function columnExists(db: Db, table: string, col: string): boolean {
   return rows.some((r) => r.name === col);
 }
 
+/** Full footprint of 002_command_center.sql. Predicate 2 requires all. */
+const COMMAND_CENTER_TABLES = [
+  'care_entries',
+  'projects',
+  'tasks',
+  'events',
+  'cycles',
+  'cycle_daily_logs',
+  'cycle_settings',
+  'pets',
+  'pet_events',
+  'pet_medications',
+  'lists',
+  'list_items',
+  'expenses',
+  'countdowns',
+  'daily_wins',
+  'scratchpad_notes',
+] as const;
+
 /**
  * Predicate map keyed by migration version number. If a migration file exists
  * but no predicate is registered for its version, bootstrap cannot safely
@@ -44,9 +64,12 @@ export const predicates: Record<number, (db: Db) => boolean> = {
     tableExists(db, 'config') &&
     tableExists(db, 'canvases'),
 
-  // 002 — Command Center schema. The 002 file is conditionally loaded in current
-  // init.ts, so a legacy DB may have it or not. `tasks` is a distinctive table.
-  2: (db) => tableExists(db, 'tasks') && tableExists(db, 'care_entries'),
+  // 002 — Command Center schema. The 002 file is conditionally loaded in
+  // current init.ts, so a legacy DB may have it or not. Check the full
+  // 16-table footprint so a partial/manual state can't falsely satisfy
+  // this predicate.
+  2: (db) =>
+    COMMAND_CENTER_TABLES.every((t) => tableExists(db, t)),
 
   // 003-016 will be registered in subsequent sub-batches as their .sql files
   // are extracted from init.ts. Keep this section empty for 7.A — the runner
@@ -60,22 +83,53 @@ export const predicates: Record<number, (db: Db) => boolean> = {
  * later sub-batch.
  *
  * Kept exported so tests can exercise it directly against controlled schemas.
+ *
+ * FK safety: the probe inserts a row with a fake `thread_id` that has no
+ * matching parent in `threads`. If foreign keys are ON, that insert fails for
+ * FK reasons BEFORE the CHECK constraint is evaluated, giving a false negative.
+ * We turn foreign_keys OFF for the probe (which can only happen outside a
+ * transaction, so we do it before opening the savepoint) and restore it after.
  */
 export function messagesAllowsStickerContentType(db: Db): boolean {
   if (!tableExists(db, 'messages')) return false;
-  db.exec('SAVEPOINT predicate_007');
+
+  // Capture and disable FK enforcement for the duration of the probe.
+  // better-sqlite3 returns a number here; fall back defensively.
+  const fkState = db.pragma('foreign_keys', { simple: true });
+  const fkWasOn = fkState === 1 || fkState === true;
+  if (fkWasOn) db.pragma('foreign_keys = OFF');
+
   try {
-    db.prepare(
-      "INSERT INTO messages (id, thread_id, sequence, role, content, content_type, created_at) " +
-        "VALUES ('__predicate_probe_007__', '__probe__', 0, 'system', '', 'sticker', '1970-01-01T00:00:00Z')",
-    ).run();
-    db.exec('ROLLBACK TO SAVEPOINT predicate_007');
-    db.exec('RELEASE SAVEPOINT predicate_007');
-    return true;
-  } catch {
-    db.exec('ROLLBACK TO SAVEPOINT predicate_007');
-    db.exec('RELEASE SAVEPOINT predicate_007');
-    return false;
+    db.exec('SAVEPOINT predicate_007');
+    let result = false;
+    try {
+      db.prepare(
+        "INSERT INTO messages (id, thread_id, sequence, role, content, content_type, created_at) " +
+          "VALUES ('__predicate_probe_007__', '__probe_thread__', 0, 'system', '', 'sticker', '1970-01-01T00:00:00Z')",
+      ).run();
+      // Success with FK off means the CHECK constraint allowed 'sticker'.
+      result = true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Explicit CHECK constraint violation → migration not applied
+      if (/CHECK constraint/i.test(msg)) {
+        result = false;
+      } else {
+        // Any other failure (unique violation on sentinel id, NOT NULL, etc.)
+        // → be conservative and report not-applied so the runner will try to
+        // apply migration 7. If the migration is already applied, re-applying
+        // is not a safe no-op (it rebuilds the table), so false here is only
+        // a last resort — the 'sticker' CHECK case is the one we really care
+        // about.
+        result = false;
+      }
+    } finally {
+      db.exec('ROLLBACK TO SAVEPOINT predicate_007');
+      db.exec('RELEASE SAVEPOINT predicate_007');
+    }
+    return result;
+  } finally {
+    if (fkWasOn) db.pragma('foreign_keys = ON');
   }
 }
 

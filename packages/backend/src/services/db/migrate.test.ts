@@ -232,18 +232,29 @@ describe('migration runner — bootstrap detection', () => {
   });
 
   it('throws NonLinearSchemaError when schema has later-but-not-earlier migrations', () => {
-    // Use a synthetic set: version 1 predicate requires tableA, version 2 requires tableB.
-    // Seed with only tableB — predicate 1 false, predicate 2 true → non-linear drift.
+    // Predicate 1 false (no canvases), predicate 2 true (full CC footprint present)
     db.exec(`
       CREATE TABLE threads (id TEXT PRIMARY KEY);
       CREATE TABLE messages (id TEXT PRIMARY KEY);
       CREATE TABLE config (key TEXT PRIMARY KEY);
-      -- No canvases table → predicate 1 returns false
-      CREATE TABLE tasks (id TEXT PRIMARY KEY);
+      -- canvases MISSING → predicate 1 returns false
       CREATE TABLE care_entries (id TEXT PRIMARY KEY);
+      CREATE TABLE projects (id TEXT PRIMARY KEY);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE events (id TEXT PRIMARY KEY);
+      CREATE TABLE cycles (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_daily_logs (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_settings (id TEXT PRIMARY KEY);
+      CREATE TABLE pets (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_events (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_medications (id TEXT PRIMARY KEY);
+      CREATE TABLE lists (id TEXT PRIMARY KEY);
+      CREATE TABLE list_items (id TEXT PRIMARY KEY);
+      CREATE TABLE expenses (id TEXT PRIMARY KEY);
+      CREATE TABLE countdowns (id TEXT PRIMARY KEY);
+      CREATE TABLE daily_wins (id TEXT PRIMARY KEY);
+      CREATE TABLE scratchpad_notes (id TEXT PRIMARY KEY);
     `);
-    // Predicate 1 checks threads+messages+config+canvases (canvases missing → false)
-    // Predicate 2 checks tasks+care_entries (present → true)
     const dir = makeTempMigrationsDir({
       '001_init.sql': 'CREATE TABLE foo (x INTEGER);',
       '002_cc.sql': 'CREATE TABLE bar (x INTEGER);',
@@ -261,15 +272,29 @@ describe('migration runner — bootstrap detection', () => {
       CREATE TABLE messages (id TEXT PRIMARY KEY);
       CREATE TABLE config (key TEXT PRIMARY KEY);
       CREATE TABLE canvases (id TEXT PRIMARY KEY);
-      CREATE TABLE tasks (id TEXT PRIMARY KEY);
       CREATE TABLE care_entries (id TEXT PRIMARY KEY);
+      CREATE TABLE projects (id TEXT PRIMARY KEY);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE events (id TEXT PRIMARY KEY);
+      CREATE TABLE cycles (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_daily_logs (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_settings (id TEXT PRIMARY KEY);
+      CREATE TABLE pets (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_events (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_medications (id TEXT PRIMARY KEY);
+      CREATE TABLE lists (id TEXT PRIMARY KEY);
+      CREATE TABLE list_items (id TEXT PRIMARY KEY);
+      CREATE TABLE expenses (id TEXT PRIMARY KEY);
+      CREATE TABLE countdowns (id TEXT PRIMARY KEY);
+      CREATE TABLE daily_wins (id TEXT PRIMARY KEY);
+      CREATE TABLE scratchpad_notes (id TEXT PRIMARY KEY);
     `);
     const dir = makeTempMigrationsDir({
       '001_init.sql': 'SELECT 1;',
       '002_cc.sql': 'SELECT 2;',
     });
     try {
-      // Normal run — both bootstrap
+      // Normal run — both bootstrap (now that predicate 2 sees the full CC footprint)
       const summary = runPendingMigrations(db, { migrationsDir: dir, backup: false });
       expect(summary.bootstrapped).toEqual([1, 2]);
       expect(getAppliedVersions(db).size).toBe(2);
@@ -463,12 +488,104 @@ describe('predicates — behavioral probes', () => {
     expect(predicates[1](db)).toBe(false);
   });
 
-  it('predicate 2 matches the Command Center schema', () => {
+  it('predicate 2 returns false with only a subset of Command Center tables', () => {
+    // A drifted DB with just tasks + care_entries must NOT falsely satisfy
+    // predicate 2. The predicate now requires the FULL 002 footprint.
     db.exec(`
       CREATE TABLE tasks (id TEXT PRIMARY KEY);
       CREATE TABLE care_entries (id TEXT PRIMARY KEY);
     `);
+    expect(predicates[2](db)).toBe(false);
+  });
+
+  it('predicate 2 matches only when ALL Command Center tables are present', () => {
+    db.exec(`
+      CREATE TABLE care_entries (id TEXT PRIMARY KEY);
+      CREATE TABLE projects (id TEXT PRIMARY KEY);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY);
+      CREATE TABLE events (id TEXT PRIMARY KEY);
+      CREATE TABLE cycles (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_daily_logs (id TEXT PRIMARY KEY);
+      CREATE TABLE cycle_settings (id TEXT PRIMARY KEY);
+      CREATE TABLE pets (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_events (id TEXT PRIMARY KEY);
+      CREATE TABLE pet_medications (id TEXT PRIMARY KEY);
+      CREATE TABLE lists (id TEXT PRIMARY KEY);
+      CREATE TABLE list_items (id TEXT PRIMARY KEY);
+      CREATE TABLE expenses (id TEXT PRIMARY KEY);
+      CREATE TABLE countdowns (id TEXT PRIMARY KEY);
+      CREATE TABLE daily_wins (id TEXT PRIMARY KEY);
+      CREATE TABLE scratchpad_notes (id TEXT PRIMARY KEY);
+    `);
     expect(predicates[2](db)).toBe(true);
+  });
+
+  it('messagesAllowsStickerContentType works correctly with FK enforcement ON', () => {
+    // This is the regression test for the FK-masking bug: without FK handling,
+    // the probe would fail on FK violation even when sticker is actually allowed.
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        sequence INTEGER,
+        role TEXT,
+        content TEXT,
+        content_type TEXT CHECK(content_type IN ('text', 'image', 'audio', 'file', 'sticker')),
+        created_at TEXT,
+        FOREIGN KEY (thread_id) REFERENCES threads(id)
+      );
+    `);
+    db.pragma('foreign_keys = ON');
+    // Without FK handling in the probe, this would return false (FK violation).
+    // With the fix, it correctly reports true.
+    expect(messagesAllowsStickerContentType(db)).toBe(true);
+    // And FK enforcement is restored afterward
+    const fk = db.pragma('foreign_keys', { simple: true });
+    expect(fk).toBe(1);
+  });
+
+  it('messagesAllowsStickerContentType returns false correctly with FK ON when sticker is NOT allowed', () => {
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        sequence INTEGER,
+        role TEXT,
+        content TEXT,
+        content_type TEXT CHECK(content_type IN ('text', 'image', 'audio', 'file')),
+        created_at TEXT,
+        FOREIGN KEY (thread_id) REFERENCES threads(id)
+      );
+    `);
+    db.pragma('foreign_keys = ON');
+    expect(messagesAllowsStickerContentType(db)).toBe(false);
+    // FK state restored
+    const fk = db.pragma('foreign_keys', { simple: true });
+    expect(fk).toBe(1);
+  });
+
+  it('messagesAllowsStickerContentType leaves no rows or state behind (FK ON case)', () => {
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        sequence INTEGER,
+        role TEXT,
+        content TEXT,
+        content_type TEXT CHECK(content_type IN ('text', 'image', 'audio', 'file', 'sticker')),
+        created_at TEXT,
+        FOREIGN KEY (thread_id) REFERENCES threads(id)
+      );
+    `);
+    db.pragma('foreign_keys = ON');
+    messagesAllowsStickerContentType(db);
+    const msgCount = db.prepare('SELECT COUNT(*) AS c FROM messages').get() as { c: number };
+    const threadCount = db.prepare('SELECT COUNT(*) AS c FROM threads').get() as { c: number };
+    expect(msgCount.c).toBe(0);
+    expect(threadCount.c).toBe(0);
   });
 });
 
