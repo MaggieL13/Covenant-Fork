@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
-  import VoiceRecorder from './VoiceRecorder.svelte';
-  import VoiceModeToggle from './VoiceModeToggle.svelte';
-  import StickerPicker from './StickerPicker.svelte';
   import { getCompanionName } from '$lib/stores/settings.svelte';
-  import CommandPalette from './CommandPalette.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
-  import { getStickerPacks, getStickerRefMap, getAllStickers } from '$lib/stores/stickers.svelte';
+  import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
   import { apiFetch } from '$lib/utils/api';
+  import ReplyBanner from './message-input/ReplyBanner.svelte';
+  import AttachmentTray from './message-input/AttachmentTray.svelte';
+  import CanvasRefTray from './message-input/CanvasRefTray.svelte';
+  import ComposerPickers from './message-input/ComposerPickers.svelte';
+  import ComposerTextarea from './message-input/ComposerTextarea.svelte';
+  import StickerAutocomplete from './message-input/StickerAutocomplete.svelte';
+  import ComposerCommandPalette from './message-input/ComposerCommandPalette.svelte';
 
   let companionName = $derived(getCompanionName());
 
@@ -36,8 +39,8 @@
     onstop?: () => void;
   }>();
 
-  let textarea: HTMLTextAreaElement;
-  let fileInput: HTMLInputElement;
+  let getTextarea = $state<() => HTMLTextAreaElement | null>(() => null);
+  let getFileInput = $state<() => HTMLInputElement | null>(() => null);
   let content = $state('');
   let uploading = $state(false);
   let uploadError = $state<string | null>(null);
@@ -45,56 +48,58 @@
   let pendingCanvasRefs = $state<Array<{ canvasId: string; title: string }>>([]);
   let pendingProsody = $state<Record<string, number> | null>(null);
 
-  // Sticker picker state
-  let showStickerPicker = $state(false);
   let hasStickerPacks = $derived(getStickerPacks().length > 0);
   let pendingSticker = $state<Sticker | null>(null);
 
-  // Command palette state
   let showCommandPalette = $state(false);
   let commandFilter = $state('');
-  let paletteRef = $state<CommandPalette | undefined>();
   let commandRegistry = $derived(getCommandRegistry());
+  let commandPaletteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
-  // Can send if there's text or pending attachments
-  let canSend = $derived(content.trim().length > 0 || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0 || pendingSticker !== null);
+  let canSend = $derived(
+    content.trim().length > 0 ||
+    pendingAttachments.length > 0 ||
+    pendingCanvasRefs.length > 0 ||
+    pendingSticker !== null
+  );
 
-  // Auto-resize textarea
   function autoResize() {
+    const textarea = getTextarea();
     if (textarea) {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
     }
   }
 
-  // Sticker autocomplete state
   let stickerQuery = $state('');
   let stickerColonPos = $state(-1);
   let showStickerAutocomplete = $state(false);
-  let stickerSelectedIndex = $state(0);
+  let stickerAutocompleteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
-  // Build flat sticker list with refs for autocomplete
   let stickerAutocompleteList = $derived(() => {
     if (!stickerQuery) return [];
     const q = stickerQuery.toLowerCase();
     const packs = getStickerPacks();
     const stickers = getAllStickers();
     const results: Array<{ ref: string; url: string; name: string; packName: string }> = [];
+
     for (const s of stickers) {
-      const pack = packs.find(p => p.id === s.pack_id);
+      const pack = packs.find((candidate) => candidate.id === s.pack_id);
       if (!pack) continue;
       const ref = `:${pack.name.toLowerCase()}_${s.name}:`;
       if (ref.includes(q) || s.name.toLowerCase().includes(q)) {
         results.push({ ref, url: s.url, name: s.name, packName: pack.name });
       }
     }
+
     return results.slice(0, 8);
   });
 
-  // Detect slash commands and sticker autocomplete on input
-  function handleInput() {
+  function handleInput(event: Event) {
+    const target = event.currentTarget as HTMLTextAreaElement;
+    content = target.value;
     autoResize();
-    // Show command palette when content starts with / and is a single line
+
     if (content.startsWith('/') && !content.includes('\n')) {
       showCommandPalette = true;
       commandFilter = content.slice(1).split(' ')[0];
@@ -103,32 +108,42 @@
       commandFilter = '';
     }
 
-    // Sticker autocomplete: detect :partial anywhere in text
     detectStickerAutocomplete();
   }
 
   function detectStickerAutocomplete() {
-    if (!textarea) { showStickerAutocomplete = false; return; }
+    const textarea = getTextarea();
+    if (!textarea) {
+      showStickerAutocomplete = false;
+      return;
+    }
+
     const cursorPos = textarea.selectionStart;
     const textBefore = content.slice(0, cursorPos);
-    // Find last unmatched : before cursor
     const lastColon = textBefore.lastIndexOf(':');
-    if (lastColon === -1) { showStickerAutocomplete = false; return; }
-    // Check there's no closing : after the opening one (would mean a completed ref)
+    if (lastColon === -1) {
+      showStickerAutocomplete = false;
+      return;
+    }
+
     const afterColon = textBefore.slice(lastColon + 1);
     if (afterColon.includes(':') || afterColon.includes(' ') || afterColon.includes('\n')) {
       showStickerAutocomplete = false;
       return;
     }
-    if (afterColon.length < 1) { showStickerAutocomplete = false; return; }
+
+    if (afterColon.length < 1) {
+      showStickerAutocomplete = false;
+      return;
+    }
+
     stickerQuery = afterColon;
     stickerColonPos = lastColon;
-    stickerSelectedIndex = 0;
     showStickerAutocomplete = stickerAutocompleteList().length > 0;
   }
 
   function insertStickerRef(ref: string) {
-    // Replace from the : to cursor with the full ref
+    const textarea = getTextarea();
     const before = content.slice(0, stickerColonPos);
     const cursorPos = textarea?.selectionStart || content.length;
     const after = content.slice(cursorPos);
@@ -136,17 +151,17 @@
     showStickerAutocomplete = false;
     stickerQuery = '';
     textarea?.focus();
-    // Move cursor after inserted ref
+
     requestAnimationFrame(() => {
-      if (textarea) {
+      const activeTextarea = getTextarea();
+      if (activeTextarea) {
         const newPos = before.length + ref.length + 1;
-        textarea.selectionStart = newPos;
-        textarea.selectionEnd = newPos;
+        activeTextarea.selectionStart = newPos;
+        activeTextarea.selectionEnd = newPos;
       }
     });
   }
 
-  // Handle command selection from palette
   function handleCommandSelect(command: CommandRegistryEntry) {
     showCommandPalette = false;
 
@@ -157,45 +172,40 @@
     }
 
     if (command.args) {
-      // Command takes arguments — fill prefix and let user type
       content = `/${command.name} `;
-      textarea?.focus();
+      getTextarea()?.focus();
       return;
     }
 
-    // No-arg server command — execute immediately
     sendCommand(command.name, undefined, activeThreadId ?? undefined);
     resetInput();
   }
 
-  // Client-side command execution
   function executeClientCommand(name: string) {
     switch (name) {
       case 'help':
-        // Show full palette with no filter
         showCommandPalette = true;
         commandFilter = '';
         content = '/';
-        return; // Don't reset — keep palette open
+        return;
       case 'stop':
         onstop?.();
         break;
     }
   }
 
-  // Handle send — check for slash commands first
   function handleSend() {
     if (!canSend) return;
 
     const trimmed = content.trim();
 
-    // Check if this is a slash command
+    // ORDER: slash-command routing must finish before regular send logic so command text does not leak into the normal message path.
     if (trimmed.startsWith('/')) {
       const spaceIndex = trimmed.indexOf(' ');
       const name = spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex);
       const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim() || undefined;
 
-      const cmd = commandRegistry.find(c => c.name === name);
+      const cmd = commandRegistry.find((candidate) => candidate.name === name);
       if (cmd) {
         if (cmd.clientOnly) {
           executeClientCommand(name);
@@ -205,10 +215,9 @@
         resetInput();
         return;
       }
-      // Not a recognized command — fall through to send as regular message
     }
 
-    // Send sticker first (as its own message), then text
+    // ORDER: queued stickers send before the text/file batch so the existing sticker-first composer behavior stays intact.
     if (pendingSticker && activeThreadId) {
       send({
         type: 'message',
@@ -223,16 +232,16 @@
       });
     }
 
-    // Then send text + files (if any content exists)
     const files = [...pendingAttachments];
     let finalContent = trimmed;
     if (pendingCanvasRefs.length > 0) {
-      const refs = pendingCanvasRefs.map(r => `<<canvas:${r.canvasId}:${r.title}>>`).join(' ');
+      const refs = pendingCanvasRefs.map((ref) => `<<canvas:${ref.canvasId}:${ref.title}>>`).join(' ');
       finalContent = finalContent ? `${finalContent}\n${refs}` : refs;
     }
     if (finalContent || files.length > 0) {
       onbatchsend?.(finalContent, files, pendingProsody ?? undefined);
     }
+    // ORDER: reset only after the successful send path finishes so pending text, files, stickers, and canvas refs are still available to the active send branch.
     resetInput();
   }
 
@@ -246,71 +255,50 @@
     showStickerAutocomplete = false;
     stickerQuery = '';
     commandFilter = '';
+
+    const textarea = getTextarea();
     if (textarea) textarea.style.height = 'auto';
   }
 
-  // Remove a pending attachment
   function removeAttachment(index: number) {
     pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
   }
 
-  // Canvas references — called externally via bind:this
   export function attachCanvasRef(canvasId: string, title: string) {
-    // Don't add duplicates
-    if (pendingCanvasRefs.some(r => r.canvasId === canvasId)) return;
+    if (pendingCanvasRefs.some((ref) => ref.canvasId === canvasId)) return;
+    // ORDER: external canvas refs must land in state before focus returns so the composer immediately renders the new chip on the next pass.
     pendingCanvasRefs = [...pendingCanvasRefs, { canvasId, title }];
-    textarea?.focus();
+    getTextarea()?.focus();
   }
 
   function removeCanvasRef(index: number) {
     pendingCanvasRefs = pendingCanvasRefs.filter((_, i) => i !== index);
   }
 
-  // Queue sticker for sending (shows as chip, sent on Enter/click send)
   function handleStickerSelect(sticker: Sticker) {
     pendingSticker = sticker;
-    showStickerPicker = false;
-    textarea?.focus();
+    getTextarea()?.focus();
   }
 
-  // Handle keyboard — route to palette when open
-  function handleKeydown(e: KeyboardEvent) {
-    if (showCommandPalette && paletteRef) {
-      const handled = paletteRef.handleKey(e);
+  function handleKeydown(event: KeyboardEvent) {
+    // ORDER: command palette handling must win before normal Enter-send behavior so palette selection keeps consuming its own keyboard flow.
+    if (showCommandPalette && commandPaletteApi) {
+      const handled = commandPaletteApi.handleKey(event);
       if (handled) return;
     }
 
-    // Sticker autocomplete keyboard navigation
-    if (showStickerAutocomplete) {
-      const list = stickerAutocompleteList();
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        stickerSelectedIndex = (stickerSelectedIndex + 1) % list.length;
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        stickerSelectedIndex = (stickerSelectedIndex - 1 + list.length) % list.length;
-        return;
-      }
-      if ((e.key === 'Enter' || e.key === 'Tab') && list.length > 0) {
-        e.preventDefault();
-        insertStickerRef(list[stickerSelectedIndex].ref);
-        return;
-      }
-      if (e.key === 'Escape') {
-        showStickerAutocomplete = false;
-        return;
-      }
+    // ORDER: sticker autocomplete selection/navigation must resolve before normal Enter-send behavior so choosing a sticker ref never sends the draft early.
+    if (showStickerAutocomplete && stickerAutocompleteApi) {
+      const handled = stickerAutocompleteApi.handleKey(event);
+      if (handled) return;
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       handleSend();
     }
   }
 
-  // Upload a file to the server — queues as pending, doesn't send
   async function uploadFile(file: File) {
     uploading = true;
     uploadError = null;
@@ -332,17 +320,18 @@
       const result: FileUploadResult = await response.json();
       pendingAttachments = [...pendingAttachments, result];
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Upload failed';
-      uploadError = msg;
-      setTimeout(() => { uploadError = null; }, 5000);
+      const message = err instanceof Error ? err.message : 'Upload failed';
+      uploadError = message;
+      setTimeout(() => {
+        uploadError = null;
+      }, 5000);
     } finally {
       uploading = false;
     }
   }
 
-  // Handle file input change — supports multiple files
-  function handleFileSelect(e: Event) {
-    const input = e.target as HTMLInputElement;
+  function handleFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement;
     const files = input.files;
     if (files) {
       for (const file of files) {
@@ -352,14 +341,13 @@
     input.value = '';
   }
 
-  // Handle paste — detect images, queue as pending
-  function handlePaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
+  function handlePaste(event: ClipboardEvent) {
+    const items = event.clipboardData?.items;
     if (!items) return;
 
     for (const item of items) {
       if (item.type.startsWith('image/')) {
-        e.preventDefault();
+        event.preventDefault();
         const file = item.getAsFile();
         if (file) uploadFile(file);
         return;
@@ -367,20 +355,39 @@
     }
   }
 
-  // Handle voice transcript — populate textarea, hold prosody
   function handleTranscript(text: string, prosody?: Record<string, number> | null) {
     content = text;
     pendingProsody = prosody ?? null;
-    textarea?.focus();
+    getTextarea()?.focus();
   }
 
-  // Cancel reply
   function handleCancelReply() {
     oncancelreply?.();
   }
 
-  // Watch content for auto-resize + discard prosody if textarea fully cleared
+  // ORDER: the parent must receive fresh getter functions after child refs bind so focus, resize, upload-click, and cursor logic keep targeting the live DOM nodes.
+  function registerTextareaRefs(refs: { getTextarea: () => HTMLTextAreaElement | null }) {
+    getTextarea = refs.getTextarea;
+  }
+
+  function registerFileInputRefs(refs: { getFileInput: () => HTMLInputElement | null }) {
+    getFileInput = refs.getFileInput;
+  }
+
+  function registerCommandPaletteApi(api: { handleKey: (event: KeyboardEvent) => boolean }) {
+    commandPaletteApi = api;
+  }
+
+  function registerStickerAutocompleteApi(api: { handleKey: (event: KeyboardEvent) => boolean }) {
+    stickerAutocompleteApi = api;
+  }
+
+  function openFilePicker() {
+    getFileInput()?.click();
+  }
+
   $effect(() => {
+    // ORDER: pending prosody only clears once the draft is truly empty, then autoresize runs against the settled content state.
     if (content === '' && pendingProsody) {
       pendingProsody = null;
     }
@@ -389,165 +396,65 @@
 </script>
 
 <div class="message-input-container">
-  {#if replyTo}
-    <div class="reply-indicator">
-      <div class="reply-bar"></div>
-      <div class="reply-info">
-        <span class="replying-to">Replying to {replyTo.role === 'companion' ? companionName : 'You'}</span>
-        <span class="reply-preview">{replyTo.content.substring(0, 100)}</span>
-      </div>
-      <button class="cancel-reply" onclick={handleCancelReply} aria-label="Cancel reply">
-        ✕
-      </button>
-    </div>
-  {/if}
+  <ReplyBanner replyTo={replyTo} companionName={companionName} oncancel={handleCancelReply} />
 
   {#if uploadError}
     <div class="upload-error">{uploadError}</div>
   {/if}
 
-  {#if pendingSticker || pendingAttachments.length > 0 || pendingCanvasRefs.length > 0}
-    <div class="attachment-strip">
-      {#if pendingSticker}
-        <div class="attachment-preview sticker-chip">
-          <img src={pendingSticker.url} alt={pendingSticker.name} class="sticker-chip-img" />
-          <button class="attachment-remove" onclick={() => pendingSticker = null} aria-label="Remove sticker">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      {/if}
-      {#each pendingAttachments as attachment, i}
-        <div class="attachment-preview">
-          {#if attachment.contentType === 'image'}
-            <img src={attachment.url} alt={attachment.filename} class="attachment-thumb" />
-          {:else}
-            <div class="attachment-file-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-              </svg>
-              <span class="attachment-name">{attachment.filename}</span>
-            </div>
-          {/if}
-          <button class="attachment-remove" onclick={() => removeAttachment(i)} aria-label="Remove attachment">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      {/each}
-      {#each pendingCanvasRefs as ref, i}
-        <div class="attachment-preview canvas-ref-chip">
-          <div class="attachment-file-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
-            </svg>
-            <span class="attachment-name">{ref.title}</span>
-          </div>
-          <button class="attachment-remove" onclick={() => removeCanvasRef(i)} aria-label="Remove canvas reference">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <AttachmentTray
+    pendingSticker={pendingSticker}
+    pendingAttachments={pendingAttachments}
+    onremoveattachment={removeAttachment}
+    onclearsticker={() => {
+      pendingSticker = null;
+    }}
+  />
 
-  {#if showCommandPalette}
-    <CommandPalette
-      bind:this={paletteRef}
-      filter={commandFilter}
-      commands={commandRegistry}
-      onselect={handleCommandSelect}
-      onclose={() => { showCommandPalette = false; }}
-    />
-  {/if}
+  <CanvasRefTray pendingCanvasRefs={pendingCanvasRefs} onremove={removeCanvasRef} />
 
-  {#if showStickerAutocomplete && stickerAutocompleteList().length > 0}
-    <div class="sticker-autocomplete">
-      {#each stickerAutocompleteList() as item, i (item.ref)}
-        <button
-          class="sticker-ac-item"
-          class:selected={i === stickerSelectedIndex}
-          onmousedown={(e) => { e.preventDefault(); insertStickerRef(item.ref); }}
-          onmouseenter={() => stickerSelectedIndex = i}
-        >
-          <img src={item.url} alt={item.name} class="sticker-ac-img" />
-          <span class="sticker-ac-ref">{item.ref}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
+  <ComposerCommandPalette
+    visible={showCommandPalette}
+    filter={commandFilter}
+    commands={commandRegistry}
+    onselect={handleCommandSelect}
+    onclose={() => {
+      showCommandPalette = false;
+    }}
+    onregisterapi={registerCommandPaletteApi}
+  />
 
   <div class="input-bar">
-    <input
-      bind:this={fileInput}
-      type="file"
-      accept="image/*,audio/*,.pdf,.txt,.md,.json"
-      multiple
-      onchange={handleFileSelect}
-      hidden
-      aria-hidden="true"
+    <ComposerPickers
+      uploading={uploading}
+      hasStickerPacks={hasStickerPacks}
+      onopenfilepicker={openFilePicker}
+      onstickerselect={handleStickerSelect}
+      ontranscript={handleTranscript}
+      onfilechange={handleFileSelect}
+      onregisterrefs={registerFileInputRefs}
     />
 
-    <button
-      class="attach-button"
-      onclick={() => fileInput?.click()}
-      disabled={uploading}
-      aria-label="Attach file"
-      title="Attach file"
-    >
-      {#if uploading}
-        <span class="upload-spinner"></span>
-      {:else}
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>
-        </svg>
-      {/if}
-    </button>
+    <div class="composer-center">
+      <StickerAutocomplete
+        items={stickerAutocompleteList()}
+        visible={showStickerAutocomplete}
+        onselect={insertStickerRef}
+        onclose={() => { showStickerAutocomplete = false; }}
+        onregisterapi={registerStickerAutocompleteApi}
+      />
 
-    <VoiceRecorder ontranscript={handleTranscript} />
-
-    {#if hasStickerPacks}
-      <div class="sticker-btn-wrap">
-        <button
-          class="sticker-button"
-          onclick={() => showStickerPicker = !showStickerPicker}
-          aria-label="Send sticker"
-          title="Stickers"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
-            <line x1="9" y1="9" x2="9.01" y2="9"/>
-            <line x1="15" y1="9" x2="15.01" y2="9"/>
-          </svg>
-        </button>
-        {#if showStickerPicker}
-          <StickerPicker
-            onselect={handleStickerSelect}
-            onclose={() => showStickerPicker = false}
-          />
-        {/if}
-      </div>
-    {/if}
-
-    <textarea
-      bind:this={textarea}
-      bind:value={content}
-      oninput={handleInput}
-      onkeydown={handleKeydown}
-      onpaste={handlePaste}
-      placeholder="Type a message..."
-      rows="1"
-      aria-label="Message input"
-    ></textarea>
-
-    <VoiceModeToggle />
+      <ComposerTextarea
+        content={content}
+        oninput={handleInput}
+        onkeydown={handleKeydown}
+        onpaste={handlePaste}
+        onregisterrefs={registerTextareaRefs}
+      />
+    </div>
 
     {#if isStreaming}
+      <!-- ORDER: this stays inline in the parent because it renders on the right side of the textarea in the existing composer layout. -->
       <button
         class="send-button stop-active"
         onclick={() => onstop?.()}
@@ -558,6 +465,7 @@
         </svg>
       </button>
     {:else}
+      <!-- ORDER: this stays inline in the parent because it renders on the right side of the textarea in the existing composer layout. -->
       <button
         class="send-button"
         onclick={handleSend}
@@ -591,59 +499,6 @@
     width: 100%;
   }
 
-  .reply-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.85rem 1rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-bottom: none;
-    border-radius: 1rem 1rem 0 0;
-  }
-
-  .reply-bar {
-    width: 2px;
-    height: 2rem;
-    background: var(--accent);
-    border-radius: 1px;
-    flex-shrink: 0;
-  }
-
-  .reply-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    overflow: hidden;
-  }
-
-  .replying-to {
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--accent);
-    font-family: var(--font-heading);
-    letter-spacing: 0.03em;
-  }
-
-  .reply-preview {
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cancel-reply {
-    padding: 0.5rem;
-    color: var(--text-muted);
-    transition: color var(--transition-fast);
-  }
-
-  .cancel-reply:hover {
-    color: var(--text-secondary);
-  }
-
   .upload-error {
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
@@ -651,80 +506,6 @@
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.2);
     border-bottom: none;
-  }
-
-  .attachment-strip {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.85rem 1rem 0.35rem;
-    overflow-x: auto;
-    flex-wrap: wrap;
-  }
-
-  .attachment-preview {
-    position: relative;
-    flex-shrink: 0;
-    border: 1px solid var(--border);
-    border-radius: 0.875rem;
-    overflow: hidden;
-    background: var(--bg-surface);
-  }
-
-  .canvas-ref-chip {
-    border-color: var(--accent, #9b72cf);
-  }
-
-  .sticker-chip {
-    padding: 0.25rem;
-  }
-
-  .sticker-chip-img {
-    width: 48px;
-    height: 48px;
-    object-fit: contain;
-    border-radius: 0.25rem;
-  }
-
-  .attachment-thumb {
-    width: 4rem;
-    height: 4rem;
-    object-fit: cover;
-    display: block;
-  }
-
-  .attachment-file-icon {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.5rem 0.625rem;
-    color: var(--text-secondary);
-    font-size: 0.75rem;
-    max-width: 8rem;
-  }
-
-  .attachment-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .attachment-remove {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 1.25rem;
-    height: 1.25rem;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.7);
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background var(--transition-fast);
-  }
-
-  .attachment-remove:hover {
-    background: rgba(239, 68, 68, 0.8);
   }
 
   .input-bar {
@@ -743,124 +524,10 @@
     box-shadow: 0 0 0 1px rgba(155, 114, 207, 0.18), 0 16px 40px rgba(0, 0, 0, 0.18);
   }
 
-  .attach-button {
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    color: var(--text-muted);
-    border-radius: 0.875rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: color var(--transition), background var(--transition);
-  }
-
-  .attach-button:hover:not(:disabled) {
-    color: var(--text-secondary);
-    background: var(--bg-hover);
-  }
-
-  .attach-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  /* Sticker autocomplete dropdown */
-  .sticker-autocomplete {
+  .composer-center {
     position: relative;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    max-height: 200px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    margin: 0 0.5rem;
-  }
-
-  .sticker-ac-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.35rem 0.5rem;
-    cursor: pointer;
-    transition: background var(--transition);
-    text-align: left;
-  }
-
-  .sticker-ac-item:hover,
-  .sticker-ac-item.selected {
-    background: var(--bg-hover);
-  }
-
-  .sticker-ac-img {
-    width: 28px;
-    height: 28px;
-    object-fit: contain;
-    border-radius: 0.25rem;
-    flex-shrink: 0;
-  }
-
-  .sticker-ac-ref {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    font-family: var(--font-mono, monospace);
-  }
-
-  .sticker-btn-wrap {
-    position: relative;
-    flex-shrink: 0;
-  }
-
-  .sticker-button {
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    color: var(--text-muted);
-    border-radius: 0.875rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color var(--transition), background var(--transition);
-  }
-  .sticker-button:hover { color: var(--accent); background: var(--bg-hover); }
-
-  .upload-spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--text-muted);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  textarea {
     flex: 1;
     min-width: 0;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0.6rem 0.75rem;
-    color: var(--text-primary);
-    font-size: 1rem;
-    line-height: 1.6;
-    resize: none;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  textarea:focus {
-    outline: none;
-  }
-
-  textarea::placeholder {
-    color: var(--text-muted);
   }
 
   .send-button {
@@ -914,14 +581,9 @@
       border-radius: 1.25rem;
     }
 
-    .attach-button,
     .send-button {
       width: 2.5rem;
       height: 2.5rem;
-    }
-
-    textarea {
-      padding: 0.625rem 0.75rem;
     }
 
     .composer-hint {

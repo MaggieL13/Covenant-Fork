@@ -88,6 +88,44 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Tool use shows an indicator (thinking, searching, etc.)
 - [ ] After response finishes, thread list updates (last message preview, timestamp)
 
+### 13. Settings basics
+- [ ] Open Settings and confirm current companion name, user name, and timezone render correctly
+- [ ] Change companion name, user name, and timezone; save; refresh; confirm the values persist
+- [ ] Change chat model, autonomous model, and thinking effort; save; refresh; confirm the values persist
+- [ ] Confirm a saved chat model change is reflected in the chat header model indicator
+- [ ] Toggle orchestrator, voice, Discord, and Telegram; save; refresh; confirm each toggle persists
+- [ ] Verify the Voice, Discord, and Telegram setup guides only appear when their related toggles are enabled
+- [ ] Set or change the password; save; confirm the success behavior is unchanged and the explanatory text still matches whether a password exists
+- [ ] Confirm shared save success and error messages still render in the same place at the bottom of the panel
+- [ ] Personality round-trip: edit guided fields, save, switch to raw, save unchanged, switch back to guided, and confirm no content drift
+- [ ] Personality round-trip: edit raw markdown, save, switch to guided, save unchanged, switch back to raw, and confirm the bytes are still identical
+- [ ] Use Reset to Default in Personality and confirm the editor updates before save
+- [ ] Add an MCP URL/SSE server and a stdio server, refresh, and confirm card rendering still matches the persisted config
+- [ ] Remove an MCP server, refresh, and confirm the removal persists without other MCP entries drifting
+- [ ] In Discord settings, verify the gateway setup guide still appears when the bot token is missing
+- [ ] With Discord enabled, verify the status card still shows bot identity, guild count, ping button, stats, and deferred notice
+- [ ] Approve a pending pairing request and confirm the user moves into Approved Users without other pairing rows drifting
+- [ ] Revoke an approved user and confirm they disappear from Approved Users after refresh
+- [ ] Expand Gateway Settings and confirm lazy-loading still shows the loading state before the form appears on first open
+- [ ] Use Auto-detect Owner and confirm the field fills without moving the save/status area
+- [ ] Change debounce, mention, expiry, owner-active-threshold, defer, and allowed-users settings; save; refresh; confirm each persists
+- [ ] Verify the guild/channel selector still appears inside Gateway Settings in the same place and all toggles behave unchanged
+- [ ] Expand Recent Activity and confirm loading, empty, and populated log states still render correctly
+- [ ] Verify Recent Activity date separators and log row formatting still match the previous UI
+- [ ] Close and reopen Recent Activity and confirm the log view re-renders cleanly without stale rows
+- [ ] Toggle a guild on or off, save, refresh, and confirm the selection persists
+- [ ] Expand a guild's channels, toggle a channel on or off, save, refresh, and confirm the selection persists
+- [ ] Toggle `Anyone can talk` and `Silence bot`, save, refresh, and confirm both guild options persist
+- [ ] Trigger a Discord action that shows status or error feedback and confirm the footer message still appears in the same place
+- [ ] Expand Rules and confirm first-open lazy loading still works
+- [ ] Switch between Servers / Channels / Users tabs and confirm counts and active tab state stay correct
+- [ ] Begin adding a rule, switch tabs, switch back, and confirm the partially filled form is still present on the original tab
+- [ ] Edit and save an existing server rule, refresh, and confirm persistence
+- [ ] Edit and save an existing channel rule including toggle fields, refresh, and confirm persistence
+- [ ] Edit and save an existing user rule, refresh, and confirm persistence
+- [ ] Add a server/channel/user rule and confirm the new rule appears and stays expanded after save
+- [ ] Delete a server/channel/user rule and confirm it disappears without stale expanded state
+
 ---
 
 ## 🚨 After Batch 7 (migrations)
