@@ -97,6 +97,11 @@ Do these after Batches 4 (WS untangle), 5 (Chat split), or 6 (Component split).
 - [ ] Verify the Voice, Discord, and Telegram setup guides only appear when their related toggles are enabled
 - [ ] Set or change the password; save; confirm the success behavior is unchanged and the explanatory text still matches whether a password exists
 - [ ] Confirm shared save success and error messages still render in the same place at the bottom of the panel
+- [ ] Personality round-trip: edit guided fields, save, switch to raw, save unchanged, switch back to guided, and confirm no content drift
+- [ ] Personality round-trip: edit raw markdown, save, switch to guided, save unchanged, switch back to raw, and confirm the bytes are still identical
+- [ ] Use Reset to Default in Personality and confirm the editor updates before save
+- [ ] Add an MCP URL/SSE server and a stdio server, refresh, and confirm card rendering still matches the persisted config
+- [ ] Remove an MCP server, refresh, and confirm the removal persists without other MCP entries drifting
 
 ---
 
