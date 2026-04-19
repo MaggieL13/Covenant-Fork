@@ -737,13 +737,13 @@ The dispatcher is what runs on every inbound message. Flow:
    Over limit → `error` with code `rate_limited`.
 3. Size limit: 10KB for text messages, 512KB for `voice_audio`
    chunks. Over limit → `error` with code `message_too_large`.
-4. Parse the inbound payload. The `ClientMessage` union type is
-   defined in `@resonant/shared`; the dispatcher uses a TypeScript
-   cast after JSON parsing. Runtime shape validation beyond JSON
-   parsing is not currently enforced at this layer — handlers trust
-   the typed shape. (`isClientMessage()` exists in
-   `packages/shared/src/protocol.ts` as a typed guard; future
-   hardening could wire it in at the dispatcher.)
+4. Parse the inbound payload. The `ClientMessage` union is defined
+   in `@resonant/shared`, but the backend currently relies on
+   TypeScript typing plus per-handler assumptions after JSON parsing;
+   it does not yet enforce full runtime message-shape validation at
+   the dispatcher. `isClientMessage()` exists in
+   `packages/shared/src/protocol.ts` as a typed guard and is a
+   candidate for future hardening here.
 5. Switch on `clientMsg.type`, touch activity where appropriate,
    delegate to the matching handler.
 
