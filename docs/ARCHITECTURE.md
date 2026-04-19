@@ -640,3 +640,191 @@ use Svelte's default scoped `<style>` blocks. Shared form selectors
 (used across the preferences-panel children) are wrapped in
 `:global(...)` inside `PreferencesPanel.svelte` so child components
 inherit the styling without duplicating it.
+
+---
+
+## WebSocket protocol
+
+The primary real-time path between browser and backend. Live message
+streaming, presence, reactions, canvas edits, voice transcription,
+and tool events all flow here. REST remains the path for
+request-response admin surfaces; WebSocket is the path for anything
+that needs to feel immediate.
+
+### Files
+
+`packages/backend/src/services/ws/`:
+
+- `ws.ts` (one level up, at `services/ws.ts`) — compatibility facade.
+  Owns the module-level singletons for voice service and gateway
+  services, exports `createWebSocketServer`, `setVoiceService`,
+  `setGatewayServices`, and the `registry`. All other ws.* imports
+  go through here.
+- `socket.ts` — upgrade handling, origin validation, session
+  authentication, connection bootstrap, heartbeat loop, close/error
+  cleanup. The lifecycle layer.
+- `events.ts` — the dispatcher. Parses incoming messages, applies
+  rate limiting and size limits, routes to the right handler.
+- `handlers/` — one file per message-type family: `messages.ts`,
+  `sync.ts`, `status.ts`, `voice.ts`, `canvases.ts`, `reactions.ts`,
+  `threads.ts`, `commands.ts`, `mcp.ts`.
+- `shared.ts` — tiny helpers used across handlers (`sendError`,
+  `threadsToSummaries`).
+- `registry.ts` (at `packages/backend/src/services/registry.ts`,
+  sibling of the `ws.ts` facade, NOT under `ws/`) — connection
+  tracking, user-to-socket mapping, per-IP connection cap,
+  activity-touch state, broadcast primitives.
+
+### Connection handshake
+
+1. Browser opens a WebSocket upgrade against the backend server on
+   the same host/port as the HTTP API, with the session cookie
+   attached.
+2. `socket.ts` receives the HTTP upgrade:
+   - Origin check against `config.cors.origins` + localhost defaults.
+     Rejected origins get `403 Forbidden` before any WS state is
+     allocated.
+   - If `config.auth.password` is set, the `resonant_session` cookie
+     is validated against the `web_sessions` table. Missing or
+     expired session → `401 Unauthorized`.
+   - If both checks pass, the upgrade proceeds.
+3. On successful upgrade, the new socket is registered via
+   `registry.add(userId, ws, ip)`. Per-IP cap (default 10)
+   enforced here — excess connections get closed with code 1008.
+4. Server sends a `connected` bootstrap message containing
+   `sessionStatus`, `threads`, `activeThreadId`, and (optionally)
+   `commands` — the exact shape is defined in
+   `packages/shared/src/protocol.ts`. The client renders the chat UI
+   from this payload.
+5. `canvas_list` is sent as a follow-up if any canvases exist.
+
+Order of these steps is load-bearing. `// ORDER:` comments in
+`socket.ts` document each: origin before auth before handleUpgrade,
+registry add before bootstrap send, `connected` before `canvas_list`.
+
+### Registry
+
+`services/registry.ts` owns every live socket. Responsibilities:
+
+- **Per-user connection sets.** Multiple tabs/devices can be open;
+  the registry tracks them as one user's set of sockets.
+- **Per-IP connection cap.** Hard cap (10) to prevent a single
+  misbehaving client from monopolizing the gateway.
+- **Broadcast primitives.** `broadcast(msg)` sends to every open
+  socket. `broadcastExcept(senderWs, msg)` sends to everyone else
+  (used for canvas updates so the sender's live cursor doesn't
+  jump).
+- **Activity timestamps.** `touchUserActivity()` records the last
+  time the user did anything; `touchUserWebActivity()` is web-only
+  (used by the chat-side activity surface, not orchestrator presence).
+  Presence state and "idle for N minutes" queries read from here.
+- **Device/tab visibility.** Tracks which of the user's connections
+  are on desktop vs mobile, which tab is currently visible. Used
+  by presence reporting and TTS auto-play.
+
+All writes to remote state that should reach connected clients go
+through one of the broadcast helpers. No direct `ws.send(...)` calls
+for state updates; direct sends are for sender-only echoes
+(`sync_response`, `canvas_list`, errors).
+
+### Dispatcher (`events.ts`)
+
+The dispatcher is what runs on every inbound message. Flow:
+
+1. Parse JSON. Invalid JSON → `error` with code `invalid_message`.
+2. Rate limit: 120 messages/minute/socket, with `pong` and
+   `visibility` exempted (they're frequent heartbeat traffic).
+   Over limit → `error` with code `rate_limited`.
+3. Size limit: 10KB for text messages, 512KB for `voice_audio`
+   chunks. Over limit → `error` with code `message_too_large`.
+4. Parse the inbound payload. The `ClientMessage` union type is
+   defined in `@resonant/shared`; the dispatcher uses a TypeScript
+   cast after JSON parsing. Runtime shape validation beyond JSON
+   parsing is not currently enforced at this layer — handlers trust
+   the typed shape. (`isClientMessage()` exists in
+   `packages/shared/src/protocol.ts` as a typed guard; future
+   hardening could wire it in at the dispatcher.)
+5. Switch on `clientMsg.type`, touch activity where appropriate,
+   delegate to the matching handler.
+
+`attachMessageHandler` is primarily a switch-based dispatcher.
+Adding a new message type means adding one case and one handler
+file.
+
+### Handlers
+
+Each handler file is a small module that takes the typed message
+plus dependencies and does one thing. Examples (not exhaustive —
+see `handlers/` for the full set):
+
+- `messages.ts` — `handleMessageSend` (the main "user sent a message"
+  path — includes file attachment handling, prompt construction,
+  agent invocation, optional auto-TTS)
+- `sync.ts` — `handleSync`, `handleRead`, `handleSwitchThread`,
+  `handleCreateThread`
+- `status.ts` — `handleRequestStatus` (agent presence, queue depth,
+  MCP status, connection counts, optional gateway stats)
+- `voice.ts` — `handleVoiceStart`, `handleVoiceAudio`, `handleVoiceStop`,
+  `handleVoiceMode`, plus `generateAndStreamTTS` for companion
+  responses
+- `canvases.ts` — canvas create/update/delete/list. Update uses
+  `broadcastExcept` to skip the sender.
+- `reactions.ts` — add/remove reactions on messages.
+- `threads.ts` — pin/unpin threads.
+- `commands.ts` — slash commands from the composer.
+- `mcp.ts` — MCP server reconnect/toggle.
+
+Handlers are pure functions plus websocket sends. They never own
+timers or long-lived state. Anything stateful (TTS playback
+sequencing, prosody abort controllers) is attached to the
+`ExtendedWebSocket` itself and cleaned up on close.
+
+### Message shapes
+
+Full client-to-server and server-to-client message shapes live in
+`packages/shared/src/protocol.ts`. The `ClientMessage` and
+`ServerMessage` type unions are exhaustive; this doc does not
+duplicate them.
+
+Rule: if a message shape crosses the WebSocket boundary, it belongs
+in `protocol.ts`, not in a package-local file. See the Shared
+contracts section.
+
+### Activity-touch pattern
+
+Many handlers call `registry.touchUserActivity()` and
+`registry.touchUserWebActivity()` before delegating. These two
+timestamps drive:
+
+- Companion presence (idle/active) reported via `request_status`
+- Orchestrator failsafe thresholds (inactivity-triggered wake prompts)
+- Auto-TTS gating (only auto-play if the tab is recently active)
+
+Messages that don't represent user intent (`pong`, `visibility`,
+`sync`, `request_status`, `stop_generation`, `mcp_*`, `rewind_files`,
+the voice audio stream itself) do NOT touch activity. Messages that
+do (`message`, `read`, `switch_thread`, `create_thread`, `voice_start`,
+`voice_stop`, all `canvas_*`, `add_reaction`, `remove_reaction`,
+`pin_thread`, `unpin_thread`, `command`) do, before dispatch. The
+dispatcher enforces this via a small `touchActivity()` helper;
+handlers don't each call both methods themselves.
+
+### Heartbeat
+
+`socket.ts` runs a 30-second `setInterval` that sends `ping` to every
+socket. Clients respond with `pong`. Sockets that miss a pong between
+intervals get `terminate()`'d. This is WS-layer keepalive, not
+application-layer presence.
+
+### Adding a new message type
+
+1. Add the new `{ type: 'foo', ... }` shape to both `ClientMessage`
+   (if inbound) and `ServerMessage` (if outbound) in
+   `packages/shared/src/protocol.ts`.
+2. Add a handler function in an existing `handlers/*.ts` file, or a
+   new file if the domain warrants one.
+3. Add a case in `events.ts`'s switch, calling the handler. Touch
+   activity if the message represents user intent.
+4. If the handler needs to broadcast, use `registry.broadcast()` or
+   `registry.broadcastExcept()`. Do not call `ws.send(...)` directly
+   for state updates.
