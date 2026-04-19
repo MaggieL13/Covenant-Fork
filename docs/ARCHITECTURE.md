@@ -942,3 +942,162 @@ Things that should NOT move there:
 3. Export is automatic via `index.ts`'s re-export.
 4. Import from `@resonant/shared` in the consuming package(s). Use
    `import type` unless you're importing a runtime guard.
+
+---
+
+## Load-bearing invariants
+
+The behaviors below look like things that could be simplified,
+reordered, or merged during refactoring. They cannot be, without
+visible regressions. Many are marked with `// ORDER:` comments in
+code; others are enforced by tests or structural seams. This section
+is the master list; earlier sections reference items here.
+
+### Database & schema
+
+- **Migration predicates must exactly match `initDb` output.** The
+  integration test at the bottom of
+  `packages/backend/src/services/db/migrate.test.ts` asserts this by
+  running `initDb(':memory:')` and checking every registered
+  predicate returns `true`. If a future init.ts edit removes a schema
+  element, or a predicate stops matching what init produces, this
+  test fails loudly. Don't disable it.
+- **Bootstrap ledger inserts are atomic.** All predicate-matched
+  migrations get marked applied in one transaction. A mid-bootstrap
+  crash leaves `_migrations` empty so the next boot can retry
+  cleanly. Don't split this into per-row writes.
+- **Non-linear schema aborts, never guesses.** If predicate N is
+  unsatisfied but a later predicate is satisfied, the runner throws
+  `NonLinearSchemaError`. Manual intervention is required in that
+  case. Don't "help" — the silent-recovery code path is a data-loss
+  vector.
+- **Detached canvas on thread delete.** Deleting a thread does NOT
+  cascade to delete its canvases. The canvas's `thread_id` is set to
+  `NULL` instead, so the canvas remains accessible from the canvas
+  list. See `deleteThread()` in `services/db/threads.ts`. This
+  behavior has a test in `db.test.ts`.
+- **Async embedding enqueue.** `createMessage()` in
+  `services/db/messages.ts` enqueues the new message for embedding
+  without waiting for the embedding to compute. Messages must appear
+  in the UI immediately; embeddings catch up asynchronously.
+
+### WebSocket ordering
+
+All in `packages/backend/src/services/ws/`. Each has an `// ORDER:`
+comment at the call site.
+
+- **Origin check before auth before `handleUpgrade`.** In `socket.ts`.
+  Rejected cross-origin sockets must never get access to session
+  validation or WS state. If you move origin validation after auth,
+  an unauthenticated origin check failure leaks session-validation
+  timing.
+- **Registry add before bootstrap send.** New sockets are added to
+  the registry before the `connected` message is sent. Broadcasts,
+  presence checks, and connection counts must match the visible
+  connection state.
+- **`connected` before `canvas_list`.** Clients expect the connected
+  message first; canvas list is an optional follow-up. Reversing this
+  breaks client-side state setup.
+- **30-second heartbeat cadence.** `setInterval` at 30000ms matches
+  client-side pong expectations. Changing the interval without
+  updating the client causes spurious terminations.
+- **Rate-limit + size-limit before dispatch.** In `events.ts`.
+  Messages that fail these guards must never reach handlers.
+- **Activity touch before handler dispatch for user-intent messages.**
+  User-intent messages touch `registry.touchUserActivity()` and
+  `registry.touchUserWebActivity()` before calling the handler.
+  Heartbeat/visibility/low-signal messages intentionally do not touch.
+  Presence reporting depends on this partitioning.
+- **Voice audio buffer ordering.** `handleVoiceStart` clears the
+  buffer before marking recording. `handleVoiceStop` concatenates
+  and then immediately clears the live buffer so the next recording
+  can start collecting while transcription runs. Prosody abort
+  happens before a new controller is installed. See `handlers/voice.ts`.
+
+### Frontend composition
+
+All in `packages/frontend/src/`. Duplicates of the Load-bearing seams
+subsection in Section 4 for canonical-list purposes.
+
+- **Chat page as composition shell.** `routes/chat/+page.svelte`
+  stays composition-only. Inline business logic re-creates the
+  pre-Batch-5 monolith.
+- **`MessageList` ref handoff via `onregisterrefs`.** Message
+  container and sentinel refs live inside `MessageList`; the page
+  receives them via callback. Getter-as-state pattern lets composables
+  target real DOM without the page owning `bind:this`.
+- **Send button inline in `MessageInput` parent.** NOT extracted into
+  `ComposerPickers`. Renders on the right side of the textarea in the
+  existing layout. Batch 6.3 hotfix established this after a
+  regression.
+- **Code-copy registration in `MessageBubble` parent.** The markdown
+  code-copy effect depends on post-render markdown DOM; moving it
+  into a display-only child broke it once already.
+- **`CommandPalette` parent-mounted in `MessageInput`.** Not inside
+  `ComposerTextarea`. Parent delegates keyboard events via
+  `handleKey(event)`. Moving the palette into the textarea shell
+  would require tunneling a component ref through a shell seam.
+- **Auto-scroll after message/stream updates.** The auto-scroll
+  effect in `routes/chat/+page.svelte` uses a setTimeout deferral so
+  the controller measures post-paint layout, not pre-paint.
+- **Read observer setup after sentinel exists.** The effect in
+  `routes/chat/+page.svelte` is keyed to `messagesEndEl`; setup runs
+  after the sentinel's `bind:this` has populated.
+- **Slash-command and sticker-autocomplete handle keys before
+  Enter-send.** In `MessageInput.handleKeydown`, the palette and
+  autocomplete API calls precede the normal Enter path. Reversing
+  this causes premature sends.
+- **Composer reset only after successful send.** In
+  `MessageInput.handleSend`. Reset must not run until the send path
+  has completed successfully; otherwise a transient send failure
+  wipes in-flight state.
+- **`:global()` CSS on shared form selectors.** In
+  `PreferencesPanel.svelte`. Svelte scopes styles per-component;
+  child components using the same class names need `:global()`
+  wrapping to inherit styling without duplicating it. (A Svelte
+  styling gotcha, but it already caused real regressions — worth
+  listing.)
+
+### State ownership boundaries
+
+- **Only `services/db/*` writes to SQLite.** Callers pass plain data;
+  the module handles SQL. Writing SQL elsewhere is the pattern that
+  leads to schema drift and untracked queries.
+- **Only `Orchestrator` owns application/background scheduling
+  timers.** Services that need scheduling register with the
+  orchestrator. The WebSocket heartbeat in `services/ws/socket.ts`
+  is a separate protocol-layer concern and is not "application
+  scheduling" in this sense. Ad-hoc `setInterval` in other modules
+  escapes graceful shutdown and causes test flakiness.
+- **`registry.broadcast*()` for multi-socket state updates.** Direct
+  `ws.send(...)` is only for sender-only echoes (`sync_response`,
+  `canvas_list`, errors).
+- **Frontend never mutates persisted state directly.** All changes
+  flow through WebSocket messages to the backend or HTTP calls
+  through `lib/utils/api.ts`.
+
+### Security boundaries
+
+- **Public routes mounted before `authMiddleware`.** In `routes/api.ts`.
+  `/health`, `/auth/*`, `/identity`, `/setup/*`, `/internal/*` precede
+  the auth gate. New public routes must also mount before it, or
+  they'll be 401'd.
+- **`requireLocalhost` for internal routes only.** In
+  `routes/internal.ts`. Not part of the global middleware stack.
+- **Rate limiter scoped to `/api` and `/mcp` only.** Not applied to
+  static asset serving. Changing this impacts chat responsiveness.
+
+### Testing guardrails
+
+Not architectural invariants per se, but guardrails that catch
+architectural violations early.
+
+- **Manual smoke checklist for UI changes.** `docs/MANUAL-TESTS.md`
+  holds the list of behaviors automated tests can't cover
+  (auto-scroll feel, streaming rendering, voice mode UI, etc.).
+  Run the relevant chat/settings section after any frontend refactor.
+- **Backend test suite must stay green.** The suite currently
+  includes migration/bootstrap defenses, predicate assertions, and
+  an anti-drift integration test. Keep it green; be suspicious of
+  unexplained test-count drops. Landing code that reduces the suite
+  count is almost always wrong.
