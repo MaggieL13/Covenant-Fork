@@ -7,18 +7,19 @@ import { getDb, getConfig, setConfig, getTodayThread, saveDigestEmbedding } from
 import { getResonantConfig } from '../config.js';
 import { embed, vectorToBuffer } from './embeddings.js';
 import { cacheDigestEmbedding } from './vector-cache.js';
+import { todayLocal, localTimeStr, localFullStr } from './time.js';
 import type { AgentService } from './agent.js';
 
 function today(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: getResonantConfig().identity.timezone });
+  return todayLocal(getResonantConfig().identity.timezone);
 }
 
 function nowTime(): string {
-  return new Date().toLocaleTimeString('en-GB', { timeZone: getResonantConfig().identity.timezone, hour: '2-digit', minute: '2-digit' });
+  return localTimeStr(getResonantConfig().identity.timezone);
 }
 
 function dlog(msg: string): void {
-  const ts = new Date().toLocaleString('en-GB', { timeZone: getResonantConfig().identity.timezone });
+  const ts = localFullStr(getResonantConfig().identity.timezone);
   console.log(`[SCRIBE ${ts}] ${msg}`);
 }
 
@@ -116,7 +117,7 @@ export async function runDigest(agent: AgentService): Promise<void> {
 
   // Format messages for the Scribe
   const conversationBlock = messages.map(m => {
-    const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('en-GB', { timeZone: config.identity.timezone, hour: '2-digit', minute: '2-digit' }) : '';
+    const time = m.created_at ? localTimeStr(config.identity.timezone, new Date(m.created_at)) : '';
     const speaker = m.role === 'companion' ? companion : m.role === 'user' ? user : 'System';
     // Truncate very long messages (tool output, code blocks)
     const content = m.content.length > 2000 ? m.content.slice(0, 2000) + '\n[... truncated]' : m.content;

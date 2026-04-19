@@ -3,13 +3,14 @@
 import crypto from 'crypto';
 import { getDb } from './db.js';
 import { getResonantConfig } from '../config.js';
+import { todayLocal } from './time.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function today(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: getResonantConfig().identity.timezone });
+  return todayLocal(getResonantConfig().identity.timezone);
 }
 
 function uuid(): string {

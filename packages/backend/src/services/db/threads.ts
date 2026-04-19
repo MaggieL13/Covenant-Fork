@@ -1,6 +1,7 @@
 import type { Thread } from '@resonant/shared';
 import { getResonantConfig } from '../../config.js';
 import { getDb } from './state.js';
+import { todayLocal, offsetMinutes, systemTimezone } from '../time.js';
 
 export function createThread(params: {
   id: string;
@@ -34,8 +35,7 @@ export function getThread(id: string): Thread | null {
 
 function getLocalDateString(timezone?: string): string {
   try {
-    const tz = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return new Date().toLocaleDateString('en-CA', { timeZone: tz });
+    return todayLocal(timezone || systemTimezone());
   } catch {
     return new Date().toISOString().split('T')[0];
   }
@@ -46,20 +46,13 @@ export function getTodayThread(): Thread | null {
   const timezone = config.identity.timezone;
   const localDate = getLocalDateString(timezone);
 
-  const now = new Date();
-  const utcStr = now.toLocaleString('en-GB', { timeZone: 'UTC', hour: '2-digit', hour12: false, minute: '2-digit' });
-  const localStr = now.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false, minute: '2-digit' });
-  const [utcH, utcM] = utcStr.split(':').map(Number);
-  const [localH, localM] = localStr.split(':').map(Number);
-  const utcMinutes = utcH * 60 + utcM;
-  const localMinutes = localH * 60 + localM;
-  let offsetMinutes = localMinutes - utcMinutes;
-  if (offsetMinutes > 840) offsetMinutes -= 1440;
-  if (offsetMinutes < -720) offsetMinutes += 1440;
-  const offsetHours = Math.round(offsetMinutes / 60);
+  // Sovereignty layer: offset in minutes at THIS instant in the user's zone.
+  // Node's ICU can lag IANA (Paraguay 2024 DST abolition is missing from
+  // Node 22.14's tzdata 2024b), so everything routes through time.ts.
+  const offMin = offsetMinutes(timezone);
+  const sign = offMin >= 0 ? '+' : '-';
+  const modifier = `${sign}${Math.abs(offMin)} minutes`;
 
-  const sign = offsetHours >= 0 ? '+' : '';
-  const modifier = `${sign}${offsetHours} hours`;
   const stmt = getDb().prepare(`
     SELECT * FROM threads
     WHERE type = 'daily'

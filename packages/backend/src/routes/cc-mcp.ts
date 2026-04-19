@@ -4,6 +4,7 @@ import { Router } from 'express';
 import * as cc from '../services/cc.js';
 import { getConfig, setConfig } from '../services/db.js';
 import { getResonantConfig } from '../config.js';
+import { todayLocal } from '../services/time.js';
 
 const router = Router();
 
@@ -270,7 +271,7 @@ function handleTool(name: string, args: any): string {
         return `Care logged: ${entry.person} ${entry.category} = ${entry.value || ''}${entry.note ? ' (note)' : ''}`;
       }
       if (a === 'get') {
-        const entries = cc.getCareEntries(args.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }), args.person);
+        const entries = cc.getCareEntries(args.date || todayLocal('Europe/London'), args.person);
         if (entries.length === 0) return 'No care entries for this day.';
         return entries.map(e => `${e.person} ${e.category}: ${e.value || '-'}${e.note ? ' [has notes]' : ''}`).join('\n');
       }
@@ -434,7 +435,7 @@ function handleTool(name: string, args: any): string {
       }
       if (a === 'add_event') {
         if (!args.text) return 'Error: text is required for add_event.';
-        const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: config.identity.timezone });
+        const todayDate = todayLocal(config.identity.timezone);
         const event = cc.addEvent({ title: args.text, start_date: args.start_date || todayDate, start_time: args.start_time, created_by: companionName });
         return `Event added: "${event.title}" on ${event.start_date}${event.start_time ? ' at ' + event.start_time : ''} (${event.id})`;
       }

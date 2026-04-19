@@ -33,6 +33,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -740,7 +741,8 @@ export class Orchestrator {
     const config = getResonantConfig();
     const timezone = config.identity.timezone;
     const now = new Date();
-    const hour = parseInt(now.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false }));
+    // Sovereignty layer: Node's ICU can lag IANA; route through time.ts.
+    const hour = tzLocalHour(timezone, now);
 
     // Only check during waking hours (8am - midnight)
     if (hour < 8) return;
@@ -849,9 +851,9 @@ export class Orchestrator {
     const presenceNow = registry.getUserPresenceState();
     const agentFree = !this.agent.isProcessing();
 
-    // Local time in configured timezone
-    const localHour = parseInt(now.toLocaleString('en-GB', { timeZone: timezone, hour: '2-digit', hour12: false }));
-    const localMinute = parseInt(now.toLocaleString('en-GB', { timeZone: timezone, minute: '2-digit' }));
+    // Local time in configured timezone (sovereignty layer, not Node ICU).
+    const localHour = tzLocalHour(timezone, now);
+    const localMinute = tzLocalMinute(timezone, now);
 
     // Lazy-fetch status only if any trigger needs it
     let statusText = '';

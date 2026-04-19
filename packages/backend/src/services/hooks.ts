@@ -17,6 +17,7 @@ import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig,
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
+import { todayLocal, localTimeStr, localDateStr } from './time.js';
 import crypto from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
@@ -46,8 +47,8 @@ function getLatestDigestExcerpt(maxChars = 2000): string | null {
 
     // Try today first, then yesterday
     const tz = config.identity.timezone || 'UTC';
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
-    const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: tz });
+    const today = todayLocal(tz);
+    const yesterday = todayLocal(tz, new Date(Date.now() - 86400000));
 
     for (const dateStr of [today, yesterday]) {
       const digestPath = join(digestsDir, `${dateStr}.md`);
@@ -781,13 +782,12 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   const companionName = config.identity.companion_name;
   const timezone = config.identity.timezone || 'UTC';
 
-  const now = new Date();
-  const timeStr = now.toLocaleString('en-GB', {
-    hour: '2-digit', minute: '2-digit', timeZone: timezone, hour12: false,
-  });
-  const dateStr = now.toLocaleDateString('en-GB', {
-    weekday: 'long', month: 'short', day: 'numeric', timeZone: timezone,
-  });
+  // Route through the sovereignty layer — Node's bundled ICU can be
+  // behind current IANA tzdata (e.g. Paraguay's 2024 DST abolition is
+  // not in Node 22.14's ICU 76.1). See services/time.ts.
+  const nowDate = new Date();
+  const timeStr = localTimeStr(timezone, nowDate);
+  const dateStr = localDateStr(timezone, nowDate);
 
   const parts: string[] = [CHANNEL_CONTEXTS[ctx.platform] || CHANNEL_CONTEXTS.web];
 
