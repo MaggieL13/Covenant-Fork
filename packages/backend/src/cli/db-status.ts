@@ -12,7 +12,6 @@ import 'dotenv/config';
 import Database from 'better-sqlite3';
 import { loadConfig } from '../config.js';
 import {
-  ensureMigrationsTable,
   getAppliedVersions,
   listMigrationFiles,
 } from '../services/db/migrate.js';
@@ -27,11 +26,29 @@ function main(): void {
 
   console.log(`[db:status] Target database: ${dbPath}`);
 
-  const db = new Database(dbPath, { readonly: false });
+  // Non-mutating: readonly open, no ensureMigrationsTable. If the ledger
+  // doesn't exist yet, report that and exit cleanly rather than creating it.
+  const db = new Database(dbPath, { readonly: true });
   try {
-    ensureMigrationsTable(db);
-    const applied = getAppliedVersions(db);
+    const hasLedger = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations'")
+      .get();
+
     const files = listMigrationFiles();
+
+    if (!hasLedger) {
+      console.log('');
+      console.log('[db:status] No _migrations ledger table yet.');
+      console.log('[db:status] Run `npm run db:migrate` to initialize the migration system on this database.');
+      console.log('');
+      console.log(`[db:status] Discovered ${files.length} migration file(s) on disk:`);
+      for (const f of files) {
+        console.log(`  ${pad(String(f.version).padStart(3, '0'), 6)}${f.name}`);
+      }
+      return;
+    }
+
+    const applied = getAppliedVersions(db);
 
     console.log('');
     console.log(pad('Version', 10) + pad('Status', 16) + pad('Bootstrapped', 14) + pad('Applied at', 30) + 'Name');
