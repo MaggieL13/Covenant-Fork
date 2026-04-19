@@ -12,7 +12,10 @@
     "build": "npm run build --workspace=packages/shared && npm run build --workspace=packages/frontend && npm run build --workspace=packages/backend",
     "start": "npm run start --workspace=packages/backend",
     "check": "npm run check --workspaces --if-present",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate": "npm run db:migrate --workspace=packages/backend",
+    "db:status": "npm run db:status --workspace=packages/backend",
+    "db:backup": "npm run db:backup --workspace=packages/backend"
   },
   "engines": {
     "node": ">=20.0.0 <25.0.0"
