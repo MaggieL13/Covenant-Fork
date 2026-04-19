@@ -107,3 +107,65 @@ export function tzdataInfo(): { momentVersion: string; dataVersion: string } {
     dataVersion: String(moment.tz.dataVersion ?? 'unknown'),
   };
 }
+
+export interface TimezoneEntry {
+  iana: string;        // 'America/Asuncion'
+  city: string;        // 'Asuncion' or 'Buenos Aires'
+  country: string;     // 'Paraguay' or 'Argentina'
+  countryCode: string; // 'PY' or 'AR'
+  region: string;      // 'America'
+}
+
+/**
+ * Full list of IANA zones enriched with country metadata for UI display.
+ *
+ * Iterates every country moment-timezone knows (`moment.tz.countries()`),
+ * maps each to its zones (`moment.tz.zonesForCountry(code)`), and labels
+ * the country via `Intl.DisplayNames`. Zones with no associated country
+ * in moment-tz (UTC, Etc/*) land in a synthetic 'Other' region.
+ *
+ * Sorted by region → country → city for stable rendering.
+ */
+export function listTimezonesWithMetadata(): TimezoneEntry[] {
+  const displayNames = new Intl.DisplayNames(['en'], { type: 'region' });
+  const result: TimezoneEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const code of moment.tz.countries()) {
+    const zones = moment.tz.zonesForCountry(code);
+    if (!zones) continue;
+    const country = displayNames.of(code) ?? code;
+    for (const iana of zones) {
+      if (seen.has(iana)) continue;
+      seen.add(iana);
+      const parts = iana.split('/');
+      const region = parts[0];
+      const city = parts[parts.length - 1].replace(/_/g, ' ');
+      result.push({ iana, city, country, countryCode: code, region });
+    }
+  }
+
+  // Pick up orphan zones (UTC, Etc/*, some historical pseudo-zones) that
+  // have no country affiliation. They land under "Other".
+  for (const iana of moment.tz.names()) {
+    if (seen.has(iana)) continue;
+    seen.add(iana);
+    const parts = iana.split('/');
+    const hasSlash = parts.length > 1;
+    result.push({
+      iana,
+      city: (parts[parts.length - 1] ?? iana).replace(/_/g, ' '),
+      country: '',
+      countryCode: '',
+      region: hasSlash ? parts[0] : 'Other',
+    });
+  }
+
+  result.sort((a, b) => {
+    if (a.region !== b.region) return a.region.localeCompare(b.region);
+    if (a.country !== b.country) return a.country.localeCompare(b.country);
+    return a.city.localeCompare(b.city);
+  });
+
+  return result;
+}

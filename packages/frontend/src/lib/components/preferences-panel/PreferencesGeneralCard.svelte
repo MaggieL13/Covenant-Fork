@@ -1,8 +1,16 @@
 <script lang="ts">
+  interface TimezoneEntry {
+    iana: string;
+    city: string;
+    country: string;
+    countryCode: string;
+    region: string;
+  }
+
   let {
     identity,
     features,
-    commonTimezones,
+    timezoneList,
     oncompanionnamechange,
     onusernamechange,
     ontimezonechange,
@@ -22,7 +30,7 @@
       discordEnabled: boolean;
       telegramEnabled: boolean;
     };
-    commonTimezones: string[];
+    timezoneList: TimezoneEntry[];
     oncompanionnamechange?: (value: string) => void;
     onusernamechange?: (value: string) => void;
     ontimezonechange?: (value: string) => void;
@@ -32,29 +40,30 @@
     ontelegramchange?: (value: boolean) => void;
   }>();
 
-  // Group IANA zones by region for <optgroup>. Region = first path segment
-  // ("America/Asuncion" → "America"). Zones without a slash (UTC, GMT) land
-  // in "Other". Returns [ [region, zones[]], ... ] sorted by region, zones
-  // sorted by label within each region.
+  // Group zones by region for <optgroup>, pre-sorted by the backend.
+  // Each entry already has city + country metadata for a clean label.
   const groupedTimezones = $derived.by(() => {
-    const groups = new Map<string, string[]>();
-    for (const tz of commonTimezones) {
-      const slash = tz.indexOf('/');
-      const region = slash === -1 ? 'Other' : tz.slice(0, slash);
-      if (!groups.has(region)) groups.set(region, []);
-      groups.get(region)!.push(tz);
+    const groups = new Map<string, TimezoneEntry[]>();
+    for (const entry of timezoneList) {
+      if (!groups.has(entry.region)) groups.set(entry.region, []);
+      groups.get(entry.region)!.push(entry);
     }
-    for (const list of groups.values()) list.sort((a, b) => a.localeCompare(b));
-    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    return [...groups.entries()];
   });
 
-  // "America/Argentina/Buenos_Aires" → "Argentina / Buenos Aires" (drop the
-  // region prefix since it's already the optgroup label; readability only).
-  function tzLabel(tz: string): string {
-    const slash = tz.indexOf('/');
-    const tail = slash === -1 ? tz : tz.slice(slash + 1);
-    return tail.replace(/_/g, ' ').replace(/\//g, ' / ');
+  // "Paraguay · Asuncion" — country leads because nobody types-ahead by
+  // city name. "P" should jump to Paraguay, "A" to Argentina, etc.
+  // Zones without a country (UTC, Etc/*) show just the city/zone name.
+  function tzLabel(entry: TimezoneEntry): string {
+    return entry.country ? `${entry.country} · ${entry.city}` : entry.city;
   }
+
+  // Whether the currently-saved timezone appears in the fetched list
+  // (defensive — if the backend returns empty during loading, we still
+  // surface the saved zone as a single option so the select isn't blank).
+  const currentInList = $derived(
+    timezoneList.some((e: TimezoneEntry) => e.iana === identity.timezone),
+  );
 </script>
 
 <section class="section">
@@ -95,12 +104,12 @@
     >
       {#each groupedTimezones as [region, zones]}
         <optgroup label={region}>
-          {#each zones as tz}
-            <option value={tz}>{tzLabel(tz)}</option>
+          {#each zones as entry (entry.iana)}
+            <option value={entry.iana}>{tzLabel(entry)}</option>
           {/each}
         </optgroup>
       {/each}
-      {#if !commonTimezones.includes(identity.timezone)}
+      {#if !currentInList}
         <option value={identity.timezone}>{identity.timezone}</option>
       {/if}
     </select>

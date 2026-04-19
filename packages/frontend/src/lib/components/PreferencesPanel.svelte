@@ -78,10 +78,28 @@
     }
   }
 
-  // Full IANA zone list from the runtime. Node/browser ICU determines which
-  // zones exist; offsets/rules are NOT surfaced in the UI — see the Timezone
-  // Sovereignty task in covenant-todo.md for authoritative tzdata.
-  const COMMON_TIMEZONES: string[] = Intl.supportedValuesOf('timeZone');
+  // Timezone list comes from the backend, where moment-timezone is the
+  // authoritative tzdata source (Paraguay et al are correct). Each entry
+  // includes city + country + region so the dropdown can group prettily.
+  interface TimezoneEntry {
+    iana: string;
+    city: string;
+    country: string;
+    countryCode: string;
+    region: string;
+  }
+  let timezoneList: TimezoneEntry[] = $state([]);
+
+  async function loadTimezones() {
+    try {
+      const res = await fetchWithTimeout('/api/timezones');
+      if (!res.ok) return;
+      timezoneList = await res.json();
+    } catch {
+      // If the fetch fails, the dropdown will still render an empty
+      // list + the preserved current-zone fallback. Not fatal.
+    }
+  }
 
   async function loadPrefs() {
     try {
@@ -326,6 +344,7 @@
     // ORDER: load base preferences before dependent sections render against draft state.
     loadPrefs();
     loadPersonality();
+    loadTimezones();
     loadMcpServers();
   });
 </script>
@@ -337,7 +356,7 @@
     <PreferencesGeneralCard
       identity={{ companionName, userName, timezone }}
       features={{ orchestratorEnabled, voiceEnabled, discordEnabled, telegramEnabled }}
-      commonTimezones={COMMON_TIMEZONES}
+      timezoneList={timezoneList}
       oncompanionnamechange={(value) => companionName = value}
       onusernamechange={(value) => userName = value}
       ontimezonechange={(value) => timezone = value}

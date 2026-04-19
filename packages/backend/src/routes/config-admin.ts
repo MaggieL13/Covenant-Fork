@@ -11,6 +11,11 @@ import {
   savePreferences,
   validateAndSaveMcpJson,
 } from '../services/config-files.js';
+import { listTimezonesWithMetadata } from '../services/time.js';
+
+// Cache — the list is pure data derived from moment-timezone and Intl,
+// neither of which change at runtime. Built once on first request.
+let cachedTimezones: ReturnType<typeof listTimezonesWithMetadata> | null = null;
 
 const router = Router();
 
@@ -59,6 +64,11 @@ router.put('/config/mcp-json', (req, res) => {
       : 500;
     res.status(statusCode).json({ error: error instanceof Error ? error.message : 'Failed to save' });
   }
+});
+
+router.get('/timezones', (_req, res) => {
+  if (!cachedTimezones) cachedTimezones = listTimezonesWithMetadata();
+  res.json(cachedTimezones);
 });
 
 router.get('/preferences', (_req, res) => {
