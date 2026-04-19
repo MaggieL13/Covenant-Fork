@@ -828,3 +828,117 @@ application-layer presence.
 4. If the handler needs to broadcast, use `registry.broadcast()` or
    `registry.broadcastExcept()`. Do not call `ws.send(...)` directly
    for state updates.
+
+---
+
+## Shared contracts
+
+`packages/shared/` is the package dedicated to code shared by
+frontend and backend. It is types-only — no runtime business logic,
+no state, no I/O. There's one small runtime exception:
+`isClientMessage()`, a pure typed guard. That exception is not an
+open door; the package is still a types-only package in practice and
+intent.
+
+### Shape
+
+Two files under `packages/shared/src/`:
+
+- `types.ts` — application data models. Shapes the app passes around
+  in memory, over HTTP, or through the database layer: `Thread`,
+  `Message`, `Reaction`, `Canvas`, `Sticker`, `StickerPack`,
+  `ThreadSummary`, `SearchResult`, `SystemStatus`, `McpServerInfo`,
+  `OrchestratorTaskStatus`, `SessionRecord`, `AuditEntry`,
+  `WebSession`, `ConfigEntry`. Plus string-literal types that appear
+  in wire traffic (`PresenceStatus`, `Platform`, `ReactionUser`,
+  `MessageSegment`).
+- `protocol.ts` — the wire shapes. `ClientMessage` and `ServerMessage`
+  discriminated unions for every WebSocket payload direction. Plus
+  supporting types used only in the WS layer
+  (`CommandRegistryEntry`) and the `isClientMessage()` guard.
+
+Both are re-exported from `packages/shared/src/index.ts`, so
+consumers import from `@resonant/shared` without needing to know the
+file split.
+
+### Import convention
+
+Both the backend and frontend import types from the same
+`@resonant/shared` package identifier:
+
+```ts
+import type { Message, Thread, Reaction } from '@resonant/shared';
+import type { ClientMessage, ServerMessage } from '@resonant/shared';
+```
+
+Types are always imported with `import type` when only used as
+annotations — that way the build dead-strips the import completely
+and no runtime coupling is created. The one exception is
+`isClientMessage` (a runtime function); it uses a regular `import`.
+
+### Split logic: types.ts vs protocol.ts
+
+The rule is mechanical:
+
+- If the shape is a shared domain/data model used by both sides, it
+  goes in `types.ts`.
+- If the shape is a transport envelope sent over WebSocket, it goes
+  in `protocol.ts`.
+
+A domain type referenced inside a wire message (`Message` inside
+`ServerMessage`'s `{ type: 'message'; message: Message }` variant)
+still lives in `types.ts`; `protocol.ts` imports it. Types flow one
+direction: protocol can depend on domain, domain does not depend on
+protocol.
+
+### When to put a shape in `@resonant/shared`
+
+A shape belongs in the shared package when **both** frontend and
+backend need to know it. That's the only criterion.
+
+Things that should move there:
+
+- Anything that crosses the HTTP or WebSocket boundary in either
+  direction.
+- Entity shapes that both sides construct or parse (because the
+  backend writes them and the frontend reads them, or vice versa).
+
+Things that should NOT move there:
+
+- Internal implementation details of a single package. A backend
+  service's argument object, a frontend component's prop type —
+  these stay package-local.
+- UI-specific view models. Frontend may derive its own interfaces
+  from a shared entity, but the derived interface stays in the
+  frontend.
+- Database query shapes. Return types of `services/db/*` functions
+  use the shared entity types, but any query-specific shape
+  (filtered selections, aggregations) lives in the db module.
+- Don't move a type to shared just to avoid duplicate imports inside
+  one package. "Used twice in the backend" is not a reason; "used
+  by the frontend too" is.
+
+### Discipline
+
+- **No runtime code.** `packages/shared/src/` contains type
+  declarations and one pure type-guard function. It does not import
+  any runtime dependency. Don't add one without serious justification
+  — it would couple both frontend and backend bundles to that
+  dependency.
+- **Shared changes are cross-package API changes.** Changing a shape
+  in shared changes it for both frontend and backend simultaneously.
+  For additive changes (new optional field), both sides just need a
+  rebuild. For breaking changes (renamed field, changed type), both
+  sides must update in lockstep. Plan these carefully.
+- **No circular imports inside shared.** Keep `types.ts` and
+  `protocol.ts` in their one-way dependency (protocol depends on
+  types, never the reverse).
+
+### Adding a new shared shape
+
+1. Decide: is this a domain data model or a wire message? Use the
+   mechanical split above.
+2. Add the type to the appropriate file in `packages/shared/src/`.
+3. Export is automatic via `index.ts`'s re-export.
+4. Import from `@resonant/shared` in the consuming package(s). Use
+   `import type` unless you're importing a runtime guard.
