@@ -9,7 +9,10 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "check": "tsc --noEmit",
-    "db:init": "tsx src/db-init.ts"
+    "db:init": "tsx src/db-init.ts",
+    "db:migrate": "tsx src/cli/db-migrate.ts",
+    "db:status": "tsx src/cli/db-status.ts",
+    "db:backup": "tsx src/cli/db-backup.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.63",
