@@ -14,12 +14,21 @@
   }>();
 
   let selectedIndex = $state(0);
+  let itemEls: HTMLButtonElement[] = $state([]);
 
   $effect(() => {
     visible;
     items;
     // ORDER: reset the highlighted item before the next keyboard interaction so a changed result set never keeps a stale index.
     selectedIndex = 0;
+  });
+
+  // Keep the selected item in view as arrow-nav moves through the list.
+  // `block: 'nearest'` only scrolls when the item is actually off-screen,
+  // so mouseenter → selectedIndex updates don't cause jitter.
+  $effect(() => {
+    const el = itemEls[selectedIndex];
+    if (el) el.scrollIntoView({ block: 'nearest' });
   });
 
   function handleKey(event: KeyboardEvent): boolean {
@@ -57,6 +66,7 @@
   <div class="sticker-autocomplete">
     {#each items as item, i (item.ref)}
       <button
+        bind:this={itemEls[i]}
         class="sticker-ac-item"
         class:selected={i === selectedIndex}
         onmousedown={(event) => {
