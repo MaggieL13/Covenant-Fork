@@ -1101,3 +1101,130 @@ architectural violations early.
   an anti-drift integration test. Keep it green; be suspicious of
   unexplained test-count drops. Landing code that reduces the suite
   count is almost always wrong.
+
+---
+
+## Where to add new features
+
+A decision guide. Earlier sections explain the map; this one is about
+moving through it without getting lost. Each entry is a question a
+contributor actually asks before writing code.
+
+### New persisted field or table
+
+Start in the migrations directory. Never in `init.ts`.
+
+- Create the next-numbered `.sql` file under
+  `packages/backend/migrations/`.
+- Register its predicate in `migration-predicates.ts`.
+- Add a predicate test in `migrate.test.ts`.
+- Add the query accessor to the appropriate module under
+  `services/db/`. If it's a new domain, create a new module.
+- If the shape crosses the frontend/backend boundary, update
+  `@resonant/shared` too (see Shared contracts).
+- Anti-pattern: putting `ALTER TABLE` or
+  `CREATE TABLE IF NOT EXISTS` back into `init.ts`. That reintroduces
+  exactly the drift Batch 7 eliminated. See Database & migrations.
+
+### New behavior the user triggers — HTTP or WebSocket?
+
+- If it's **request-response** and not latency-sensitive (admin,
+  config, file management, search queries that return a result set
+  once): HTTP. Add a route under `routes/` and mount it from
+  `api.ts`.
+- If it's **live, streaming, or multi-socket** (chat messages,
+  presence updates, canvas co-editing, voice streaming, tool
+  activity): WebSocket. Add a handler under `services/ws/handlers/`
+  and a case in `services/ws/events.ts`. Add the message shapes to
+  `packages/shared/src/protocol.ts`.
+- If you can't tell, start with HTTP unless the feature is clearly
+  live/streaming/multi-socket. Moving to WebSocket later is a
+  smaller change than moving away from it.
+
+### New frontend behavior — route, store, composable, or leaf component?
+
+- **Route** — only if it needs its own URL. Routes are shells;
+  business logic doesn't live inline.
+- **Store** (`lib/stores/*.svelte.ts`) — only if it's cross-route
+  reactive state that multiple components read. If it's local to one
+  component or one route, `$state` inside that component is enough.
+- **Composable** (`lib/chat/*.svelte.ts` or equivalent) — only if
+  it's non-visual logic used across components that needs rune state
+  or `$effect` wiring. Composables are factories; the calling
+  component owns `$effect` and `bind:this` refs.
+- **Leaf component** (`lib/components/*.svelte`) — the default.
+  Most UI changes are leaves. If a leaf starts feeling structurally
+  mixed (visual shell plus multiple distinct subregions or
+  behaviors), look at the Batch 6 split patterns.
+- Anti-pattern: reaching into the backend with `fetch` directly from
+  a leaf component. HTTP calls go through `lib/utils/api.ts`.
+
+### New shape — does it belong in `@resonant/shared`?
+
+- If **both frontend and backend** need to know it: yes. Pick
+  `types.ts` for domain/data models, `protocol.ts` for WebSocket
+  envelopes.
+- If only one package uses it: no. Keep it package-local.
+- If you're tempted to move a type to shared because it's imported
+  twice in the backend: no. That's not the criterion.
+- See Shared contracts for the full rules.
+
+### New background behavior — orchestrator or not?
+
+- If it's a **scheduled or trigger-driven task** (wake prompts,
+  cooldown-gated reminders, periodic health checks): register it
+  with the `Orchestrator`. Don't spawn `setInterval` in a new
+  top-level module.
+- If it's an **event-driven reaction** to a user action that happens
+  right after the action: do it inline in the WebSocket handler or
+  service that fired the event.
+- If it's a **long-running computation that shouldn't block the
+  response** (embeddings, digest generation): use the existing
+  async patterns (see `services/db/messages.ts` embedding enqueue,
+  `services/digest.ts`).
+- Anti-pattern: hiding long-running work in a route handler. Route
+  handlers should return quickly; anything that can't should be
+  enqueued, delegated to the orchestrator, or run as a fire-and-forget
+  follow-up.
+
+### New integration with an external service
+
+- Follow the gateway pattern used by `services/discord/` and
+  `services/telegram/`:
+  - Construct conditionally on config flag + env credential.
+  - Own graceful start/stop that participates in server shutdown.
+  - Expose a narrow surface to the rest of the app (one service
+    class, clear public methods).
+- If the integration is **always-on and credential-optional** (like
+  voice and push): construct unconditionally but no-op when
+  credentials are missing.
+- Anti-pattern: writing external network calls directly from a route
+  handler or a leaf component. Wrap them in a service.
+
+### New WebSocket message type
+
+Short version: add the shape to `protocol.ts`, add the handler,
+wire the dispatcher case. Full version in the "Adding a new message
+type" subsection of the WebSocket protocol section.
+
+### When in doubt
+
+- **Preservation-first.** If you're reorganizing code that works,
+  don't change semantics in the same commit. The batch refactor
+  history is the template.
+- **Respect `// ORDER:` comments.** If a sequence looks arbitrary,
+  it probably earned that ordering through a regression. Read the
+  comment before rearranging.
+- **Prefer explicit over clever.** Getter-based ref passing, typed
+  prop contracts, single-transaction ledger inserts — the boring
+  pattern is usually the right one here.
+- **If a change would break a load-bearing invariant, stop and think
+  first.** The Load-bearing invariants section is the canonical list
+  of "don't silently break these."
+
+### Still unsure?
+
+Open the relevant section of this doc and follow the cross-reference
+chain. The goal is that any contributor can get from "I want to add X"
+to "I touch files A, B, C in that order" without spelunking the whole
+repo.
