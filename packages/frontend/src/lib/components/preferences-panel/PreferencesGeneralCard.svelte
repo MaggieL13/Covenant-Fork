@@ -31,6 +31,30 @@
     ondiscordchange?: (value: boolean) => void;
     ontelegramchange?: (value: boolean) => void;
   }>();
+
+  // Group IANA zones by region for <optgroup>. Region = first path segment
+  // ("America/Asuncion" → "America"). Zones without a slash (UTC, GMT) land
+  // in "Other". Returns [ [region, zones[]], ... ] sorted by region, zones
+  // sorted by label within each region.
+  const groupedTimezones = $derived.by(() => {
+    const groups = new Map<string, string[]>();
+    for (const tz of commonTimezones) {
+      const slash = tz.indexOf('/');
+      const region = slash === -1 ? 'Other' : tz.slice(0, slash);
+      if (!groups.has(region)) groups.set(region, []);
+      groups.get(region)!.push(tz);
+    }
+    for (const list of groups.values()) list.sort((a, b) => a.localeCompare(b));
+    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  });
+
+  // "America/Argentina/Buenos_Aires" → "Argentina / Buenos Aires" (drop the
+  // region prefix since it's already the optgroup label; readability only).
+  function tzLabel(tz: string): string {
+    const slash = tz.indexOf('/');
+    const tail = slash === -1 ? tz : tz.slice(slash + 1);
+    return tail.replace(/_/g, ' ').replace(/\//g, ' / ');
+  }
 </script>
 
 <section class="section">
@@ -69,8 +93,12 @@
       value={identity.timezone}
       onchange={(event) => ontimezonechange?.((event.currentTarget as HTMLSelectElement).value)}
     >
-      {#each commonTimezones as tz}
-        <option value={tz}>{tz}</option>
+      {#each groupedTimezones as [region, zones]}
+        <optgroup label={region}>
+          {#each zones as tz}
+            <option value={tz}>{tzLabel(tz)}</option>
+          {/each}
+        </optgroup>
       {/each}
       {#if !commonTimezones.includes(identity.timezone)}
         <option value={identity.timezone}>{identity.timezone}</option>

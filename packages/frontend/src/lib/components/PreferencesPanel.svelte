@@ -78,13 +78,10 @@
     }
   }
 
-  const COMMON_TIMEZONES = [
-    'UTC',
-    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-    'Europe/London', 'Europe/Paris', 'Europe/Berlin',
-    'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Kolkata',
-    'Australia/Sydney', 'Pacific/Auckland',
-  ];
+  // Full IANA zone list from the runtime. Node/browser ICU determines which
+  // zones exist; offsets/rules are NOT surfaced in the UI — see the Timezone
+  // Sovereignty task in covenant-todo.md for authoritative tzdata.
+  const COMMON_TIMEZONES: string[] = Intl.supportedValuesOf('timeZone');
 
   async function loadPrefs() {
     try {
