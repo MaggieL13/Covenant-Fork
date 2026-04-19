@@ -192,10 +192,12 @@ centers of gravity:
   `triggers`, `init`). Barrel exports at `services/db.ts` and
   `services/db/index.ts` keep import paths stable. Migration runner
   and predicates live here too — see the Database & migrations section.
-- **`ws/`** — WebSocket gateway split into `registry.ts` (connection
-  tracking), `socket.ts` (lifecycle + auth + upgrade), `events.ts`
-  (message dispatcher), `handlers/` (per-message-type handlers), and
-  `shared.ts` (tiny helpers). Facade at `services/ws.ts`. See the
+- **`ws/`** — WebSocket gateway split into `socket.ts` (lifecycle +
+  auth + upgrade), `events.ts` (message dispatcher), `handlers/`
+  (per-message-type handlers), and `shared.ts` (tiny helpers).
+  Facade at `services/ws.ts`. The `registry.ts` connection tracker
+  lives as a sibling at `services/registry.ts` (NOT under `ws/`) —
+  it pre-dates the WS split and stays at services root. See the
   WebSocket section.
 - **`agent.ts` (`AgentService`)** — the Claude Agent SDK wrapper. Owns
   the conversation lifecycle, tool registration, MCP server integration,
