@@ -193,11 +193,32 @@ function applyIncomingMessageToSidebar(message: Message): void {
   if (shouldBumpUnread) {
     const thread = threads.find(t => t.id === threadId);
     const threadName = thread?.name ?? 'another thread';
-    const preview = message.content.substring(0, 80).replace(/\n/g, ' ');
+    const preview = summarizeMessageForToast(message);
     const toastMsg = preview
       ? `New message in ${threadName}: ${preview}`
       : `New message in ${threadName}`;
     showToast(toastMsg, 'info', 5000, () => loadThread(threadId));
+  }
+}
+
+/**
+ * Produce a human-readable preview for a toast. Non-text content types
+ * (sticker, image, audio, file) carry a URL or path as their content,
+ * which is useless in a toast — summarize them by type instead.
+ */
+function summarizeMessageForToast(message: Message): string {
+  switch (message.content_type) {
+    case 'sticker':
+      return 'sent a sticker 🎨';
+    case 'image':
+      return 'sent an image 📷';
+    case 'audio':
+      return 'sent a voice message 🎙️';
+    case 'file':
+      return 'sent a file 📎';
+    case 'text':
+    default:
+      return message.content.substring(0, 80).replace(/\n/g, ' ');
   }
 }
 
