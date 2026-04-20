@@ -145,6 +145,42 @@ function startHeartbeat() {
   }, 30000);
 }
 
+/**
+ * Apply an incoming message to the sidebar state: bump preview +
+ * last_activity_at on the thread, and (for companion / system messages
+ * landing on a non-active thread) increment the unread_count so the
+ * sidebar badge updates live instead of waiting for a page refresh.
+ *
+ * The backend DB already tracks unread_count correctly via
+ * updateThreadActivity(threadId, ts, true) in services/db/threads.ts —
+ * this function mirrors that truth on the client so the UI doesn't
+ * desync. When the user opens the thread, the 'read' event round-trips
+ * and the backend broadcasts 'unread_update' to zero it back out.
+ */
+function applyIncomingMessageToSidebar(message: Message): void {
+  const threadId = message.thread_id;
+  const isCompanionOrSystem = message.role === 'companion' || message.role === 'system';
+  const shouldBumpUnread = isCompanionOrSystem && threadId !== activeThreadId;
+  const newCount = shouldBumpUnread
+    ? (unreadCounts[threadId] ?? 0) + 1
+    : (unreadCounts[threadId] ?? 0);
+
+  if (shouldBumpUnread) {
+    unreadCounts = { ...unreadCounts, [threadId]: newCount };
+  }
+
+  threads = threads.map(t =>
+    t.id === threadId
+      ? {
+          ...t,
+          last_message_preview: message.content.substring(0, 100),
+          last_activity_at: message.created_at,
+          unread_count: shouldBumpUnread ? newCount : t.unread_count,
+        }
+      : t
+  );
+}
+
 function handleMessage(event: MessageEvent) {
   try {
     const msg: ServerMessage = JSON.parse(event.data);
@@ -178,12 +214,8 @@ function handleMessage(event: MessageEvent) {
         if (msg.message.sequence > lastSeenSequence) {
           lastSeenSequence = msg.message.sequence;
         }
-        // Update thread preview
-        threads = threads.map(t =>
-          t.id === msg.message.thread_id
-            ? { ...t, last_message_preview: msg.message.content.substring(0, 100), last_activity_at: msg.message.created_at }
-            : t
-        );
+        // Sidebar: preview, activity, + unread bump for non-active threads.
+        applyIncomingMessageToSidebar(msg.message);
         // Local notification for companion messages (timers, system-injected)
         if (msg.message.role === 'companion') {
           const preview = msg.message.content.substring(0, 120).replace(/\n/g, ' ');
@@ -222,6 +254,12 @@ function handleMessage(event: MessageEvent) {
         // Replace streaming state with the final message
         if (msg.final && msg.final.thread_id === activeThreadId) {
           messages = [...messages, msg.final];
+        }
+        // Sidebar sync — stream_end is the only broadcast for streamed
+        // companion replies (no separate 'message' event), so the sidebar
+        // preview / activity / unread badge all flow from here.
+        if (msg.final) {
+          applyIncomingMessageToSidebar(msg.final);
         }
         // Local notification for streamed companion messages
         if (msg.final?.role === 'companion') {
