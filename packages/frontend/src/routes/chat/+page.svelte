@@ -38,6 +38,7 @@
     getStreamingSegments,
     sendStopGeneration,
     isStreaming,
+    isAgentBusy,
     getRateLimitInfo,
     getLastCommandResult,
     clearCommandResult,
@@ -62,6 +63,15 @@
   let activeCanvasId = $derived(getActiveCanvasId());
   let streamingSegments = $derived(getStreamingSegments());
   let isStreamingNow = $derived(isStreaming());
+  // True when the agent is replying on ANOTHER thread and this thread's
+  // last message is the user's — i.e. we're queued behind the in-flight
+  // work and should show a thinking indicator instead of looking frozen.
+  let isWaitingForReply = $derived.by(() => {
+    if (!isAgentBusy()) return false;
+    if (isStreamingNow) return false; // stream is for this thread → real dots handle it
+    const last = messages[messages.length - 1];
+    return !!last && last.role === 'user';
+  });
   let rateLimitInfo = $derived(getRateLimitInfo());
   let companionName = $derived(getCompanionName());
   let commandResult = $derived(getLastCommandResult());
@@ -465,6 +475,7 @@
       {toolEventsMap}
       {streaming}
       {streamingSegments}
+      {isWaitingForReply}
       {activeThreadId}
       {loadingOlder}
       {hasMoreMessages}

@@ -945,6 +945,14 @@ export function isStreaming() {
   return true;
 }
 
+// Thread-agnostic: returns true when ANY stream is active, on any
+// thread. Use to detect that the agent is busy elsewhere so a just-sent
+// message is queued behind it — the UI can then show a "thinking"
+// indicator in the waiting thread instead of looking frozen.
+export function isAgentBusy() {
+  return streamingMessageId !== null;
+}
+
 // Rate limit
 export function getRateLimitInfo() { return rateLimitInfo; }
 

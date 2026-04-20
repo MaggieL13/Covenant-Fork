@@ -24,6 +24,7 @@
     toolEventsMap,
     streaming,
     streamingSegments,
+    isWaitingForReply = false,
     activeThreadId,
     loadingOlder,
     hasMoreMessages,
@@ -39,6 +40,7 @@
     toolEventsMap: Record<string, ToolEvent[]>;
     streaming: { messageId: string | null; tokens: string };
     streamingSegments: MessageSegment[] | null;
+    isWaitingForReply?: boolean;
     activeThreadId: string | null;
     loadingOlder: boolean;
     hasMoreMessages: boolean;
@@ -145,6 +147,25 @@
           />
         </div>
       {/each}
+
+      {#if isWaitingForReply && !streaming.messageId}
+        <!-- Stage 1: agent is streaming on a different thread; this
+             thread's message is queued. Same dots shape as the active
+             stream's thinking state, but a distinct label so the user
+             can tell "queued" from "actively being worked on". When the
+             stream shifts to this thread this block vanishes and the
+             {companionName} is thinking... panel below takes over. -->
+        <div class="message-wrapper">
+          <div class="activity-panel" aria-label="Waiting for companion">
+            <div class="activity-header">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="activity-label">Waiting...</span>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       {#if streaming.messageId && streamingMessage}
         {@const liveTools = toolEventsMap[streaming.messageId] || []}
