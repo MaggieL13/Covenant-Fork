@@ -898,7 +898,16 @@ export function sendCanvasDelete(canvasId: string) {
 export function sendStopGeneration() {
   send({ type: 'stop_generation' });
 }
-export function isStreaming() { return streamingMessageId !== null; }
+// Thread-scoped: returns true only when there's an active stream FOR
+// the currently-viewed thread. The stop-generation button and Escape
+// shortcut hang off this, and a stop affordance with no visible target
+// is more confusing than useful. Cross-thread streams reveal themselves
+// via the sidebar unread badge instead.
+export function isStreaming() {
+  if (streamingMessageId === null) return false;
+  if (streamingThreadId !== null && streamingThreadId !== activeThreadId) return false;
+  return true;
+}
 
 // Rate limit
 export function getRateLimitInfo() { return rateLimitInfo; }
