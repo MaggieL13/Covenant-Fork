@@ -613,11 +613,26 @@ export class AgentService {
     const model = getConfiguredModel(isAutonomous);
     const effort = getConfiguredThinkingEffort();
     console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'}, effort: ${effort})`);
+
+    // Tool-behavior rule prepended to the system prompt. Lives here
+    // rather than in CLAUDE.md so Maggie's intimate persona file stays
+    // untouched. Keep this short — long tool rules pull focus from the
+    // companion's voice.
+    const TOOL_BEHAVIOR_RULES = [
+      '## Tool behavior',
+      '',
+      'When using the Write tool to save user-facing content (scripts, stories, notes, markdown, ElevenLabs scripts, personal writing), default to the `shared/` folder relative to the project root. Example: `shared/elevenlabs-april-19.md`, not `elevenlabs-april-19.md`.',
+      '',
+      'Repo-root writes are appropriate only for files that genuinely belong at the root (package.json, README, config, test artifacts explicitly requested). When unsure, prefer `shared/`.',
+    ].join('\n');
+
+    const appendText = claudeMdContent
+      ? `${TOOL_BEHAVIOR_RULES}\n\n${claudeMdContent}`
+      : TOOL_BEHAVIOR_RULES;
+
     const options: Options = {
       model,
-      systemPrompt: claudeMdContent
-        ? { type: 'preset', preset: 'claude_code', append: claudeMdContent }
-        : { type: 'preset', preset: 'claude_code' },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: appendText },
       cwd: AGENT_CWD,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
