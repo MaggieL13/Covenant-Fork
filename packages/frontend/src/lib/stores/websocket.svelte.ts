@@ -21,6 +21,11 @@ let unreadCounts = $state<Record<string, number>>({});
 // Streaming state
 let streamingMessageId = $state<string | null>(null);
 let streamingTokens = $state<string>('');
+// Thread the current stream belongs to — used to hide the streaming
+// bubble when the user is viewing a different thread than the one
+// the companion is replying in (e.g. orchestrator-triggered reply on
+// thread B while user is on thread A).
+let streamingThreadId = $state<string | null>(null);
 
 // Tool events per message
 export type ToolEvent = {
@@ -241,6 +246,7 @@ function handleMessage(event: MessageEvent) {
 
       case 'stream_start':
         streamingMessageId = msg.messageId;
+        streamingThreadId = msg.threadId;
         streamingTokens = '';
         break;
 
@@ -278,6 +284,7 @@ function handleMessage(event: MessageEvent) {
           }
         }
         streamingMessageId = null;
+        streamingThreadId = null;
         streamingTokens = '';
         break;
 
@@ -509,6 +516,7 @@ function handleMessage(event: MessageEvent) {
 
       case 'generation_stopped':
         streamingMessageId = null;
+        streamingThreadId = null;
         streamingTokens = '';
         break;
 
@@ -747,16 +755,27 @@ export function getActiveThreadId() { return activeThreadId; }
 export function getPresence() { return presence; }
 export function getUnreadCounts() { return unreadCounts; }
 export function getStreamingState() {
-  return { messageId: streamingMessageId, tokens: streamingTokens };
+  // Hide streaming output when the stream belongs to a thread the user
+  // isn't currently viewing. Without this guard, an orchestrator-triggered
+  // reply on thread B renders its tokens inside thread A's message list
+  // until stream_end reconciles it.
+  const visible = streamingThreadId === null || streamingThreadId === activeThreadId;
+  return {
+    messageId: visible ? streamingMessageId : null,
+    tokens: visible ? streamingTokens : '',
+  };
 }
 export function getLastError() { return lastError; }
 export function getPendingCount() { return pendingMessages.length; }
 export function clearError() { lastError = null; }
 export function getToolEvents() { return toolEvents; }
 
-// Compute interleaved segments for the currently streaming message
+// Compute interleaved segments for the currently streaming message.
+// Returns null when the stream is for a non-active thread so the
+// segments don't leak into the wrong conversation view.
 export function getStreamingSegments(): MessageSegment[] | null {
   if (!streamingMessageId) return null;
+  if (streamingThreadId !== null && streamingThreadId !== activeThreadId) return null;
   const offsets = toolOffsets[streamingMessageId] || [];
   const thinking = thinkingEvents[streamingMessageId] || [];
   if (offsets.length === 0 && thinking.length === 0) return null;
