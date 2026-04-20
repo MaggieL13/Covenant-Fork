@@ -14,6 +14,27 @@ function today(): string {
   return todayLocal(getResonantConfig().identity.timezone);
 }
 
+/**
+ * Per-thread digest cursor. Each thread tracks its own "last processed
+ * sequence" because message.sequence is per-thread (see getNextSequence
+ * in db/messages.ts) — a single global cursor gets stuck when a new
+ * daily thread starts with sequence 1 < previous-thread's max.
+ *
+ * Legacy `digest.last_sequence` (no thread id) is ignored: pre-fix
+ * state is abandoned intentionally, no backfill.
+ */
+function cursorKey(threadId: string): string {
+  return `digest.last_sequence:${threadId}`;
+}
+
+export function getDigestCursor(threadId: string): number {
+  return parseInt(getConfig(cursorKey(threadId)) || '0');
+}
+
+export function setDigestCursor(threadId: string, value: number): void {
+  setConfig(cursorKey(threadId), String(value));
+}
+
 function nowTime(): string {
   return localTimeStr(getResonantConfig().identity.timezone);
 }
@@ -89,8 +110,9 @@ export async function runDigest(agent: AgentService): Promise<void> {
 
   const config = getResonantConfig();
 
-  // Read messages since last digest
-  const lastSeq = parseInt(getConfig('digest.last_sequence') || '0');
+  // Read messages since last digest — cursor is PER-THREAD because
+  // sequence is per-thread. See getDigestCursor() above.
+  const lastSeq = getDigestCursor(thread.id);
   const messages = getDb().prepare(
     `SELECT role, content, created_at FROM messages WHERE thread_id = ? AND sequence > ? AND deleted_at IS NULL AND content_type = 'text' ORDER BY sequence ASC`
   ).all(thread.id, lastSeq) as Array<{ role: string; content: string; created_at: string }>;
@@ -178,8 +200,8 @@ Write the digest block for this conversation. Remember: output ONLY the markdown
     }
     appendFileSync(digestPath, digestContent.trim() + '\n\n---\n\n');
 
-    // Update last processed sequence
-    setConfig('digest.last_sequence', String(maxSeq.seq));
+    // Update last processed sequence (per-thread cursor)
+    setDigestCursor(thread.id, maxSeq.seq);
 
     // Embed digest block for semantic search
     try {
