@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getToasts, dismissToast } from '$lib/stores/toast.svelte';
+  import { getToasts, dismissToast, invokeToast } from '$lib/stores/toast.svelte';
 
   let toasts = $derived(getToasts());
 </script>
@@ -7,12 +7,26 @@
 {#if toasts.length > 0}
   <div class="toast-container">
     {#each toasts as toast (toast.id)}
-      <div class="toast toast-{toast.type}" role="alert">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="toast toast-{toast.type}"
+        class:toast-clickable={!!toast.onClick}
+        role={toast.onClick ? 'button' : 'alert'}
+        tabindex={toast.onClick ? 0 : -1}
+        onclick={toast.onClick ? () => invokeToast(toast.id) : undefined}
+        onkeydown={toast.onClick
+          ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); invokeToast(toast.id); } }
+          : undefined}
+      >
         <span class="toast-icon">
           {#if toast.type === 'success'}&#10003;{:else if toast.type === 'error'}&#10005;{:else}&#8505;{/if}
         </span>
         <span class="toast-message">{toast.message}</span>
-        <button class="toast-close" onclick={() => dismissToast(toast.id)} aria-label="Dismiss">&times;</button>
+        <button
+          class="toast-close"
+          onclick={(e) => { e.stopPropagation(); dismissToast(toast.id); }}
+          aria-label="Dismiss"
+        >&times;</button>
       </div>
     {/each}
   </div>
@@ -58,6 +72,20 @@
 
   .toast-info {
     border-left-color: #3b82f6;
+  }
+
+  .toast-clickable {
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .toast-clickable:hover {
+    background: var(--bg-hover, #252834);
+  }
+
+  .toast-clickable:focus-visible {
+    outline: 2px solid var(--accent, #6366f1);
+    outline-offset: 2px;
   }
 
   .toast-icon {

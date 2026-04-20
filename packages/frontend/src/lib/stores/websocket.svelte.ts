@@ -1,6 +1,7 @@
 import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry, Reaction } from '@resonant/shared';
 import { setSystemStatus } from './settings.svelte';
 import { apiFetch } from '$lib/utils/api';
+import { showToast } from './toast.svelte';
 
 // Connection state
 let wsInstance: WebSocket | null = $state(null);
@@ -184,6 +185,20 @@ function applyIncomingMessageToSidebar(message: Message): void {
         }
       : t
   );
+
+  // In-flow toast for activity on a non-active thread. Clicking it
+  // loads the thread and switches to it. Complements the sidebar badge
+  // and the browser push notification — one signal each for in-app,
+  // at-a-glance, and out-of-app.
+  if (shouldBumpUnread) {
+    const thread = threads.find(t => t.id === threadId);
+    const threadName = thread?.name ?? 'another thread';
+    const preview = message.content.substring(0, 80).replace(/\n/g, ' ');
+    const toastMsg = preview
+      ? `New message in ${threadName}: ${preview}`
+      : `New message in ${threadName}`;
+    showToast(toastMsg, 'info', 5000, () => loadThread(threadId));
+  }
 }
 
 function handleMessage(event: MessageEvent) {
