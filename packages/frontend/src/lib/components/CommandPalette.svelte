@@ -87,6 +87,10 @@
         return true;
       case 'Escape':
         e.preventDefault();
+        // stopPropagation so the global Escape handler (which would
+        // otherwise call stopGeneration when isStreaming) doesn't also
+        // fire — closing the palette should not kill an in-flight stream.
+        e.stopPropagation();
         onclose();
         return true;
       default:

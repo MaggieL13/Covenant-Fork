@@ -51,6 +51,10 @@
     }
     if (event.key === 'Escape') {
       event.preventDefault();
+      // stopPropagation so the global Escape handler (which would
+      // otherwise call stopGeneration when isStreaming) doesn't also
+      // fire — closing the autocomplete should not kill an in-flight stream.
+      event.stopPropagation();
       onclose?.();
       return true;
     }
