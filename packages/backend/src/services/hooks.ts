@@ -346,6 +346,43 @@ function handleImageToolResult(toolName: string, output: string, threadId: strin
   }
 }
 
+/**
+ * Short-lived tracker of paths the auto-share hook just surfaced.
+ * Used by POST /api/internal/share to skip a duplicate card when the
+ * companion follows a Write-into-shared/ with an explicit Share call
+ * for the same file — the hook already produced a card; /share should
+ * be a no-op. Window is generous (30s) since companion tool-call
+ * latency can push the /share request well past the Write hook.
+ */
+const RECENT_AUTO_SHARE_WINDOW_MS = 30_000;
+const recentAutoShares = new Map<string, number>(); // key: "threadId::absolutePath" → timestamp
+
+function recordAutoShare(threadId: string, filePath: string): void {
+  const key = `${threadId}::${filePath}`;
+  const now = Date.now();
+  recentAutoShares.set(key, now);
+  // Prune stale entries opportunistically so the map doesn't grow unbounded
+  for (const [k, ts] of recentAutoShares) {
+    if (now - ts > RECENT_AUTO_SHARE_WINDOW_MS) recentAutoShares.delete(k);
+  }
+}
+
+/**
+ * Was this file auto-shared into this thread recently? If yes, an
+ * explicit /share call for the same path is a duplicate and should
+ * skip emitting another card.
+ */
+export function wasRecentlyAutoShared(threadId: string, filePath: string): boolean {
+  const key = `${threadId}::${filePath}`;
+  const ts = recentAutoShares.get(key);
+  if (ts === undefined) return false;
+  if (Date.now() - ts > RECENT_AUTO_SHARE_WINDOW_MS) {
+    recentAutoShares.delete(key);
+    return false;
+  }
+  return true;
+}
+
 function handleSharedFileWrite(filePath: string, threadId: string, registry: ConnectionRegistry): void {
   try {
     if (!existsSync(filePath)) return;
@@ -367,6 +404,7 @@ function handleSharedFileWrite(filePath: string, threadId: string, registry: Con
 
     updateThreadActivity(threadId, now, true);
     registry.broadcast({ type: 'message', message });
+    recordAutoShare(threadId, filePath);
     console.log(`[Hook] Auto-shared ${filename} into thread ${threadId}: ${fileMeta.fileId}`);
   } catch (error) {
     console.error('[Hook] Failed to auto-share file:', error);

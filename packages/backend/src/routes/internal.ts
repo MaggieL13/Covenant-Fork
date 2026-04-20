@@ -36,6 +36,7 @@ import type { TriggerCondition } from '../services/db.js';
 import { embed, vectorToBuffer } from '../services/embeddings.js';
 import { searchVectors, getCacheStats, type SearchFilter } from '../services/vector-cache.js';
 import { saveFileInternal } from '../services/files.js';
+import { wasRecentlyAutoShared } from '../services/hooks.js';
 import { registry } from '../services/ws.js';
 import { getResonantConfig } from '../config.js';
 import { requireLocalhost } from '../middleware/localhost.js';
@@ -157,6 +158,15 @@ router.post('/share', (req, res) => {
   const thread = getThread(threadId);
   if (!thread) {
     res.status(404).json({ error: 'Thread not found' });
+    return;
+  }
+
+  // Dedup: the hooks layer already auto-surfaces files written into
+  // shared/. If the companion follows a Write-into-shared/ with an
+  // explicit /share call for the same path, emitting another card
+  // produces a visible duplicate. Short-circuit here.
+  if (wasRecentlyAutoShared(threadId, filePath)) {
+    res.json({ success: true, deduped: true });
     return;
   }
 
