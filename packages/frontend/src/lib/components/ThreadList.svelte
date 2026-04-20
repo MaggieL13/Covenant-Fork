@@ -190,10 +190,24 @@
   }
 
   async function commitRename(threadId: string) {
+    // Guard against double-fire: this is wired to both the input's
+    // onblur AND (via handleRenameKeydown) the Enter key. Enter-calls-
+    // commitRename → commit finishes → renamingThread nulled → input
+    // unmounts → browser fires implicit blur → onblur calls commitRename
+    // again. Escape → cancelRename also nulls renamingThread with the
+    // same unmount-blur tail. Bail here if the thread is no longer the
+    // active one being renamed.
+    if (renamingThread !== threadId) return;
+
     if (!renameValue.trim()) {
       renamingThread = null;
       return;
     }
+
+    // Null BEFORE the async work so any blur-triggered re-entry trips
+    // the guard above rather than racing with the fetch.
+    renamingThread = null;
+
     try {
       const response = await apiFetch(`/api/threads/${threadId}`, {
         method: 'PATCH',
@@ -210,7 +224,6 @@
       console.error('Failed to rename thread:', err);
       showToast('Failed to rename thread', 'error');
     }
-    renamingThread = null;
   }
 
   function cancelRename() {
