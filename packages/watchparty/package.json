@@ -1,0 +1,19 @@
+{
+  "name": "@resonant/watchparty",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional DLC-style addon: sync YouTube/anime watch parties with live chat. Fully self-contained, safe to delete.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0 <25.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

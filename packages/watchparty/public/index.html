@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0b10" />
+  <title>watchparty</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="bar">
+    <strong class="logo">watchparty</strong>
+    <span id="roomLabel" class="pill">not connected</span>
+    <span id="hostLabel" class="pill muted"></span>
+    <span class="spacer"></span>
+    <button id="btnLeave" class="ghost" hidden>leave</button>
+  </header>
+
+  <section id="gate" class="gate">
+    <div class="card">
+      <h1>join a room</h1>
+      <label>your name<input id="inName" maxlength="32" placeholder="uwu" autocomplete="nickname" /></label>
+      <label>room code<input id="inRoom" maxlength="64" placeholder="anime-night" autocapitalize="none" /></label>
+      <button id="btnJoin" class="primary">enter</button>
+      <p class="hint">first to join becomes host. share the room code with your boys.</p>
+    </div>
+  </section>
+
+  <main id="stage" hidden>
+    <div class="player-wrap">
+      <div id="player"></div>
+      <div id="loadBar" class="load-bar">
+        <input id="inVideo" placeholder="youtube url or video id" autocapitalize="none" />
+        <button id="btnLoad" class="primary">load</button>
+      </div>
+    </div>
+    <aside class="side">
+      <div class="peers" id="peers"></div>
+      <div class="chat" id="chat"></div>
+      <form id="chatForm" class="chat-form">
+        <input id="inChat" maxlength="500" placeholder="say something…" autocomplete="off" />
+        <button class="primary">send</button>
+      </form>
+    </aside>
+  </main>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
