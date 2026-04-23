@@ -33,7 +33,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
-import { localHour as tzLocalHour, localMinute as tzLocalMinute } from './time.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -691,11 +691,10 @@ export class Orchestrator {
       if (!thread) {
         // Create new daily thread (only when none exists for today)
         const now = new Date();
-        const dayName = now.toLocaleDateString('en-GB', {
-          weekday: 'long',
-          month: 'short',
-          day: 'numeric',
-        });
+        // Sovereignty: route through time.ts — Node's ICU can lag IANA
+        // so a toLocaleDateString with {timeZone} would drift for zones
+        // Node hasn't shipped updated tzdata for.
+        const dayName = localDateStr(getResonantConfig().identity.timezone, now);
 
         thread = createThread({
           id: crypto.randomUUID(),
@@ -949,9 +948,8 @@ export class Orchestrator {
       if (!threadId) {
         let thread = getTodayThread();
         if (!thread) {
-          const dayName = now.toLocaleDateString('en-GB', {
-            weekday: 'long', month: 'short', day: 'numeric',
-          });
+          // Sovereignty: same reason as the other wake path above.
+          const dayName = localDateStr(getResonantConfig().identity.timezone, now);
           thread = createThread({
             id: crypto.randomUUID(),
             name: dayName,

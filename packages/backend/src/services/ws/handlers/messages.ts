@@ -12,6 +12,7 @@ import {
 import { AgentService } from '../../agent.js';
 import { getFile } from '../../files.js';
 import { getResonantConfig } from '../../../config.js';
+import { localDateStr } from '../../time.js';
 import { sendError } from '../shared.js';
 import { generateAndStreamTTS, type GetVoiceService } from './voice.js';
 
@@ -30,9 +31,10 @@ export async function handleMessageSend(
   } else {
     thread = getTodayThread();
     if (!thread) {
-      const dayName = new Date().toLocaleDateString('en-GB', {
-        weekday: 'long', month: 'short', day: 'numeric',
-      });
+      // Sovereignty: Node ICU can lag IANA for some zones; route date
+      // naming through time.ts so the daily thread label matches the
+      // agent-context Time/Date strings.
+      const dayName = localDateStr(config.identity.timezone);
       thread = createThread({
         id: crypto.randomUUID(),
         name: dayName,

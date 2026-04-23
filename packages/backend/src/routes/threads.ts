@@ -16,6 +16,8 @@ import {
 } from '../services/db.js';
 import { deleteFile } from '../services/files.js';
 import { registry } from '../services/ws.js';
+import { localDateStr } from '../services/time.js';
+import { getResonantConfig } from '../config.js';
 
 const router = Router();
 
@@ -83,7 +85,10 @@ router.post('/', (req, res) => {
       let thread = getTodayThread();
       if (!thread) {
         const now = new Date();
-        const todayName = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        // Sovereignty + format parity: route through time.ts so all four
+        // daily-thread creation sites produce the same "Wednesday, 22 Apr"
+        // label. Previous formats here and elsewhere diverged.
+        const todayName = localDateStr(getResonantConfig().identity.timezone, now);
         thread = createThread({
           id: crypto.randomUUID(),
           name: todayName,
