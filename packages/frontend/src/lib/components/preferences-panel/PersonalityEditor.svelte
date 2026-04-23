@@ -19,6 +19,7 @@
       guidedUserContext: string;
       savingPersonality: boolean;
       personalityMessage: string | null;
+      guidedRoundTripRisky: boolean;
     };
     ontogglerawmode?: (rawMode: boolean) => void;
     onpersonalitycontentchange?: (value: string) => void;
@@ -39,6 +40,20 @@
     <button class="mode-btn" class:active={!editor.rawMode} onclick={() => ontogglerawmode?.(false)}>Guided</button>
     <button class="mode-btn" class:active={editor.rawMode} onclick={() => ontogglerawmode?.(true)}>Raw Editor</button>
   </div>
+
+  {#if !editor.rawMode && editor.guidedRoundTripRisky}
+    <div class="warning-banner" role="alert">
+      <span class="warning-icon">⚠️</span>
+      <div class="warning-body">
+        <strong>Your raw markdown doesn't match the guided template.</strong>
+        Saving in guided mode will overwrite the freeform content with a
+        default template. Switch back to <strong>Raw Editor</strong> to
+        keep the existing content, or add <code>## Personality</code>,
+        <code>## Communication Style</code>, <code>## Interests</code>,
+        and <code>## About …</code> headers to your raw markdown.
+      </div>
+    </div>
+  {/if}
 
   {#if editor.rawMode}
     <textarea
@@ -205,5 +220,39 @@
     font-size: 0.8125rem;
     color: var(--gold);
     margin: 0.5rem 0 0;
+  }
+
+  .warning-banner {
+    display: flex;
+    gap: 0.625rem;
+    align-items: flex-start;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.875rem;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-left: 3px solid #f59e0b;
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+  }
+
+  .warning-icon {
+    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1.4;
+  }
+
+  .warning-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .warning-body code {
+    padding: 0.0625rem 0.3125rem;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
   }
 </style>

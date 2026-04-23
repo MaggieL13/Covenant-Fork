@@ -184,6 +184,41 @@
     guidedUserContext = extract('About\\s+\\S+');
   }
 
+  // Safety: the round-trip from raw → guided requires the raw markdown
+  // to contain the template's H2 section headers. If the raw content is
+  // freeform (no `## Personality`, `## Communication Style`, etc.),
+  // parseGuidedFields returns empty strings for every field. Saving in
+  // guided mode then calls assembleFromGuided() which rebuilds the
+  // markdown from those empty fields — silently overwriting the freeform
+  // raw content with default placeholders.
+  //
+  // "Round-trip risky" = the raw has substantive content AND a parse
+  // would yield 1 or fewer non-empty guided fields. When that's true
+  // and the user is in guided mode, the editor surfaces a warning
+  // banner before they can accidentally save.
+  function countMatchedGuidedSections(md: string): number {
+    const extract = (heading: string): string => {
+      const re = new RegExp(`##\\s+${heading}[\\s\\S]*?\\n([\\s\\S]*?)(?=\\n##|$)`, 'i');
+      const match = md.match(re);
+      return match ? match[1].trim() : '';
+    };
+    let n = 0;
+    if (extract('Personality')) n++;
+    if (extract('Communication Style')) n++;
+    if (extract('Interests(?:\\s*[&]\\s*Knowledge)?')) n++;
+    if (extract('About\\s+\\S+')) n++;
+    return n;
+  }
+
+  const guidedRoundTripRisky = $derived.by(() => {
+    // Non-substantive content (empty or tiny) isn't a risk — nothing real
+    // to lose yet. Threshold of 100 chars filters out defaults and stubs.
+    if (personalityContent.trim().length < 100) return false;
+    // If fewer than 2 of the 4 guided sections are present in raw, a
+    // save-in-guided would replace the freeform content with a template.
+    return countMatchedGuidedSections(personalityContent) < 2;
+  });
+
   function assembleFromGuided(): string {
     const name = companionName || 'Companion';
     const uname = userName || 'User';
@@ -392,6 +427,7 @@
         guidedUserContext,
         savingPersonality,
         personalityMessage,
+        guidedRoundTripRisky,
       }}
       ontogglerawmode={(value) => personalityRawMode = value}
       onpersonalitycontentchange={(value) => personalityContent = value}
