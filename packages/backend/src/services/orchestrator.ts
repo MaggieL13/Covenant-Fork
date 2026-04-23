@@ -162,6 +162,46 @@ interface ManagedTask {
   category: 'wake' | 'checkin' | 'handoff' | 'failsafe' | 'routine';
 }
 
+/**
+ * Convert a simple cron expression's minute+hour fields into a 12-hour
+ * clock string (e.g. "0 19 * * *" -> "7:00 PM"). Returns null for any
+ * expression where the minute or hour is not a fixed integer (wildcards,
+ * step values, ranges), so callers can fall back to the original label.
+ *
+ * @internal Exported for testing
+ */
+export function cronToTimeLabel(cronExpr: string): string | null {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const [minute, hour] = parts;
+  if (!/^\d+$/.test(minute) || !/^\d+$/.test(hour)) return null;
+  const h = parseInt(hour, 10);
+  const m = parseInt(minute, 10);
+  if (h > 23 || m > 59) return null;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+/**
+ * Compose a display label from an original hardcoded label ("9:00 PM —
+ * Evening") and the current effective cron. Splits the original on
+ * " — " to keep the human-readable suffix ("Evening"), and derives the
+ * time prefix from the current cron so reschedules don't cause drift.
+ * Falls back to the original label if the cron isn't a simple
+ * minute+hour fixed value.
+ *
+ * @internal Exported for testing
+ */
+export function deriveLabelFromCron(originalLabel: string, cronExpr: string): string {
+  const sep = ' — ';
+  const idx = originalLabel.indexOf(sep);
+  const suffix = idx === -1 ? originalLabel : originalLabel.slice(idx + sep.length);
+  const timePrefix = cronToTimeLabel(cronExpr);
+  if (!timePrefix) return originalLabel;
+  return `${timePrefix}${sep}${suffix}`;
+}
+
 /** @internal Exported for testing */
 export function isValidCron(expr: string): boolean {
   try {
@@ -414,7 +454,10 @@ export class Orchestrator {
 
       statuses.push({
         wakeType: managed.wakeType,
-        label: managed.label,
+        // Derive the time prefix from the CURRENT cron so reschedules
+        // don't cause label drift (label was hardcoded at registration
+        // and never updated when the cron was overridden via config).
+        label: deriveLabelFromCron(managed.label, managed.cronExpr),
         cronExpr: managed.cronExpr,
         enabled: managed.enabled,
         status,
