@@ -341,11 +341,51 @@
     input.value = '';
   }
 
-  function handlePaste(event: ClipboardEvent) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
+  // Pasted text longer than this gets converted into a file attachment
+  // card instead of dumping into the composer inline — matches the
+  // ChatGPT / Claude.ai pattern so big design briefs / tool output /
+  // work docs don't clobber the message draft.
+  const PASTE_TO_FILE_THRESHOLD = 1000;
 
-    for (const item of items) {
+  function sniffPasteExt(text: string): { ext: string; mime: string } {
+    const trimmed = text.trim();
+    // JSON heuristic — looks like a JSON object or array AND parses
+    if (
+      (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']'))
+    ) {
+      try {
+        JSON.parse(trimmed);
+        return { ext: '.json', mime: 'application/json' };
+      } catch {
+        // fall through to other sniffs
+      }
+    }
+    // Markdown heuristic — headings, bullet lists, or fenced code blocks
+    if (
+      /^#{1,6}\s/m.test(text) ||
+      /^[-*]\s+/m.test(text) ||
+      /^\s*```/m.test(text)
+    ) {
+      return { ext: '.md', mime: 'text/markdown' };
+    }
+    return { ext: '.txt', mime: 'text/plain' };
+  }
+
+  function formatPasteTimestamp(now: Date = new Date()): string {
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return (
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+    );
+  }
+
+  function handlePaste(event: ClipboardEvent) {
+    const data = event.clipboardData;
+    if (!data) return;
+
+    // Image paste — existing behavior, takes priority over text.
+    for (const item of data.items) {
       if (item.type.startsWith('image/')) {
         event.preventDefault();
         const file = item.getAsFile();
@@ -353,6 +393,18 @@
         return;
       }
     }
+
+    // Long-text paste → file attachment (ChatGPT/Claude.ai pattern).
+    const text = data.getData('text/plain');
+    if (text.length >= PASTE_TO_FILE_THRESHOLD) {
+      event.preventDefault();
+      const { ext, mime } = sniffPasteExt(text);
+      const filename = `pasted-text-${formatPasteTimestamp()}${ext}`;
+      const file = new File([text], filename, { type: mime });
+      uploadFile(file);
+    }
+    // Shorter pastes fall through to default paste behavior (inline
+    // into the textarea), same as before.
   }
 
   function handleTranscript(text: string, prosody?: Record<string, number> | null) {
