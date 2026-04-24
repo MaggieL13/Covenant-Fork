@@ -93,7 +93,7 @@
       </svg>
       Chat
     </a>
-    <h1 class="header-title">Files</h1>
+    <h1 class="header-title">Library</h1>
     <div class="storage-summary">
       <span class="summary-item">{totalCount} files</span>
       <span class="summary-dot"></span>

@@ -111,10 +111,12 @@
         <path d="M9 10h12"/>
       </svg>
     </button>
-    <a href="/files" class="header-icon-link" aria-label="Files">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
+    <a href="/files" class="header-icon-link" aria-label="Library" title="Library">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m16 6 4 14"/>
+        <path d="M12 6v14"/>
+        <path d="M8 8v12"/>
+        <path d="M4 4v16"/>
       </svg>
     </a>
     <button class="header-icon-btn" onclick={ontoggletheme} aria-label="Toggle light/dark mode" title="Toggle theme">
