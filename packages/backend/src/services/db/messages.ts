@@ -81,6 +81,28 @@ export function getMessage(id: string): Message | null {
   return message;
 }
 
+/**
+ * Latest user or companion message in a thread, or null if the thread
+ * has only system/tool messages (or is empty). Used by the orchestrator
+ * to compute "time since last real activity" for wake prompts so the
+ * companion can choose an appropriate entrance instead of performing a
+ * fresh "good morning" 4 minutes after a real conversation.
+ *
+ * System messages are filtered because they're not conversational
+ * activity — they're digest injections, command results, etc.
+ */
+export function getLastConversationalMessage(threadId: string): { role: string; created_at: string } | null {
+  const row = getDb().prepare(
+    `SELECT role, created_at FROM messages
+     WHERE thread_id = ?
+       AND deleted_at IS NULL
+       AND role IN ('user', 'companion')
+     ORDER BY sequence DESC
+     LIMIT 1`,
+  ).get(threadId) as { role: string; created_at: string } | undefined;
+  return row ?? null;
+}
+
 export function getMessages(params: {
   threadId: string;
   before?: string;

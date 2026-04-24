@@ -20,6 +20,7 @@ export {
   createMessage,
   getMessage,
   getMessages,
+  getLastConversationalMessage,
   getMessageContext,
   editMessage,
   softDeleteMessage,

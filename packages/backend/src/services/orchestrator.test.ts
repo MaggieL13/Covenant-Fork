@@ -205,3 +205,98 @@ describe('deriveLabelFromCron', async () => {
     expect(deriveLabelFromCron('Custom task', '0 10 * * *')).toBe('10:00 AM — Custom task');
   });
 });
+
+// Regression: scheduled wakes fired after a real conversation were
+// producing full "good morning, orient yourself" entrances because the
+// wake prompts had no recency signal. The companion had no data to tell
+// "I just finished a real exchange 4 minutes ago" apart from "I am
+// waking fresh after hours". Fix: prepend a recency header to the wake
+// prompt so the companion can choose an appropriate entrance.
+describe('formatRecencyAgo', async () => {
+  const { formatRecencyAgo } = await import('./orchestrator.js');
+
+  it('returns "just now" for gaps under 1 minute', () => {
+    expect(formatRecencyAgo(0)).toBe('just now');
+    expect(formatRecencyAgo(59_000)).toBe('just now');
+  });
+
+  it('formats minute-scale gaps', () => {
+    expect(formatRecencyAgo(60_000)).toBe('1 minute ago');
+    expect(formatRecencyAgo(4 * 60_000)).toBe('4 minutes ago');
+    expect(formatRecencyAgo(45 * 60_000)).toBe('45 minutes ago');
+  });
+
+  it('formats hour-scale gaps', () => {
+    expect(formatRecencyAgo(60 * 60_000)).toBe('1 hour ago');
+    expect(formatRecencyAgo(3 * 60 * 60_000)).toBe('3 hours ago');
+    expect(formatRecencyAgo(23 * 60 * 60_000)).toBe('23 hours ago');
+  });
+
+  it('uses "yesterday" for the 24-48h band', () => {
+    expect(formatRecencyAgo(24 * 60 * 60_000)).toBe('yesterday');
+    expect(formatRecencyAgo(47 * 60 * 60_000)).toBe('yesterday');
+  });
+
+  it('formats day-scale gaps above 48h', () => {
+    expect(formatRecencyAgo(48 * 60 * 60_000)).toBe('2 days ago');
+    expect(formatRecencyAgo(5 * 24 * 60 * 60_000)).toBe('5 days ago');
+  });
+});
+
+describe('buildRecencyHeader', async () => {
+  const { buildRecencyHeader } = await import('./orchestrator.js');
+
+  const NOW = new Date('2026-04-23T14:00:00.000Z');
+
+  it('returns empty string on a thread with no prior activity', () => {
+    expect(buildRecencyHeader(null, NOW)).toBe('');
+  });
+
+  it('produces a recency header when last message was the companion', () => {
+    const header = buildRecencyHeader(
+      { role: 'companion', created_at: '2026-04-23T13:56:00.000Z' },
+      NOW,
+    );
+    expect(header).toContain('4 minutes ago');
+    expect(header).toContain('your own message');
+    expect(header).toContain('do not perform a fresh "good morning"');
+    expect(header.endsWith('\n\n')).toBe(true);
+  });
+
+  it('attributes a user message correctly', () => {
+    const header = buildRecencyHeader(
+      { role: 'user', created_at: '2026-04-23T13:45:00.000Z' },
+      NOW,
+    );
+    expect(header).toContain('15 minutes ago');
+    expect(header).toContain('a user message');
+  });
+
+  it('does not mislead when clocks skew (future-dated message)', () => {
+    // Some edge case — a message created_at in the future (clock drift,
+    // test seeding, whatever). Don't emit a misleading "negative minutes
+    // ago" header; let the wake prompt run unchanged.
+    expect(
+      buildRecencyHeader(
+        { role: 'user', created_at: '2026-04-23T15:00:00.000Z' },
+        NOW,
+      ),
+    ).toBe('');
+  });
+
+  it('scales language to hour-level and day-level gaps', () => {
+    expect(
+      buildRecencyHeader(
+        { role: 'companion', created_at: '2026-04-23T10:00:00.000Z' },
+        NOW,
+      ),
+    ).toContain('4 hours ago');
+
+    expect(
+      buildRecencyHeader(
+        { role: 'companion', created_at: '2026-04-20T14:00:00.000Z' },
+        NOW,
+      ),
+    ).toContain('3 days ago');
+  });
+});

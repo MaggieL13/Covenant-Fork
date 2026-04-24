@@ -25,6 +25,7 @@ import {
   markTriggerWaiting,
   markTriggerFired,
   markWatcherFired,
+  getLastConversationalMessage,
 } from './db.js';
 import type { Trigger, TriggerCondition } from './db.js';
 import { evaluateConditions } from './triggers.js';
@@ -200,6 +201,55 @@ export function deriveLabelFromCron(originalLabel: string, cronExpr: string): st
   const timePrefix = cronToTimeLabel(cronExpr);
   if (!timePrefix) return originalLabel;
   return `${timePrefix}${sep}${suffix}`;
+}
+
+/**
+ * Format a "time since" span for a recency header. Scales from
+ * minutes → hours → "Yesterday" → days so the companion gets a
+ * readable signal regardless of gap size.
+ *
+ * @internal Exported for testing
+ */
+export function formatRecencyAgo(msSince: number): string {
+  const mins = Math.floor(msSince / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  return `${days} days ago`;
+}
+
+/**
+ * Build a recency header to prepend to wake prompts so the companion
+ * can choose an appropriate entrance. Returns '' when there's no prior
+ * conversational activity on this thread — a brand-new thread takes
+ * the canned wake prompt unchanged.
+ *
+ * Design note: we surface INFORMATION, not a gate. The orchestrator
+ * intentionally lets the companion "read the room" (see the original
+ * comment on shouldSkipCheckIn). Before this, the companion had no
+ * recency data to read with, so every scheduled wake produced a full
+ * "good morning, orient yourself" entrance — even 4 minutes after a
+ * real exchange.
+ *
+ * @internal Exported for testing
+ */
+export function buildRecencyHeader(
+  lastMessage: { role: string; created_at: string } | null,
+  now: Date = new Date(),
+): string {
+  if (!lastMessage) return '';
+  const ms = now.getTime() - new Date(lastMessage.created_at).getTime();
+  if (ms < 0) return ''; // clock skew / future-dated message — don't mislead
+  const ago = formatRecencyAgo(ms);
+  const who = lastMessage.role === 'companion' ? 'your own message' : 'a user message';
+  return (
+    `[Recency: last conversational activity in this thread was ${ago} ` +
+    `(${who}). Adjust your entrance accordingly — if you just finished ` +
+    `talking, do not perform a fresh "good morning" opening.]\n\n`
+  );
 }
 
 /** @internal Exported for testing */
@@ -764,8 +814,16 @@ export class Orchestrator {
         olog(`Pre-wake digest skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
 
+      // Recency header: give the companion a signal about how recent
+      // the last real exchange was so scheduled wakes stop producing
+      // fresh "good morning" entrances 4 minutes after actual talks.
+      // Empty for brand-new threads — the canned prompt runs unchanged.
+      const lastMsg = getLastConversationalMessage(thread.id);
+      const recencyHeader = buildRecencyHeader(lastMsg);
+      const fullPrompt = recencyHeader + prompt;
+
       // Fire the autonomous query
-      const response = await this.agent.processAutonomous(thread.id, prompt);
+      const response = await this.agent.processAutonomous(thread.id, fullPrompt);
 
       // Update thread activity
       updateThreadActivity(thread.id, new Date().toISOString(), true);
