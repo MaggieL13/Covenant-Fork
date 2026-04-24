@@ -45,8 +45,11 @@ describe('isValidCron', () => {
     expect(isValidCron('60 * * * *')).toBe(false);     // 60 minutes invalid
   });
 
-  it('accepts 6-field cron (with seconds)', () => {
-    expect(isValidCron('0 0 8 * * *')).toBe(true);
+  it('rejects 6-field crons (with seconds) — the sovereignty scheduler only supports standard 5-field', () => {
+    // croner permitted this; our ScheduledTask is stricter on purpose so
+    // we don't silently accept an expression the parser can't compute a
+    // correct next-fire time for.
+    expect(isValidCron('0 0 8 * * *')).toBe(false);
   });
 });
 

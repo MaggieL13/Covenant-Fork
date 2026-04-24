@@ -1,4 +1,4 @@
-import { Cron } from 'croner';
+import { ScheduledTask } from './scheduler.js';
 import crypto from 'crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -34,7 +34,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
-import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr } from './time.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, isCronSupported } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -154,7 +154,7 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
 // --- Managed task interface ---
 
 interface ManagedTask {
-  task: Cron;
+  task: ScheduledTask;
   cronExpr: string;
   handler: () => void | Promise<void>;
   wakeType: string;
@@ -254,13 +254,9 @@ export function buildRecencyHeader(
 
 /** @internal Exported for testing */
 export function isValidCron(expr: string): boolean {
-  try {
-    const test = new Cron(expr, { paused: true });
-    test.stop();
-    return true;
-  } catch {
-    return false;
-  }
+  // Sovereignty: validate against ScheduledTask's own parser so we don't
+  // accept crons croner would take but our scheduler can't.
+  return isCronSupported(expr);
 }
 
 // --- Default failsafe thresholds (minutes) ---
@@ -372,7 +368,7 @@ export class Orchestrator {
         this.handleWake(def.wakeType, { freshSession: def.freshSession });
       };
 
-      const task = new Cron(cronExpr, { timezone, paused: !enabled }, handler);
+      const task = new ScheduledTask(cronExpr, { timezone, paused: !enabled }, handler);
 
       if (!enabled) {
         olog(`  ${def.wakeType}: DISABLED (persisted)`);
@@ -555,7 +551,7 @@ export class Orchestrator {
     // Destroy old task and create new one
     managed.task.stop();
 
-    const newTask = new Cron(newCronExpr, { timezone: config.identity.timezone, paused: !managed.enabled }, managed.handler);
+    const newTask = new ScheduledTask(newCronExpr, { timezone: config.identity.timezone, paused: !managed.enabled }, managed.handler);
 
     managed.task = newTask;
     managed.cronExpr = newCronExpr;
@@ -628,7 +624,7 @@ export class Orchestrator {
       this.handleWake(params.wakeType);
     };
 
-    const task = new Cron(params.cronExpr, { timezone: config.identity.timezone }, handler);
+    const task = new ScheduledTask(params.cronExpr, { timezone: config.identity.timezone }, handler);
 
     this.tasks.set(params.wakeType, {
       task,

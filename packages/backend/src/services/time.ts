@@ -169,3 +169,175 @@ export function listTimezonesWithMetadata(): TimezoneEntry[] {
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Cron scheduling — sovereignty-aware next-fire computation.
+//
+// External schedulers (croner etc) resolve cron timezones via Node's Intl,
+// which carries the same stale tzdata problem as Date.toLocaleString. That
+// makes a `0 8 * * *` cron in America/Asuncion fire at 9 AM local wall-clock
+// on installs where Node still thinks Asunción is UTC−4.
+//
+// These helpers do the resolution via moment-timezone instead, so every
+// scheduled fire lands on the correct local wall-clock time regardless of
+// Node's ICU freshness.
+// ---------------------------------------------------------------------------
+
+type CronField =
+  | { kind: 'wildcard' }
+  | { kind: 'fixed'; value: number }
+  | { kind: 'step'; value: number }
+  | { kind: 'range'; min: number; max: number }
+  | { kind: 'list'; values: number[] };
+
+interface CronFields {
+  minute: CronField;
+  hour: CronField;
+  dayOfMonth: CronField;
+  month: CronField;
+  dayOfWeek: CronField;
+}
+
+// Valid value ranges per field position. Cron uses 0=Sunday for dayOfWeek;
+// moment also uses 0=Sunday so no translation needed.
+const FIELD_BOUNDS: Array<[number, number]> = [
+  [0, 59], // minute
+  [0, 23], // hour
+  [1, 31], // dayOfMonth
+  [1, 12], // month
+  [0, 6],  // dayOfWeek (0=Sun, 6=Sat)
+];
+
+function inBounds(n: number, [min, max]: [number, number]): boolean {
+  return Number.isInteger(n) && n >= min && n <= max;
+}
+
+function parseCronField(raw: string, bounds: [number, number]): CronField | null {
+  if (raw === '*') return { kind: 'wildcard' };
+
+  // Single fixed integer
+  if (/^\d+$/.test(raw)) {
+    const v = parseInt(raw, 10);
+    return inBounds(v, bounds) ? { kind: 'fixed', value: v } : null;
+  }
+
+  // Step value: */N (applied over the full field range)
+  const stepMatch = raw.match(/^\*\/(\d+)$/);
+  if (stepMatch) {
+    const n = parseInt(stepMatch[1], 10);
+    return n > 0 ? { kind: 'step', value: n } : null;
+  }
+
+  // Range: min-max (inclusive)
+  const rangeMatch = raw.match(/^(\d+)-(\d+)$/);
+  if (rangeMatch) {
+    const lo = parseInt(rangeMatch[1], 10);
+    const hi = parseInt(rangeMatch[2], 10);
+    if (inBounds(lo, bounds) && inBounds(hi, bounds) && lo <= hi) {
+      return { kind: 'range', min: lo, max: hi };
+    }
+    return null;
+  }
+
+  // List: v1,v2,v3
+  if (raw.includes(',')) {
+    const pieces = raw.split(',');
+    const values: number[] = [];
+    for (const p of pieces) {
+      if (!/^\d+$/.test(p)) return null;
+      const v = parseInt(p, 10);
+      if (!inBounds(v, bounds)) return null;
+      values.push(v);
+    }
+    return values.length > 0 ? { kind: 'list', values } : null;
+  }
+
+  return null;
+}
+
+/**
+ * Parse a cron expression into structured fields. Returns null for
+ * malformed expressions, out-of-range values, or mixed patterns we don't
+ * support (e.g. `1-5/2` step-within-range). Callers should treat null
+ * as "can't schedule this cron safely via our sovereignty-aware path."
+ *
+ * Supported per field: wildcard, fixed integer, step ("slash-N"),
+ * range ("min-max"), list ("v1,v2,v3").
+ *
+ * @internal Exported for testing
+ */
+export function parseCron(expr: string): CronFields | null {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const fields: (CronField | null)[] = parts.map((p, i) =>
+    parseCronField(p, FIELD_BOUNDS[i]),
+  );
+  if (fields.some((f) => f === null)) return null;
+  const [m, h, dom, mo, dow] = fields as CronField[];
+  return { minute: m, hour: h, dayOfMonth: dom, month: mo, dayOfWeek: dow };
+}
+
+function matchesField(value: number, field: CronField): boolean {
+  switch (field.kind) {
+    case 'wildcard':
+      return true;
+    case 'fixed':
+      return value === field.value;
+    case 'step':
+      return value % field.value === 0;
+    case 'range':
+      return value >= field.min && value <= field.max;
+    case 'list':
+      return field.values.includes(value);
+  }
+}
+
+/**
+ * Next fire time for a cron expression in a given timezone, computed via
+ * moment-timezone (independent of Node's ICU). Walks forward one minute at
+ * a time from `from + 1 minute` until it finds a local time that matches
+ * every field. Returns null for unsupported cron patterns or if nothing
+ * matches within a week (protects against malformed expressions).
+ *
+ * Day-of-month and day-of-week use AND semantics here (both must match
+ * if both are non-wildcard) — simpler than cron's historical OR semantics
+ * and sufficient for the fixed-daily wake patterns we use.
+ *
+ * @internal Exported for testing
+ */
+export function cronNextFireTime(
+  cronExpr: string,
+  tz: string,
+  from: Date = now(),
+): Date | null {
+  const fields = parseCron(cronExpr);
+  if (!fields) return null;
+
+  // Start one minute past `from` so we don't re-fire on the same minute.
+  const candidate = moment.tz(from, tz).add(1, 'minute').second(0).millisecond(0);
+  const maxIterations = 7 * 24 * 60; // one week
+
+  for (let i = 0; i < maxIterations; i++) {
+    if (
+      matchesField(candidate.minute(), fields.minute) &&
+      matchesField(candidate.hour(), fields.hour) &&
+      matchesField(candidate.date(), fields.dayOfMonth) &&
+      matchesField(candidate.month() + 1, fields.month) && // moment months are 0-indexed; cron is 1-indexed
+      matchesField(candidate.day(), fields.dayOfWeek)
+    ) {
+      return candidate.toDate();
+    }
+    candidate.add(1, 'minute');
+  }
+  return null;
+}
+
+/**
+ * Validate a cron expression for use with ScheduledTask. True only if the
+ * parser recognizes every field — unsupported patterns (ranges, lists)
+ * return false so callers can reject them at config time rather than
+ * having cronNextFireTime return null at schedule time.
+ */
+export function isCronSupported(expr: string): boolean {
+  return parseCron(expr) !== null;
+}

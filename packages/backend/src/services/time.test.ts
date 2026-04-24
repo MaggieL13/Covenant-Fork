@@ -10,6 +10,9 @@ import {
   utcHour,
   isValidTimezone,
   tzdataInfo,
+  parseCron,
+  cronNextFireTime,
+  isCronSupported,
 } from './time.js';
 
 /**
@@ -90,5 +93,95 @@ describe('time.ts — timezone sovereignty', () => {
     expect(localTimeStr('Europe/London', REF)).toBe('23:54');
     // 22:54 UTC = 18:54 EDT in New York (DST is active)
     expect(localTimeStr('America/New_York', REF)).toBe('18:54');
+  });
+});
+
+describe('cron parser + next-fire computation (sovereignty for scheduling)', () => {
+  // The core regression: under croner, `0 8 * * *` in America/Asuncion
+  // resolves via Node's ICU. Node 22.14 thinks Asunción is UTC−4 (stale
+  // tzdata), so croner's computed next-fire is 12:00 UTC ≈ 9 AM local.
+  // Reality: Paraguay is UTC−3, so 8 AM local = 11:00 UTC. Our
+  // cronNextFireTime uses moment-timezone's tzdata and returns 11:00
+  // UTC, which is the correct wall-clock 8 AM.
+  it('fires at the correct local wall-clock time even when Node ICU disagrees', () => {
+    // Reference moment: 07:30 UTC on 24 Apr 2026 = 04:30 Asunción (UTC−3).
+    // Next "0 8 * * *" local fire is 11:00 UTC the same day.
+    const from = new Date('2026-04-24T07:30:00.000Z');
+    const next = cronNextFireTime('0 8 * * *', 'America/Asuncion', from);
+    expect(next).not.toBeNull();
+    expect(next!.toISOString()).toBe('2026-04-24T11:00:00.000Z');
+  });
+
+  it('rolls to tomorrow when today\'s fire has already passed', () => {
+    // Reference 14:00 UTC = 11:00 Asunción; today's 8 AM already fired.
+    const from = new Date('2026-04-24T14:00:00.000Z');
+    const next = cronNextFireTime('0 8 * * *', 'America/Asuncion', from);
+    expect(next!.toISOString()).toBe('2026-04-25T11:00:00.000Z');
+  });
+
+  it('handles fixed minute+hour in a non-DST zone', () => {
+    const from = new Date('2026-04-24T10:00:00.000Z');
+    const next = cronNextFireTime('30 14 * * *', 'UTC', from);
+    expect(next!.toISOString()).toBe('2026-04-24T14:30:00.000Z');
+  });
+
+  it('supports step values in the minute field (every 15 min)', () => {
+    // 10:07 UTC → next */15 fire is 10:15 UTC
+    const from = new Date('2026-04-24T10:07:00.000Z');
+    const next = cronNextFireTime('*/15 * * * *', 'UTC', from);
+    expect(next!.toISOString()).toBe('2026-04-24T10:15:00.000Z');
+  });
+
+  it('supports step values in the hour field (every 6 hours)', () => {
+    // 10:00 UTC on the hour → next "0 */6 * * *" is 12:00 UTC
+    const from = new Date('2026-04-24T10:00:30.000Z');
+    const next = cronNextFireTime('0 */6 * * *', 'UTC', from);
+    expect(next!.toISOString()).toBe('2026-04-24T12:00:00.000Z');
+  });
+
+  it('supports ranges and lists for fire-time matching', () => {
+    // Weekday 2 PM — Tue 21 Apr 2026 at 13:00 UTC → next Wed 22 Apr 14:00 UTC
+    const from = new Date('2026-04-21T13:00:00.000Z');
+    const weekdays = cronNextFireTime('0 14 * * 1-5', 'UTC', from);
+    expect(weekdays!.toISOString()).toBe('2026-04-21T14:00:00.000Z');
+
+    // List: fire at minute 0, 15, 30, or 45 of the hour
+    const quarters = cronNextFireTime('0,15,30,45 * * * *', 'UTC', new Date('2026-04-24T10:07:00.000Z'));
+    expect(quarters!.toISOString()).toBe('2026-04-24T10:15:00.000Z');
+  });
+
+  it('returns null for genuinely unsupported or malformed patterns', () => {
+    expect(cronNextFireTime('not-a-cron', 'UTC')).toBeNull();
+    expect(cronNextFireTime('0 8 * *', 'UTC')).toBeNull(); // 4 fields
+    expect(cronNextFireTime('1-5/2 * * * *', 'UTC')).toBeNull(); // step within range (not supported)
+    expect(cronNextFireTime('60 * * * *', 'UTC')).toBeNull(); // out-of-range minute
+    expect(cronNextFireTime('0 24 * * *', 'UTC')).toBeNull(); // out-of-range hour
+    expect(cronNextFireTime('0 0 32 * *', 'UTC')).toBeNull(); // out-of-range day
+  });
+
+  it('parseCron exposes structured fields for introspection', () => {
+    expect(parseCron('0 8 * * *')).toEqual({
+      minute: { kind: 'fixed', value: 0 },
+      hour: { kind: 'fixed', value: 8 },
+      dayOfMonth: { kind: 'wildcard' },
+      month: { kind: 'wildcard' },
+      dayOfWeek: { kind: 'wildcard' },
+    });
+    expect(parseCron('*/15 * * * *')?.minute).toEqual({ kind: 'step', value: 15 });
+    expect(parseCron('0 8 * * 1-5')?.dayOfWeek).toEqual({ kind: 'range', min: 1, max: 5 });
+    expect(parseCron('0,30 * * * *')?.minute).toEqual({ kind: 'list', values: [0, 30] });
+    expect(parseCron('60 * * * *')).toBeNull(); // out-of-range rejected at parse time
+  });
+
+  it('isCronSupported returns true for every supported pattern', () => {
+    expect(isCronSupported('0 8 * * *')).toBe(true);
+    expect(isCronSupported('*/15 * * * *')).toBe(true);
+    expect(isCronSupported('50 23 * * *')).toBe(true);
+    expect(isCronSupported('0 14 * * 1-5')).toBe(true); // weekday range
+    expect(isCronSupported('0,15,30,45 * * * *')).toBe(true); // list
+    expect(isCronSupported('0-10 * * * *')).toBe(true); // range
+    expect(isCronSupported('garbage')).toBe(false);
+    expect(isCronSupported('60 * * * *')).toBe(false);
+    expect(isCronSupported('1-5/2 * * * *')).toBe(false);
   });
 });
