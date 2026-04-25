@@ -14,11 +14,13 @@
     canvasPanelOpen,
     activeCanvasId,
     commandCenterEnabled,
+    filePanelOpen = false,
     ontogglesidebar,
     ontogglesidebarcollapsed,
     ontogglesearch,
     onstopgeneration,
     ontogglecanvas,
+    ontogglefiles,
     ontoggletheme,
   } = $props<{
     companionName: string;
@@ -30,11 +32,13 @@
     canvasPanelOpen: boolean;
     activeCanvasId: string | null;
     commandCenterEnabled: boolean;
+    filePanelOpen?: boolean;
     ontogglesidebar?: () => void;
     ontogglesidebarcollapsed?: () => void;
     ontogglesearch?: () => void;
     onstopgeneration?: () => void;
     ontogglecanvas?: () => void;
+    ontogglefiles?: () => void;
     ontoggletheme?: () => void;
   }>();
 
@@ -119,6 +123,18 @@
         <path d="M4 4v16"/>
       </svg>
     </a>
+    <button
+      class="header-icon-btn"
+      class:active={filePanelOpen}
+      onclick={ontogglefiles}
+      aria-label="Files in this thread"
+      title="Files in this thread"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+    </button>
     <button class="header-icon-btn" onclick={ontoggletheme} aria-label="Toggle light/dark mode" title="Toggle theme">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>

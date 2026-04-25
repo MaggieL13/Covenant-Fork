@@ -8,6 +8,7 @@
   import NewThreadModal from '$lib/components/chat/NewThreadModal.svelte';
   import SearchOverlay from '$lib/components/chat/SearchOverlay.svelte';
   import CanvasDrawer from '$lib/components/chat/CanvasDrawer.svelte';
+  import FilePanel from '$lib/components/chat/FilePanel.svelte';
   import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
   import ChatSidebar from '$lib/components/chat/ChatSidebar.svelte';
   import MessageList from '$lib/components/chat/MessageList.svelte';
@@ -84,6 +85,7 @@
 
   // Workspace drawers
   let canvasPanelOpen = $state(false);
+  let filePanelOpen = $state(false);
 
   // New thread modal
   let newThreadOpen = $state(false);
@@ -101,6 +103,14 @@
 
   function closeCanvasPanel() {
     canvasPanelOpen = false;
+  }
+
+  function toggleFilePanel() {
+    filePanelOpen = !filePanelOpen;
+  }
+
+  function closeFilePanel() {
+    filePanelOpen = false;
   }
 
   // Theme toggle
@@ -426,12 +436,14 @@
       {totalUnread}
       {canvasPanelOpen}
       {activeCanvasId}
+      {filePanelOpen}
       commandCenterEnabled={isCommandCenterEnabled()}
       ontogglesidebar={toggleSidebar}
       ontogglesidebarcollapsed={() => sidebarCollapsed = !sidebarCollapsed}
       ontogglesearch={toggleSearch}
       onstopgeneration={sendStopGeneration}
       ontogglecanvas={toggleCanvasPanel}
+      ontogglefiles={toggleFilePanel}
       ontoggletheme={toggleTheme}
     />
 
@@ -518,6 +530,12 @@
     onreference={(canvasId, title) => {
       messageInput?.attachCanvasRef(canvasId, title);
     }}
+  />
+
+  <FilePanel
+    open={filePanelOpen}
+    {messages}
+    onclose={closeFilePanel}
   />
 
   <SearchOverlay

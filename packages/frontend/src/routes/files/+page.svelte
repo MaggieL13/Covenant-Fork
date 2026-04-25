@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/utils/api';
+  import { formatSize } from '$lib/utils/format';
+  import FileThumbnail from '$lib/components/FileThumbnail.svelte';
 
   interface FileEntry {
     fileId: string;
@@ -26,27 +28,9 @@
     return files.filter(f => f.contentType === filter);
   });
 
-  function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   function formatDate(iso: string): string {
     const d = new Date(iso);
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  }
-
-  function typeBadge(contentType: string): string {
-    if (contentType === 'image') return 'IMG';
-    if (contentType === 'audio') return 'AUD';
-    return 'FILE';
-  }
-
-  function typeBadgeClass(contentType: string): string {
-    if (contentType === 'image') return 'badge-image';
-    if (contentType === 'audio') return 'badge-audio';
-    return 'badge-file';
   }
 
   async function loadFiles() {
@@ -131,28 +115,24 @@
         {/if}
       </p>
     {:else}
-      <div class="file-list">
+      <div class="file-grid">
         {#each filteredFiles() as file (file.fileId)}
-          <div class="file-card">
-            <span class="type-badge {typeBadgeClass(file.contentType)}">{typeBadge(file.contentType)}</span>
-            <div class="file-info">
-              <span class="file-name">{file.filename}</span>
-              <span class="file-meta">
-                {formatSize(file.size)} &middot; {formatDate(file.createdAt)}
-                {#if !file.inUse}
-                  <span class="orphan-tag">orphan</span>
-                {/if}
-              </span>
+          <div class="file-card" class:is-orphan={!file.inUse}>
+            <FileThumbnail
+              fileId={file.fileId}
+              filename={file.filename}
+              size={file.size}
+              mimeType={file.mimeType}
+              contentType={file.contentType}
+              onclick={() => window.open(`/api/files/${file.fileId}`, '_blank', 'noopener')}
+            />
+            <div class="file-card-meta">
+              <span class="file-card-date">{formatDate(file.createdAt)}</span>
+              {#if !file.inUse}
+                <span class="orphan-tag">orphan</span>
+              {/if}
             </div>
-            <div class="file-actions">
-              <a
-                href="/api/files/{file.fileId}"
-                target="_blank"
-                rel="noopener"
-                class="view-btn"
-              >
-                View
-              </a>
+            <div class="file-card-actions">
               {#if deleteConfirm === file.fileId}
                 <button class="confirm-delete-btn" onclick={() => deleteFile(file.fileId)}>Confirm</button>
                 <button class="cancel-btn" onclick={() => deleteConfirm = null}>Cancel</button>
@@ -272,67 +252,43 @@
     padding: 2rem;
   }
 
-  .file-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    max-width: 50rem;
+  .file-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+    gap: 1rem;
+    max-width: 80rem;
     margin: 0 auto;
   }
 
   .file-card {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
+    flex-direction: column;
+    gap: 0.375rem;
     background: var(--bg-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    padding: 0.625rem;
+    transition: border-color var(--transition);
   }
 
-  .type-badge {
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    padding: 0.1875rem 0.375rem;
-    border-radius: 0.25rem;
-    flex-shrink: 0;
+  .file-card.is-orphan {
+    border-color: rgba(196, 168, 114, 0.4);
   }
 
-  .badge-image {
-    background: var(--bg-active);
-    color: var(--accent);
-  }
-
-  .badge-audio {
-    background: var(--bg-active);
-    color: var(--accent);
-  }
-
-  .badge-file {
-    background: rgba(148, 163, 184, 0.2);
-    color: #94a3b8;
-  }
-
-  .file-info {
-    flex: 1;
-    min-width: 0;
+  .file-card-meta {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.25rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 
-  .file-name {
-    font-size: 0.875rem;
-    color: var(--text-primary);
+  .file-card-date {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .file-meta {
-    font-size: 0.75rem;
-    color: var(--text-muted);
   }
 
   .orphan-tag {
@@ -341,43 +297,35 @@
     font-weight: 500;
     color: var(--accent);
     background: var(--bg-active);
-    padding: 0 0.25rem;
+    padding: 0 0.3125rem;
     border-radius: 0.125rem;
-    margin-left: 0.25rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-  }
-
-  .file-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
     flex-shrink: 0;
   }
 
-  .view-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    text-decoration: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    transition: all var(--transition);
+  .file-card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.375rem;
+    padding: 0 0.25rem;
   }
 
-  .view-btn:hover {
-    color: var(--text-primary);
-    border-color: var(--text-muted);
-    text-decoration: none;
+  .delete-btn,
+  .confirm-delete-btn,
+  .cancel-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition);
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
   }
 
   .delete-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
     color: var(--text-muted);
-    background: transparent;
-    border-radius: var(--radius-sm);
-    transition: all var(--transition);
   }
 
   .delete-btn:hover {
@@ -385,11 +333,8 @@
   }
 
   .confirm-delete-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
     color: white;
     background: #ef4444;
-    border-radius: var(--radius-sm);
   }
 
   .confirm-delete-btn:hover {
@@ -397,11 +342,7 @@
   }
 
   .cancel-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
     color: var(--text-muted);
-    background: transparent;
-    border-radius: var(--radius-sm);
   }
 
   .cancel-btn:hover {
@@ -417,14 +358,9 @@
       padding: 1rem;
     }
 
-    .file-card {
-      flex-wrap: wrap;
-    }
-
-    .file-actions {
-      width: 100%;
-      justify-content: flex-end;
-      margin-top: 0.25rem;
+    .file-grid {
+      grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+      gap: 0.75rem;
     }
   }
 </style>
