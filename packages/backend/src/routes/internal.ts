@@ -36,7 +36,7 @@ import type { TriggerCondition } from '../services/db.js';
 import { embed, vectorToBuffer } from '../services/embeddings.js';
 import { searchVectors, getCacheStats, type SearchFilter } from '../services/vector-cache.js';
 import { saveFileInternal } from '../services/files.js';
-import { wasRecentlyAutoShared } from '../services/hooks.js';
+import { wasRecentlyAutoShared, markFileSurfaced } from '../services/hooks.js';
 import { registry } from '../services/ws.js';
 import { getResonantConfig } from '../config.js';
 import { requireLocalhost } from '../middleware/localhost.js';
@@ -188,6 +188,9 @@ router.post('/share', (req, res) => {
 
     updateThreadActivity(threadId, now, true);
     registry.broadcast({ type: 'message', message });
+    // Register so a follow-up Write on the same file dedupes via the
+    // shared tracker in services/hooks.ts.
+    markFileSurfaced(threadId, filePath);
 
     res.json({ success: true, fileId: fileMeta.fileId, messageId: message.id, url: fileMeta.url });
   } catch (error) {

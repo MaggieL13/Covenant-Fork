@@ -347,45 +347,86 @@ function handleImageToolResult(toolName: string, output: string, threadId: strin
 }
 
 /**
- * Short-lived tracker of paths the auto-share hook just surfaced.
- * Used by POST /api/internal/share to skip a duplicate card when the
- * companion follows a Write-into-shared/ with an explicit Share call
- * for the same file — the hook already produced a card; /share should
- * be a no-op. Window is generous (30s) since companion tool-call
- * latency can push the /share request well past the Write hook.
+ * Short-lived tracker of files surfaced into chat — both via the auto-
+ * share hook and via the explicit /api/internal/share endpoint. Used to
+ * dedup duplicate cards in two collision modes:
+ *
+ *   1. Write hook fires → companion then calls /share for the same file
+ *      → /share short-circuits via wasRecentlyAutoShared
+ *   2. Companion calls Write twice on the same file (create then update)
+ *      → second hook invocation short-circuits via the same check
+ *
+ * Keyed by `threadId::basename` rather than full path so it's robust to
+ * forward/back slash variations, absolute-vs-relative path differences,
+ * and any other normalization mismatches between Write tool input and
+ * /share request body. Two surfaces of the same filename in the same
+ * thread within the window is the duplicate signature we want to catch.
+ *
+ * Window is generous (30s) — companion tool-call latency can push the
+ * /share request well past the Write hook.
  */
-const RECENT_AUTO_SHARE_WINDOW_MS = 30_000;
-const recentAutoShares = new Map<string, number>(); // key: "threadId::absolutePath" → timestamp
+const RECENT_SURFACE_WINDOW_MS = 30_000;
+const recentSurfacedFiles = new Map<string, number>(); // key: "threadId::basename" → timestamp
 
-function recordAutoShare(threadId: string, filePath: string): void {
-  const key = `${threadId}::${filePath}`;
+function surfaceKey(threadId: string, filePath: string): string {
+  return `${threadId}::${basename(filePath)}`;
+}
+
+function recordSurfacedFile(threadId: string, filePath: string): void {
+  const key = surfaceKey(threadId, filePath);
   const now = Date.now();
-  recentAutoShares.set(key, now);
+  recentSurfacedFiles.set(key, now);
   // Prune stale entries opportunistically so the map doesn't grow unbounded
-  for (const [k, ts] of recentAutoShares) {
-    if (now - ts > RECENT_AUTO_SHARE_WINDOW_MS) recentAutoShares.delete(k);
+  for (const [k, ts] of recentSurfacedFiles) {
+    if (now - ts > RECENT_SURFACE_WINDOW_MS) recentSurfacedFiles.delete(k);
   }
 }
 
-/**
- * Was this file auto-shared into this thread recently? If yes, an
- * explicit /share call for the same path is a duplicate and should
- * skip emitting another card.
- */
-export function wasRecentlyAutoShared(threadId: string, filePath: string): boolean {
-  const key = `${threadId}::${filePath}`;
-  const ts = recentAutoShares.get(key);
+function wasRecentlySurfaced(threadId: string, filePath: string): boolean {
+  const key = surfaceKey(threadId, filePath);
+  const ts = recentSurfacedFiles.get(key);
   if (ts === undefined) return false;
-  if (Date.now() - ts > RECENT_AUTO_SHARE_WINDOW_MS) {
-    recentAutoShares.delete(key);
+  if (Date.now() - ts > RECENT_SURFACE_WINDOW_MS) {
+    recentSurfacedFiles.delete(key);
     return false;
   }
   return true;
 }
 
+/**
+ * Public alias kept for the /share endpoint. The semantic widened —
+ * we now dedup against any prior surface of the same file (hook or
+ * share) within the window, not only auto-shares.
+ */
+export function wasRecentlyAutoShared(threadId: string, filePath: string): boolean {
+  return wasRecentlySurfaced(threadId, filePath);
+}
+
+/**
+ * Allow non-hook surfaces (e.g. POST /api/internal/share) to register
+ * that they emitted a card for a file, so a subsequent Write on the
+ * same file dedupes correctly.
+ */
+export function markFileSurfaced(threadId: string, filePath: string): void {
+  recordSurfacedFile(threadId, filePath);
+}
+
 function handleSharedFileWrite(filePath: string, threadId: string, registry: ConnectionRegistry): void {
   try {
     if (!existsSync(filePath)) return;
+
+    // Dedup: if this file was already surfaced into this thread within
+    // the recent window (e.g. a previous Write or an explicit /share
+    // call), don't emit a second card. Catches consecutive Writes on
+    // the same file (create-then-update) in addition to the original
+    // Write+Share collision.
+    if (wasRecentlySurfaced(threadId, filePath)) {
+      console.log(`[Hook] Skipped duplicate auto-share for ${basename(filePath)} in thread ${threadId}`);
+      // Refresh the timestamp so a follow-up /share within the window
+      // also dedupes correctly.
+      recordSurfacedFile(threadId, filePath);
+      return;
+    }
 
     const buffer = readFileSync(filePath);
     const filename = basename(filePath);
@@ -404,7 +445,7 @@ function handleSharedFileWrite(filePath: string, threadId: string, registry: Con
 
     updateThreadActivity(threadId, now, true);
     registry.broadcast({ type: 'message', message });
-    recordAutoShare(threadId, filePath);
+    recordSurfacedFile(threadId, filePath);
     console.log(`[Hook] Auto-shared ${filename} into thread ${threadId}: ${fileMeta.fileId}`);
   } catch (error) {
     console.error('[Hook] Failed to auto-share file:', error);
