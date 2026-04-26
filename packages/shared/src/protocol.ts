@@ -103,7 +103,7 @@ export function isClientMessage(data: unknown): data is ClientMessage {
     'message', 'edit_message', 'delete_message', 'typing', 'read',
     'switch_thread', 'create_thread', 'voice_start', 'voice_audio',
     'voice_stop', 'voice_interrupt', 'voice_mode', 'sync', 'ping', 'request_status',
-    'canvas_create', 'canvas_update', 'canvas_update_title', 'canvas_delete', 'canvas_list',
+    'canvas_create', 'canvas_update', 'canvas_update_title', 'canvas_update_tags', 'canvas_delete', 'canvas_list',
     'add_reaction', 'remove_reaction', 'pin_thread', 'unpin_thread', 'visibility',
     'stop_generation', 'mcp_reconnect', 'mcp_toggle', 'rewind_files', 'command',
   ];

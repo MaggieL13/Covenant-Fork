@@ -993,11 +993,20 @@ export class Orchestrator {
     const localHour = tzLocalHour(timezone, now);
     const localMinute = tzLocalMinute(timezone, now);
 
-    // Lazy-fetch status only if any trigger needs it
+    // Lazy-fetch status only if any trigger needs it. One malformed
+    // conditions row must NOT prevent every other valid trigger from
+    // evaluating this tick — wrap the parse per row so a bad row is
+    // logged and skipped instead of throwing out of the .some() loop.
     let statusText = '';
     const needsStatus = triggers.some(t => {
-      const conditions: TriggerCondition[] = JSON.parse(t.conditions);
-      return conditions.some(c => c.type === 'routine_missing');
+      try {
+        const conditions: TriggerCondition[] = JSON.parse(t.conditions);
+        return conditions.some(c => c.type === 'routine_missing');
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        olog(`TRIGGER PARSE ERROR (needsStatus check): "${t.label ?? t.id}" — ${errMsg}`);
+        return false;
+      }
     });
     if (needsStatus) {
       statusText = await fetchLifeStatus();

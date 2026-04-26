@@ -25,7 +25,7 @@ screenshots/
 !docs/screenshots/
 docs/DESIGN-SPEC.md
 .claude/
-shared/
+/shared/
 *.txt
 tmp/
 data/backups/
