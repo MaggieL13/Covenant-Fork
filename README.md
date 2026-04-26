@@ -164,7 +164,8 @@ See [examples/themes/README.md](examples/themes/README.md) for the full variable
 - Real-time streaming with interleaved tool visualization
 - Thread management (daily + named), pinning, archiving
 - Keyword search (Ctrl+K) and **semantic search** — find messages by meaning, not just keywords, using local ML embeddings ([docs](docs/semantic-search.md))
-- File sharing and image preview
+- File sharing with thumbnail previews — global **Library** (cross-thread store at `/files`, with orphan cleanup) and per-thread **Files** drawer in the chat header for the active conversation
+- Long-paste auto-converts (≥1000 chars) into a file attachment so design briefs and tool output don't clobber your draft message
 - Canvas editor (markdown, code, text, html)
 - Message reactions (targets user messages only)
 - Reply-to context
