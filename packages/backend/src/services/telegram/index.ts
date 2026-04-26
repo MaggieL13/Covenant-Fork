@@ -188,6 +188,13 @@ export class TelegramService {
         metadata: {
           telegramChatId: chatId,
           telegramMessageId: ctx.message!.message_id,
+          // Unified fileId so per-thread Files panel and Library agree on
+          // the lookup key. Legacy voiceFileId kept for any callers that
+          // still rely on the platform-specific name.
+          fileId: fileMeta.fileId,
+          filename: fileMeta.filename,
+          size: fileMeta.size,
+          mimeType: fileMeta.mimeType,
           voiceFileId: fileMeta.fileId,
           voiceDuration: duration,
           voiceTranscript: transcript,
@@ -253,6 +260,11 @@ export class TelegramService {
         metadata: {
           telegramChatId: chatId,
           telegramMessageId: ctx.message!.message_id,
+          // Unified fileId so per-thread Files panel and Library agree.
+          fileId: fileMeta.fileId,
+          filename: fileMeta.filename,
+          size: fileMeta.size,
+          mimeType: fileMeta.mimeType,
           photoFileId: fileMeta.fileId,
           photoWidth: bestPhoto.width,
           photoHeight: bestPhoto.height,
@@ -385,12 +397,20 @@ export class TelegramService {
 
     // Store incoming message
     const now = new Date().toISOString();
+    // Choose content_type from the metadata shape so attachments land
+    // in the right bucket for both the per-thread Files panel and the
+    // Library: voice notes → audio, photos → image, everything else
+    // (text-only Telegram messages) → text.
+    let contentType: 'text' | 'audio' | 'image' = 'text';
+    if (metadata.voiceTranscript || metadata.voiceFileId) contentType = 'audio';
+    else if (metadata.photoFileId) contentType = 'image';
+
     const incomingMsg = createMessage({
       id: crypto.randomUUID(),
       threadId,
       role: 'user',
       content,
-      contentType: metadata.voiceTranscript ? 'audio' : 'text',
+      contentType,
       platform: 'telegram',
       metadata,
       createdAt: now,

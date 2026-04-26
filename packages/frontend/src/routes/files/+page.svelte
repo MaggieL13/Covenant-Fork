@@ -54,9 +54,11 @@
     try {
       const response = await apiFetch(`/api/files/${fileId}`, { method: 'DELETE' });
       if (response.ok) {
+        // Look up the entry BEFORE filtering it out — otherwise the
+        // size summary stays stale until the next reload.
+        const deleted = files.find(f => f.fileId === fileId);
         files = files.filter(f => f.fileId !== fileId);
         totalCount--;
-        const deleted = files.find(f => f.fileId === fileId);
         if (deleted) totalSize -= deleted.size;
         orphanCount = files.filter(f => !f.inUse).length;
       }

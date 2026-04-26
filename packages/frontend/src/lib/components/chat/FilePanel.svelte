@@ -24,27 +24,57 @@
     url: string;
   }
 
+  // Resolve a fileId from metadata, falling back to platform-specific
+  // legacy keys so historical Telegram voice/photo messages (which
+  // wrote voiceFileId / photoFileId before the storage layer was
+  // normalized) still surface in the Files panel.
+  function extractFileId(meta: Record<string, unknown>): string | null {
+    const candidates = ['fileId', 'voiceFileId', 'photoFileId'];
+    for (const key of candidates) {
+      const v = meta[key];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+    return null;
+  }
+
   // Filter messages for attachment-bearing types. Thread scope is
   // implicit — this component receives only the active thread's
   // messages from the page. Newest first so recent attachments are
   // one scroll-to-top away.
+  //
+  // NOTE: `text` content_type is included here only when metadata
+  // carries a fileId (or its platform-specific aliases). Older
+  // Telegram photos pre-normalization stored as `text` with a
+  // photoFileId — the fallback covers them.
   const fileRows = $derived.by<FileRow[]>(() => {
     const rows: FileRow[] = [];
     for (const m of messages as Message[]) {
-      if (!['image', 'audio', 'file'].includes(m.content_type)) continue;
       const meta = (m.metadata ?? {}) as Record<string, unknown>;
-      const fileId = typeof meta.fileId === 'string' ? meta.fileId : null;
-      if (!fileId) continue; // broken attachments skip silently
+      const fileId = extractFileId(meta);
+      if (!fileId) continue;
+
+      const isAttachmentType = ['image', 'audio', 'file'].includes(m.content_type);
+      const isLegacyTextWithFile =
+        m.content_type === 'text' && (meta.photoFileId || meta.voiceFileId);
+      if (!isAttachmentType && !isLegacyTextWithFile) continue;
+
       const filename = typeof meta.filename === 'string' ? meta.filename : fileId;
       const size = typeof meta.size === 'number' ? meta.size : 0;
       const mimeType = typeof meta.mimeType === 'string' ? meta.mimeType : '';
+
+      // Legacy text-with-photo messages should render as image tiles.
+      let contentType: 'image' | 'audio' | 'file' = 'file';
+      if (m.content_type === 'image' || meta.photoFileId) contentType = 'image';
+      else if (m.content_type === 'audio' || meta.voiceFileId) contentType = 'audio';
+      else if (m.content_type === 'file') contentType = 'file';
+
       rows.push({
         messageId: m.id,
         fileId,
         filename,
         size,
         mimeType,
-        contentType: m.content_type as 'image' | 'audio' | 'file',
+        contentType,
         role: m.role,
         createdAt: m.created_at,
         url: `/api/files/${fileId}`,
