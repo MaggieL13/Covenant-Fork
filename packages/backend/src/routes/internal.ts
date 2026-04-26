@@ -90,7 +90,12 @@ router.post('/tts', ttsRateLimiter, async (req, res) => {
 
   const voiceService = req.app.locals.voiceService as VoiceService | undefined;
   if (!voiceService?.canTTS) {
-    res.status(500).json({ error: 'ElevenLabs not configured — set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in .env' });
+    res.status(500).json({
+      error:
+        'Voice unavailable — ElevenLabs not configured (set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in .env). ' +
+        'If you wanted to leave the user a message, send it as a normal chat reply instead. ' +
+        'Do not fall back to creating a canvas or writing a file for what was meant to be a voice note.',
+    });
     return;
   }
 

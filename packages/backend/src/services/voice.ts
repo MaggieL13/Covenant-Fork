@@ -287,7 +287,15 @@ export class VoiceService {
    */
   async generateTTS(text: string): Promise<Buffer> {
     if (!this.elevenLabsKey || !this.elevenLabsVoiceId) {
-      throw new Error('ElevenLabs not configured — set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID');
+      // Behavioral hint to the agent: when this error surfaces in the
+      // tool result, the right fallback is a normal chat reply, NOT
+      // improvising via Canvas or Write. Explicit guidance prevents the
+      // "voice failed → leave a text canvas" pattern users find confusing.
+      throw new Error(
+        'Voice unavailable — ElevenLabs not configured (set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID). ' +
+          'If you wanted to leave the user a message, send it as a normal chat reply instead. ' +
+          'Do not fall back to creating a canvas or writing a file for what was meant to be a voice note.',
+      );
     }
 
     const response = await fetch(`${ELEVENLABS_BASE}/${this.elevenLabsVoiceId}`, {

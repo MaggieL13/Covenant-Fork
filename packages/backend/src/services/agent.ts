@@ -615,7 +615,7 @@ export class AgentService {
     console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'}, effort: ${effort})`);
 
     // Tool-behavior rule prepended to the system prompt. Lives here
-    // rather than in CLAUDE.md so Maggie's intimate persona file stays
+    // rather than in CLAUDE.md so the personal persona file stays
     // untouched. Keep this short — long tool rules pull focus from the
     // companion's voice.
     const TOOL_BEHAVIOR_RULES = [
@@ -624,6 +624,8 @@ export class AgentService {
       'When using the Write tool to save user-facing content (scripts, stories, notes, markdown, ElevenLabs scripts, personal writing), default to the `shared/` folder relative to the project root. Example: `shared/elevenlabs-april-19.md`, not `elevenlabs-april-19.md`.',
       '',
       'Repo-root writes are appropriate only for files that genuinely belong at the root (package.json, README, config, test artifacts explicitly requested). When unsure, prefer `shared/`.',
+      '',
+      'If the Voice tool returns an error indicating it is unavailable / not configured, send your intended message as a normal chat reply instead. Do NOT improvise by creating a canvas, writing a markdown file, or any other persistence-based workaround for what was meant to be a voice note — a regular chat message is the correct fallback.',
     ].join('\n');
 
     const appendText = claudeMdContent
