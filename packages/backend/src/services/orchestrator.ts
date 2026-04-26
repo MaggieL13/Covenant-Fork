@@ -352,19 +352,39 @@ export class Orchestrator {
     this.pulseEnabled = getConfigBool('pulse.enabled', false);
     this.pulseFrequency = getConfigNumber('pulse.frequency', 15);
 
-    // Apply any schedule overrides from config + register custom wake types
+    // Apply any schedule overrides from config + register custom wake
+    // types. YAML overrides go through the same isCronSupported check
+    // as DB-persisted schedules so a malformed orchestrator.schedules
+    // entry can't crash startup either — they get rejected here, not
+    // later when ScheduledTask throws.
     const defaultWakeTypes = new Set(DEFAULT_TASKS.map(d => d.wakeType));
     const taskDefs: TaskDefinition[] = DEFAULT_TASKS.map(def => {
       const overrideCron = config.orchestrator.schedules[def.wakeType];
       if (overrideCron) {
-        return { ...def, cronExpr: overrideCron };
+        if (isValidCron(overrideCron)) {
+          return { ...def, cronExpr: overrideCron };
+        }
+        olog(
+          `  ${def.wakeType}: WARNING orchestrator.schedules YAML override "${overrideCron}" is invalid; ` +
+            `falling back to default ${def.cronExpr}.`,
+        );
       }
       return def;
     });
 
-    // Add custom schedule entries not in DEFAULT_TASKS
+    // Add custom schedule entries not in DEFAULT_TASKS — same validation.
+    // For custom wakes there's no default to fall back to, so an invalid
+    // entry is skipped entirely with a loud log; the rest of the
+    // orchestrator still loads.
     for (const [wakeType, cronExpr] of Object.entries(config.orchestrator.schedules)) {
       if (defaultWakeTypes.has(wakeType)) continue; // already handled above
+      if (!isValidCron(cronExpr)) {
+        olog(
+          `  ${wakeType}: WARNING custom orchestrator.schedules YAML cron "${cronExpr}" is invalid; ` +
+            `skipping this wake type. Fix the entry in resonant.yaml to register it.`,
+        );
+        continue;
+      }
       const label = wakeType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       taskDefs.push({
         wakeType,
