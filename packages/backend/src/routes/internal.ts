@@ -553,6 +553,11 @@ router.post('/timer', (req, res) => {
           createdAt: new Date().toISOString(),
         });
 
+        // API shape: `fire_at_local` is snake_case to mirror the
+        // canonical Timer DB row fields (fire_at, thread_id, fired_at,
+        // created_at). The audit suggested camelCase aliases; we
+        // deliberately do NOT add them — one shape, no synonyms,
+        // consistent with the rest of the timer payload.
         res.json({
           success: true,
           timer: {
@@ -565,7 +570,8 @@ router.post('/timer', (req, res) => {
       case 'list': {
         // Decorate stored UTC fire_at with a local-zone label so the
         // agent and CLI can read scheduled time without misreading
-        // raw ISO timestamps.
+        // raw ISO timestamps. See API-shape comment under 'create'
+        // for the snake_case naming rationale.
         const tz = getResonantConfig().identity.timezone;
         const timers = listPendingTimers().map((t) => ({
           ...t,

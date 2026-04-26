@@ -139,13 +139,33 @@ Wake types depend on your `resonant.yaml` orchestrator config and `wake-prompts.
 One-shot scheduled reminders. Fire once at a specific time.
 
 ```bash
-sc timer create "label" "context" "2026-03-21T15:00:00Z"
-sc timer create "label" "context" "fireAt" --prompt "wake text"
+# Wall-clock in your identity timezone (preferred for human/agent-set reminders)
+sc timer create "label" "context" "2026-04-26 09:00"
+sc timer create "label" "context" "2026-04-26T09:00:00" --prompt "wake text"
+
+# Absolute ISO with explicit Z or ±HH:MM offset
+sc timer create "label" "context" "2026-04-26T12:00:00Z"
+sc timer create "label" "context" "2026-04-26T09:00:00-03:00"
+
 sc timer list
 sc timer cancel TIMER_ID
 ```
 
-`fireAt` is ISO 8601 UTC. Fires within ~60 seconds of the target time. The optional `--prompt` sets the text used to wake the agent when the timer fires.
+**`fireAt` accepts two forms:**
+- **Wall-clock in identity timezone** — offsetless `YYYY-MM-DD HH:mm`,
+  `YYYY-MM-DDTHH:mm:ss`, or `YYYY-MM-DD` (midnight). Interpreted in
+  whatever zone is configured at `identity.timezone` in `resonant.yaml`.
+  This is the right shape for "remind me at 9 in the morning" — what
+  the user/agent actually means.
+- **Absolute ISO** — with explicit `Z` (UTC) or `±HH:mm` offset. The
+  zone marker wins; identity.timezone is ignored.
+
+Fires within ~60 seconds of the target time. The optional `--prompt`
+sets the text used to wake the agent when the timer fires.
+
+Timer creation and `sc timer list` responses include a `fire_at_local`
+field with the human-readable identity-zone wall clock alongside the
+canonical UTC `fire_at`.
 
 ### Impulses
 One-shot, condition-based triggers. Fire once when all conditions are met, then auto-complete.

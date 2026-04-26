@@ -205,7 +205,7 @@ sc pulse frequency 20                # Check every 20 minutes
 sc failsafe gentle 90                # Adjust inactivity threshold
 sc impulse create "greet" --condition presence_transition:offline:active --prompt "Welcome back"
 sc watch create "lunch" --condition routine_missing:meal:14 --prompt "Eat something" --cooldown 120
-sc timer create "Meds" "context" "2026-03-26T14:00:00Z" --prompt "Take your medication"
+sc timer create "Meds" "context" "2026-03-26 14:00" --prompt "Take your medication"
 ```
 
 Also includes: reactions, voice messages, canvas, file sharing, semantic search, and Telegram media. All commands are injected into the agent's context automatically. See [docs/TOOLS.md](docs/TOOLS.md) for the full reference.
