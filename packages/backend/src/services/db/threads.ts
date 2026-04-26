@@ -123,12 +123,22 @@ export function archiveThread(threadId: string, archivedAt: string | null): void
 export function deleteThread(threadId: string): string[] {
   const db = getDb();
 
+  // Mirror the fallback set used by routes/files.ts and FilePanel.svelte
+  // so historical Telegram voice/photo messages (which wrote
+  // voiceFileId / photoFileId before the storage layer was normalized)
+  // get cleaned up alongside the thread, not orphaned on disk.
+  const FILE_ID_KEYS = ['fileId', 'voiceFileId', 'photoFileId'] as const;
   const fileIds: string[] = [];
   const msgs = db.prepare('SELECT metadata FROM messages WHERE thread_id = ? AND metadata IS NOT NULL').all(threadId) as Array<{ metadata: string }>;
   for (const row of msgs) {
     try {
       const meta = JSON.parse(row.metadata);
-      if (meta.fileId) fileIds.push(meta.fileId);
+      for (const key of FILE_ID_KEYS) {
+        const value = meta?.[key];
+        if (typeof value === 'string' && value.length > 0) {
+          fileIds.push(value);
+        }
+      }
     } catch { }
   }
 

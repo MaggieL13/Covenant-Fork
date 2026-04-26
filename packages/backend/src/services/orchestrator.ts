@@ -34,7 +34,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
-import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, isCronSupported } from './time.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, localTimeStr, isCronSupported } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -259,6 +259,33 @@ export function isValidCron(expr: string): boolean {
   return isCronSupported(expr);
 }
 
+/**
+ * Resolve the cron expression to use for a task, defending against
+ * malformed persisted config (e.g. a six-field croner-extended value
+ * left over from before the scheduler was replaced) so orchestrator
+ * startup never throws on a bad row.
+ *
+ * Returns the expression to use plus an optional warning string the
+ * caller should log if the saved cron was rejected.
+ *
+ * @internal Exported for testing
+ */
+export function resolveCronExpression(
+  savedCron: string | null | undefined,
+  defaultCron: string,
+): { expr: string; warning: string | null } {
+  if (savedCron && isValidCron(savedCron)) {
+    return { expr: savedCron, warning: null };
+  }
+  if (savedCron) {
+    return {
+      expr: defaultCron,
+      warning: `saved cron "${savedCron}" is invalid; falling back to default ${defaultCron}. Reschedule via the orchestrator admin to fix.`,
+    };
+  }
+  return { expr: defaultCron, warning: null };
+}
+
 // --- Default failsafe thresholds (minutes) ---
 
 const DEFAULT_FAILSAFE_GENTLE = 120;
@@ -355,9 +382,18 @@ export class Orchestrator {
     // Register all scheduled tasks
     for (const def of taskDefs) {
       const savedCron = getConfig(`cron.${def.wakeType}.schedule`);
-      const cronExpr = savedCron || def.cronExpr;
+      // Validate the persisted cron before trusting it — historical
+      // databases may carry a 6-field croner-extended value (rejected
+      // by the strict ScheduledTask parser) or any other malformed
+      // config that would otherwise throw and crash startup.
+      const resolved = resolveCronExpression(savedCron, def.cronExpr);
+      const cronExpr = resolved.expr;
+      if (resolved.warning) {
+        olog(`  ${def.wakeType}: WARNING ${resolved.warning}`);
+      } else if (savedCron) {
+        olog(`  ${def.wakeType}: using saved schedule ${cronExpr}`);
+      }
       const enabled = getConfigBool(`cron.${def.wakeType}.enabled`, true);
-      if (savedCron) olog(`  ${def.wakeType}: using saved schedule ${cronExpr}`);
 
       const handler = () => {
 
@@ -707,7 +743,13 @@ export class Orchestrator {
 
   private async checkPulse(): Promise<void> {
     const now = new Date();
-    const hour = now.getHours();
+    // Sovereignty: route pulse's hour gate AND its prompt-embedded
+    // local-time string through services/time.ts. Date#getHours and
+    // toLocaleTimeString without the timezone option both rely on the
+    // process's wall clock / Intl, which can disagree with the user's
+    // identity timezone (the same class of bug fixed for cron firing).
+    const timezone = getResonantConfig().identity.timezone;
+    const hour = tzLocalHour(timezone, now);
 
     if (hour < 8) return;
     if (this.agent.isProcessing()) return;
@@ -716,7 +758,7 @@ export class Orchestrator {
     const presence = registry.getUserPresenceState();
     const minutesSince = Math.round(registry.minutesSinceLastUserActivity());
     const device = registry.getUserDeviceType();
-    const localTime = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const localTime = localTimeStr(timezone, now);
     const triggers = getActiveTriggers();
 
     const pulsePrompt = [

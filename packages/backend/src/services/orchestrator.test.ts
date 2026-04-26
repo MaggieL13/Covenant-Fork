@@ -303,3 +303,41 @@ describe('buildRecencyHeader', async () => {
     ).toContain('3 days ago');
   });
 });
+
+// Regression: malformed persisted cron values (e.g. a six-field croner
+// expression left in config from before the scheduler was replaced)
+// must not crash orchestrator startup. resolveCronExpression should
+// fall back to the default and surface a warning.
+describe('resolveCronExpression', async () => {
+  const { resolveCronExpression } = await import('./orchestrator.js');
+
+  it('returns the saved cron when it is valid', () => {
+    const r = resolveCronExpression('0 7 * * *', '0 8 * * *');
+    expect(r.expr).toBe('0 7 * * *');
+    expect(r.warning).toBeNull();
+  });
+
+  it('falls back to default when no saved cron exists', () => {
+    const r = resolveCronExpression(null, '0 8 * * *');
+    expect(r.expr).toBe('0 8 * * *');
+    expect(r.warning).toBeNull();
+  });
+
+  it('falls back AND warns when the saved cron is invalid (six-field croner legacy)', () => {
+    const r = resolveCronExpression('0 0 8 * * *', '0 8 * * *');
+    expect(r.expr).toBe('0 8 * * *');
+    expect(r.warning).toMatch(/0 0 8 \* \* \*.*invalid.*falling back/);
+  });
+
+  it('falls back AND warns when the saved cron is malformed garbage', () => {
+    const r = resolveCronExpression('not-a-cron', '0 8 * * *');
+    expect(r.expr).toBe('0 8 * * *');
+    expect(r.warning).toMatch(/invalid/);
+  });
+
+  it('falls back AND warns when the saved cron has out-of-range fields', () => {
+    const r = resolveCronExpression('0 24 * * *', '0 8 * * *');
+    expect(r.expr).toBe('0 8 * * *');
+    expect(r.warning).toMatch(/invalid/);
+  });
+});

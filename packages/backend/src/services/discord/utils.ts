@@ -2,6 +2,7 @@
 
 import crypto from 'crypto';
 import type { Message as DiscordMessage } from 'discord.js';
+import { localTimeStr } from '../time.js';
 
 /**
  * Split a response into Discord-safe chunks (max 1900 chars)
@@ -41,11 +42,16 @@ export function splitResponse(text: string, maxLength = 1900): string[] {
 }
 
 /**
- * Format Discord message history for agent context
+ * Format Discord message history for agent context.
+ *
+ * Sovereignty: timezone formatting routes through services/time.ts so
+ * the agent sees timestamps consistent with the rest of its context
+ * (chat headers, daily-thread names) and immune to Node's stale ICU
+ * for zones it hasn't shipped tzdata for.
  */
-export function formatChannelHistory(messages: DiscordMessage[]): string {
+export function formatChannelHistory(messages: DiscordMessage[], timezone: string): string {
   return messages.map(msg => {
-    const time = msg.createdAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const time = localTimeStr(timezone, msg.createdAt);
     const author = msg.author.bot ? `[BOT] ${msg.author.username}` : msg.author.username;
     const content = msg.content || (msg.attachments.size > 0 ? '[attachment]' : '[embed]');
     return `[${time}] ${author}: ${content}`;

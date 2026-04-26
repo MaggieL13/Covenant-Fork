@@ -205,7 +205,10 @@ export class DiscordService {
         if ('messages' in channel) {
           const historyLimit = getResonantConfig().discord.history_limit ?? 10;
           const history = await (channel as TextChannel).messages.fetch({ limit: historyLimit });
-          batch.channelHistory = formatChannelHistory([...history.values()].reverse());
+          batch.channelHistory = formatChannelHistory(
+            [...history.values()].reverse(),
+            getResonantConfig().identity.timezone,
+          );
         }
       } catch (err) {
         console.warn('[Discord] Could not fetch channel history:', err);
