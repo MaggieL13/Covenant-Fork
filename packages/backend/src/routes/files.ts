@@ -46,11 +46,21 @@ router.get('/files/list', (_req, res) => {
       .prepare('SELECT metadata FROM messages WHERE metadata IS NOT NULL AND deleted_at IS NULL')
       .all() as Array<{ metadata: string }>;
 
+    // Match the FilePanel's fallback set so historical Telegram messages
+    // (which wrote voiceFileId / photoFileId before metadata was
+    // normalized to a unified fileId) aren't flagged as orphans and
+    // accidentally deleted from the Library.
+    const FILE_ID_KEYS = ['fileId', 'voiceFileId', 'photoFileId'] as const;
     const usedFileIds = new Set<string>();
     for (const row of rows) {
       try {
         const metadata = JSON.parse(row.metadata);
-        if (metadata.fileId) usedFileIds.add(metadata.fileId);
+        for (const key of FILE_ID_KEYS) {
+          const value = metadata?.[key];
+          if (typeof value === 'string' && value.length > 0) {
+            usedFileIds.add(value);
+          }
+        }
       } catch {
         // Preserve current best-effort behavior on malformed metadata.
       }
