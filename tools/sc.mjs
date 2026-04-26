@@ -185,6 +185,8 @@ switch (cmd) {
       await post('timer', { action: 'cancel', timerId: args[1] });
     } else {
       console.log('Usage: sc timer create|list|cancel ...');
+      console.log('  fireAt: wall-clock in your identity timezone ("2026-04-26 09:00")');
+      console.log('  or absolute ISO ("2026-04-26T12:00:00Z" / "...-03:00").');
     }
     break;
   }

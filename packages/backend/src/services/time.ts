@@ -67,6 +67,51 @@ export function offsetString(tz: string, at?: Date): string {
 }
 
 /**
+ * Parse a date/time string with INTENT-AWARE timezone resolution:
+ *
+ *  - If the input carries an explicit UTC marker (`Z`) or an explicit
+ *    `±HH:mm` offset, it's an absolute instant — parse it directly.
+ *  - If the input is offsetless (e.g. `2026-04-26T09:00:00`,
+ *    `2026-04-26 09:00`, or `2026-04-26`), interpret it as wall-clock
+ *    time in the given timezone. This is the agent / CLI / human
+ *    intent: "9 AM in my timezone", not "9 AM at the server's
+ *    process locale".
+ *
+ * Returns null for unparseable input. The caller is expected to
+ * surface a 400-shaped error.
+ *
+ * Used by timer creation and any other surface where the user supplies
+ * a fire-time that should land on a specific local wall-clock moment.
+ */
+export function parseLocalDateTime(tz: string, input: string): Date | null {
+  if (!input || typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  // Detect explicit timezone marker — Z, +HH:MM, +HHMM, -HH:MM, -HHMM
+  // anchored to end-of-string. If present the input is absolute and
+  // we just hand it to Date for parsing.
+  const hasExplicitOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(trimmed);
+  if (hasExplicitOffset) {
+    const d = new Date(trimmed);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  // Offsetless: interpret as a local wall-clock moment in `tz` via
+  // moment-tz. Strict-mode parsing across the common shapes — anything
+  // that doesn't match returns invalid and we yield null.
+  const formats = [
+    'YYYY-MM-DDTHH:mm:ss',
+    'YYYY-MM-DDTHH:mm',
+    'YYYY-MM-DD HH:mm:ss',
+    'YYYY-MM-DD HH:mm',
+    'YYYY-MM-DD',
+  ];
+  const parsed = moment.tz(trimmed, formats, true, tz);
+  return parsed.isValid() ? parsed.toDate() : null;
+}
+
+/**
  * Offset from UTC in MINUTES for the given zone at the given instant.
  * Positive = ahead of UTC, negative = behind. Useful for SQLite
  * `date(col, '+N minutes')` modifiers where day boundaries must be

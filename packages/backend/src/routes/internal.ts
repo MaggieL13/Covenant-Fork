@@ -39,6 +39,7 @@ import { saveFileInternal } from '../services/files.js';
 import { wasRecentlyAutoShared, markFileSurfaced } from '../services/hooks.js';
 import { registry } from '../services/ws.js';
 import { getResonantConfig } from '../config.js';
+import { parseLocalDateTime, localFullStr } from '../services/time.js';
 import { requireLocalhost } from '../middleware/localhost.js';
 import type { Orchestrator } from '../services/orchestrator.js';
 import type { VoiceService } from '../services/voice.js';
@@ -520,10 +521,18 @@ router.post('/timer', (req, res) => {
           return;
         }
 
-        // Validate fireAt is a valid ISO date
-        const fireDate = new Date(fireAt);
-        if (isNaN(fireDate.getTime())) {
-          res.status(400).json({ error: 'fireAt must be a valid ISO date' });
+        // Parse fireAt with intent-aware timezone resolution. Inputs
+        // with `Z` / `±HH:MM` are absolute; offsetless inputs (e.g.
+        // `2026-04-26 09:00`) are interpreted as wall-clock in the
+        // identity timezone — what the agent / CLI user actually means.
+        const tz = getResonantConfig().identity.timezone;
+        const fireDate = parseLocalDateTime(tz, fireAt);
+        if (!fireDate) {
+          res.status(400).json({
+            error:
+              'fireAt must be ISO with Z/offset (e.g. 2026-04-26T12:00:00Z) ' +
+              'or wall-clock in your identity timezone (e.g. 2026-04-26 09:00).',
+          });
           return;
         }
 
@@ -544,11 +553,24 @@ router.post('/timer', (req, res) => {
           createdAt: new Date().toISOString(),
         });
 
-        res.json({ success: true, timer });
+        res.json({
+          success: true,
+          timer: {
+            ...timer,
+            fire_at_local: localFullStr(tz, new Date(timer.fire_at)),
+          },
+        });
         break;
       }
       case 'list': {
-        const timers = listPendingTimers();
+        // Decorate stored UTC fire_at with a local-zone label so the
+        // agent and CLI can read scheduled time without misreading
+        // raw ISO timestamps.
+        const tz = getResonantConfig().identity.timezone;
+        const timers = listPendingTimers().map((t) => ({
+          ...t,
+          fire_at_local: localFullStr(tz, new Date(t.fire_at)),
+        }));
         res.json({ timers });
         break;
       }

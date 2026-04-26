@@ -13,6 +13,7 @@ import {
   parseCron,
   cronNextFireTime,
   isCronSupported,
+  parseLocalDateTime,
 } from './time.js';
 
 /**
@@ -183,5 +184,61 @@ describe('cron parser + next-fire computation (sovereignty for scheduling)', () 
     expect(isCronSupported('garbage')).toBe(false);
     expect(isCronSupported('60 * * * *')).toBe(false);
     expect(isCronSupported('1-5/2 * * * *')).toBe(false);
+  });
+});
+
+describe('parseLocalDateTime — intent-aware date/time parsing', () => {
+  // Regression: timer creation passed user input directly to `new
+  // Date(...)`, which interprets offsetless strings using the SERVER
+  // process timezone (Node's bundled ICU). That meant a Caelir-set
+  // "2026-04-26 09:00" reminder could fire 1+ hours off depending on
+  // where the host thinks Asunción is. parseLocalDateTime resolves
+  // offsetless inputs in the explicit identity timezone via moment-tz.
+
+  it('parses offsetless wall-clock in the given timezone (the agent-intent path)', () => {
+    // 09:00 wall-clock in Asunción (UTC-3) on 26 Apr 2026 → 12:00 UTC
+    expect(
+      parseLocalDateTime('America/Asuncion', '2026-04-26T09:00:00')!.toISOString(),
+    ).toBe('2026-04-26T12:00:00.000Z');
+    // Same wall-clock, different zone — must give a different UTC instant
+    expect(
+      parseLocalDateTime('Asia/Tokyo', '2026-04-26T09:00:00')!.toISOString(),
+    ).toBe('2026-04-26T00:00:00.000Z');
+  });
+
+  it('honors explicit Z as absolute UTC regardless of the tz arg', () => {
+    expect(
+      parseLocalDateTime('America/Asuncion', '2026-04-26T12:00:00Z')!.toISOString(),
+    ).toBe('2026-04-26T12:00:00.000Z');
+    expect(
+      parseLocalDateTime('Asia/Tokyo', '2026-04-26T12:00:00Z')!.toISOString(),
+    ).toBe('2026-04-26T12:00:00.000Z');
+  });
+
+  it('honors explicit ±HH:MM offset regardless of the tz arg', () => {
+    // 09:00-03:00 = 12:00 UTC; the tz parameter must NOT shift it again.
+    expect(
+      parseLocalDateTime('Europe/London', '2026-04-26T09:00:00-03:00')!.toISOString(),
+    ).toBe('2026-04-26T12:00:00.000Z');
+  });
+
+  it('accepts "YYYY-MM-DD HH:mm" (space) shape', () => {
+    expect(
+      parseLocalDateTime('America/Asuncion', '2026-04-26 09:00')!.toISOString(),
+    ).toBe('2026-04-26T12:00:00.000Z');
+  });
+
+  it('accepts a date-only "YYYY-MM-DD" as midnight in the given zone', () => {
+    expect(
+      parseLocalDateTime('America/Asuncion', '2026-04-26')!.toISOString(),
+    ).toBe('2026-04-26T03:00:00.000Z'); // 00:00 -03 → 03:00 UTC
+  });
+
+  it('returns null for malformed or empty input', () => {
+    expect(parseLocalDateTime('UTC', '')).toBeNull();
+    expect(parseLocalDateTime('UTC', '   ')).toBeNull();
+    expect(parseLocalDateTime('UTC', 'tomorrow at 9')).toBeNull();
+    expect(parseLocalDateTime('UTC', '2026-13-40')).toBeNull(); // out-of-range
+    expect(parseLocalDateTime('UTC', '26 Apr 2026 09:00')).toBeNull(); // unsupported shape
   });
 });
