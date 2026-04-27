@@ -106,6 +106,8 @@ This gets injected as a system message that SURVIVES compaction. Words are lost,
    - Emotional Arc
 4. Appends to `data/digests/YYYY-MM-DD.md`
 
+**Cursor model.** The "since last digest" cursor is **per-thread**, keyed in the config table as `digest.last_sequence:<threadId>`. Each thread's `messages.sequence` counter is also per-thread (a fresh thread starts at 1), so a per-thread cursor is the only shape that works correctly across daily-thread rollover. A previous global-cursor implementation got stuck whenever yesterday's thread's max sequence exceeded today's thread's message count, silently skipping every digest run. The runtime helpers `getDigestCursor(threadId)` and `setDigestCursor(threadId, value)` in `services/digest.ts` are the intended access points — never read or write the bare `digest.last_sequence` key, which is now legacy and ignored.
+
 **Agent access:** Can read digest files via Bash `cat`. NOT auto-injected.
 
 **Purpose:** A searchable daily journal for the user, written by a silent witness.
