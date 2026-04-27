@@ -279,6 +279,17 @@ The database tables are created automatically on first startup.
 - **Themes:** Customize the look — light mode is built in, or see `examples/themes/README.md` for custom themes.
 - **Context hooks:** Advanced context injection. See `docs/HOOKS.md`.
 
+### Files & attachments
+
+- **File picker in the composer** attaches supported files to the next message (images, audio, PDF, text, markdown, JSON, CSV, ZIP, common Office types; ≤10 MB).
+- **Long pastes (≥1000 chars)** automatically convert into a file attachment instead of flooding the composer — handy for design briefs, tool output, or pasted markdown. The file shows up as a card in the attachment tray with a sniffed extension (`.md` / `.json` / `.txt`).
+- **Per-thread Files drawer** — click the paperclip icon in the chat header to slide out a panel listing every attachment in the current conversation, newest first. Image thumbnails render inline; text files show a snippet preview.
+- **Library** (`/files` from the chat header) — the cross-thread store. Browse every file the system has saved, filter by type (image / audio / file / orphan), and delete anything you don't need.
+
+### Timers and scheduled wakes
+
+Timers accept either an absolute ISO timestamp (`2026-04-26T12:00:00Z`) or a wall-clock string in your identity timezone (`2026-04-26 09:00`). The wall-clock form is the recommended shape for anything you'd describe as "remind me at 9 AM" — see `docs/TOOLS.md` for the full timer reference.
+
 ---
 
 ## Discord Setup
