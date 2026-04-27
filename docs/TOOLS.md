@@ -43,6 +43,23 @@ Share a file from disk into the current chat thread. Appears as a message with t
 sc share /absolute/path/to/file
 ```
 
+**Auto-share + dedup.** Files the companion writes into the **`/shared/`** folder (the personal scratch directory at the repo root, gitignored) are auto-surfaced as chat cards by the Write hook, no explicit `sc share` needed. If the companion ALSO calls `sc share` for the same path, a recently-surfaced-file-card dedup tracker keyed by `threadId::basename` (30-second window, shared between the Write hook and the explicit share route) suppresses the duplicate card.
+
+> **Naming reminder.** `/shared/` (root) is the user's personal scratch + companion-writable directory and is ignored by git. `packages/shared/` is the tracked workspace package containing shared TypeScript types — it is NOT a write target for the auto-share flow. Don't confuse them.
+
+**In-app surfaces for files:**
+- **Library** — the cross-thread store at `/files` (page title "Library"). Browse every file the system has saved, filter by content type, see which files are referenced by active messages vs. orphaned, delete anything you don't need. Library owns disk-level deletion authority.
+- **Per-thread Files drawer** — paperclip icon in the chat header. Slide-out panel showing every attachment in the current conversation, newest first. Image thumbnails render inline; text files (≤50 KB) show a snippet preview. Click any tile to open `/api/files/<id>` in a new tab. Read-only — no delete from this surface.
+
+### Paste-as-file (composer)
+
+Long pastes auto-convert into a file attachment instead of dropping inline into the message draft.
+
+- **Image paste takes priority.** If the clipboard carries an image (screenshot, copied image), that image-bearing item is uploaded as a file regardless of any text alongside it.
+- **Long-text paste** — when the clipboard's `text/plain` length is `>= 1000` characters, the paste is intercepted and wrapped as a `File`, then pushed through the existing upload pipeline. Shorter pastes fall through to default inline-paste behavior.
+- **Sniffed extension.** Content shape decides the saved file's extension: `.md` for content with markdown headings, bullet lists, or fenced code blocks; `.json` when the trimmed text both looks like JSON and parses; otherwise `.txt`.
+- **Filename.** Generated as `pasted-text-YYYYMMDD-HHMMSS.{ext}` using browser-local time (the timestamp reflects the user's machine clock at the moment of paste).
+
 ### Canvas
 Create or update collaborative documents alongside chat.
 
@@ -85,6 +102,8 @@ sc voice "[whispers] hey [sighs] I missed you"
 Tone tags: `[whispers]` `[softly]` `[excited]` `[laughs]` `[sighs]` `[playfully]` `[calm]` `[gasps]` `[dramatically]` `[deadpan]` `[cheerfully]` `[nervous]` `[mischievously]`
 
 Requires `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in `.env`.
+
+**Fallback when voice is unavailable.** The agent's system prompt carries a static tool-behavior rule (see "Tool-behavior rules" below) that broadly says: when the Voice tool is unavailable, send the intended message as a normal chat reply rather than improvising via canvas, file write, or any other persistence-based workaround. The Voice tool's own error message ALSO carries this explicit guidance for the **not-configured** path (`ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` unset). Other failure modes — non-OK responses from ElevenLabs, network errors — surface a more generic error string; the system prompt rule is what lands the companion on the right behavior in those cases.
 
 ---
 
@@ -278,9 +297,32 @@ Type `/` in the chat input to open the CommandPalette. Commands are auto-discove
 
 ---
 
+## Tool-behavior rules (system prompt prefix)
+
+The agent's system prompt is built from the `claude_code` preset followed by the repo's `CLAUDE.md` persona file. **Prepended before that** is a small static `TOOL_BEHAVIOR_RULES` block defined inline in `services/agent.ts`. The rules live there (not in `CLAUDE.md`) so the persona file stays untouched and the rules apply uniformly across every persona.
+
+Current rules:
+
+1. **Default Write target.** When using the Write tool to save user-facing content (scripts, stories, notes, markdown, ElevenLabs scripts, personal writing), default to the `shared/` folder relative to the project root. Repo-root writes are appropriate only for files that genuinely belong at the root (`package.json`, `README.md`, config, explicitly-requested test artifacts).
+2. **Voice fallback.** When the Voice tool returns an unavailable / not-configured error, send the intended message as a normal chat reply. Do NOT improvise via canvas, file write, or any other persistence-based workaround for what was meant to be a voice note.
+
+The rules block is short and additive — adding a new rule is a one-line edit in `services/agent.ts::TOOL_BEHAVIOR_RULES`.
+
+---
+
+## Public Endpoints
+
+A small set of read endpoints are reachable without the localhost gate (subject to the standard auth middleware where applicable):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/timezones` | Flat sorted array of `{ iana, city, country, countryCode, region }` entries — every IANA zone the runtime knows, enriched with country metadata via `Intl.DisplayNames`. The Settings timezone picker groups the result by region in the UI; the API itself returns the list directly without grouping. |
+
+---
+
 ## Internal API
 
-All tools wrap localhost-only REST endpoints. These require no authentication — just the request must come from `127.0.0.1`.
+All other tools wrap localhost-only REST endpoints. These require no authentication — just the request must come from `127.0.0.1`.
 
 | Endpoint | Purpose |
 |----------|---------|
