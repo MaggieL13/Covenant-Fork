@@ -107,6 +107,12 @@ Search results include session context when available — which session the mess
 - **Pre-filtering**: `--role`, `--after`, `--before` filters are applied before vector math, cutting the search space
 - **Memory**: Embedding model uses ~100MB RAM when loaded; vector cache uses ~1.5 KB per message
 
+### Known limitation: `--after` / `--before` are ISO-string cutoffs, not local-day ranges
+
+The date filters currently compare raw `YYYY-MM-DD` strings lexicographically against ISO `created_at` timestamps stored in UTC. That means `--after 2026-03-01` filters as "string-greater-than `2026-03-01`" — effectively a UTC midnight cutoff, not a local-zone calendar-day boundary. A message created at `2026-03-01T02:00:00Z` (which is still 2026-02-28 evening in `America/Asuncion`) will match `--after 2026-03-01` even though it falls on the prior local day.
+
+For installs whose `identity.timezone` is far enough from UTC for this to matter, results near the boundary will be off by one in either direction. Local-day normalization (parsing `--after` / `--before` against `identity.timezone` and converting to start/end UTC instants before the SQL comparison) is a known follow-up — until then, callers should treat the filters as approximate around midnight or pass an extra day of slack.
+
 ## Troubleshooting
 
 **Model download fails**: Check your internet connection. The model downloads from Hugging Face Hub. Set `HF_HOME` env var to change the cache location.
