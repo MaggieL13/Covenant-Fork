@@ -17,6 +17,20 @@ Both names appear throughout the code. Usually they refer to the same
 running system, but Covenant-Fork is the repo/customization layer and
 Resonant is the product/runtime concept.
 
+**`/shared/` (root) is NOT `packages/shared/`.** Two unrelated
+directories whose names are easy to confuse:
+
+| Path | Tracked? | Purpose |
+|---|---|---|
+| `/shared/` (repo root) | gitignored | Personal scratch + companion-writable directory. The Write tool's auto-share hook surfaces files written here as chat cards. Lives outside version control on purpose. |
+| `packages/shared/` | tracked | npm workspace package containing TypeScript types shared between backend and frontend. Imported as `@resonant/shared`. |
+
+The root `.gitignore` rule is anchored as `/shared/` (with the leading
+slash) so only the root scratch directory is excluded; `packages/shared/`
+is not affected. An earlier unanchored `shared/` rule had silently
+blocked any new file under `packages/shared/` from being committable —
+fixed and not to be reintroduced.
+
 ## Shape at a glance
 
 Three packages in a pnpm workspace under `packages/`:
@@ -83,6 +97,69 @@ Eight things the code assumes without restating them per-file:
 8. **Load-bearing behavior is documented in code with `// ORDER:`
    comments.** If a sequence matters, a `// ORDER:` comment explains
    why. Respect these. See the Invariants section for the big ones.
+
+## Timezone sovereignty
+
+Every backend surface that produces a string a human or the agent will
+read — agent context headers, Scribe timestamps, daily-thread names,
+orchestrator wake labels, scheduled-fire times, timer responses, Discord
+channel-history blocks — routes through `packages/backend/src/services/time.ts`.
+
+**The rule.** `Intl.DateTimeFormat` and `Date.prototype.toLocaleString`
+with a `timeZone` option are forbidden in user-visible backend code.
+Node's bundled ICU lags IANA tzdata by months — Node 22.14 still ships
+2024b, which doesn't know Paraguay abolished DST. `services/time.ts`
+uses `moment-timezone`, which ships its own tzdata as data files
+(2026a at time of writing). Updates flow via `npm update moment-timezone`,
+not Node binary upgrades.
+
+**Scope, deliberately narrow.** Sovereignty applies to wall-clock,
+user-visible, scheduling-intent values. Plain UTC instants — `Date.now()`,
+ISO timestamps written as IDs, debounce windows, rate-limit windows,
+file mtimes, queue durations, persistence timestamps — are NOT under
+sovereignty. JS `Date` is correct for those; over-correcting them
+to moment-tz buys nothing and adds friction. The line is "does the
+meaning depend on local civil time?". If yes, sovereignty layer; if
+it's an instant or a duration, plain `Date`.
+
+**Frontend.** Browser ICU updates more aggressively than Node's, so
+`toLocale*` for display is acceptable on the frontend. The sovereignty
+discipline is backend-side.
+
+**Public surface (services/time.ts):**
+
+| Helper | Purpose |
+|---|---|
+| `localTimeStr(tz, at?)` | "HH:mm" 24-hour wall clock |
+| `localDateStr(tz, at?)` | "Wednesday, 22 Apr" |
+| `localFullStr(tz, at?)` | "DD/MM/YYYY, HH:mm:ss" — used for timer `fire_at_local` |
+| `localHour(tz, at?)` / `localMinute(tz, at?)` | integer accessors for DND / pulse / scheduling |
+| `todayLocal(tz, at?)` | "YYYY-MM-DD" for day-keyed ledgers (digests, daily wins) |
+| `offsetMinutes(tz, at?)` / `offsetString(tz, at?)` | offset accessors for SQLite date math |
+| `parseLocalDateTime(tz, input)` | intent-aware parse: explicit `Z`/offset → absolute, offsetless → wall-clock in `tz`. Used by timer creation. |
+| `tzdataInfo()` | diagnostics — moment-tz + tzdata versions |
+| `parseCron(expr)` / `cronNextFireTime(expr, tz, from?)` / `isCronSupported(expr)` | cron parser + sovereignty-aware next-fire computation |
+
+**Scheduling: `services/scheduler.ts::ScheduledTask`.** Replaces `croner`
+for the orchestrator's needs. Same lifecycle subset (`stop` / `pause`
+/ `resume` / `nextRun` / `isStopped` / `isBusy`). Internally uses
+`cronNextFireTime` plus `setTimeout` with a recursive reschedule after
+each fire — DST transitions and IANA updates flow through automatically
+because the next-fire is recomputed from current tzdata every time.
+
+Supported cron grammar (5-field strict POSIX, per `parseCron` /
+`isCronSupported`): wildcard `*`, fixed integer, step `*/N`, range
+`min-max`, list `v1,v2,v3`. Out-of-range integers are rejected at
+parse time. Unsupported: 6-field croner-extended (with seconds),
+step-within-range like `1-5/2`. The constructor's current error
+message mentions only wildcards/fixed/step — that text predates the
+range/list additions and should not be quoted as the supported set;
+the parser is the source of truth.
+
+`Orchestrator.resolveCronExpression(savedCron, defaultCron)` defends
+startup against malformed persisted or YAML-overridden cron values:
+invalid input falls back to the default with a loud warning rather
+than throwing on construction.
 
 ## How to read this doc
 
@@ -982,6 +1059,22 @@ is the master list; earlier sections reference items here.
   `services/db/messages.ts` enqueues the new message for embedding
   without waiting for the embedding to compute. Messages must appear
   in the UI immediately; embeddings catch up asynchronously.
+- **Telegram metadata normalization.** Telegram voice notes and
+  photos write `metadata.fileId` (alongside legacy `voiceFileId` /
+  `photoFileId` for any historical readers), and the message's
+  `content_type` is selected from the metadata shape: voice → `audio`,
+  photo → `image`, text-only → `text`. The Library page
+  (`/api/files/list`), the per-thread Files panel
+  (`FilePanel.svelte`), and `db/threads.ts::deleteThread` each fall
+  back through `fileId → voiceFileId → photoFileId` so historical
+  pre-normalization rows still surface and are cleaned up correctly
+  without a backfill.
+- **Trigger evaluation per-row safety.** `Orchestrator.checkTriggers`
+  parses every active trigger's conditions JSON to determine
+  whether life-status fetch is needed for the tick. The parse is
+  wrapped per-row so a single malformed conditions blob logs and
+  is skipped, instead of throwing out of the `.some()` loop and
+  killing every other valid trigger that tick.
 
 ### WebSocket ordering
 
@@ -1059,12 +1152,48 @@ subsection in Section 4 for canonical-list purposes.
   wrapping to inherit styling without duplicating it. (A Svelte
   styling gotcha, but it already caused real regressions — worth
   listing.)
+- **Streaming state is thread-scoped, agent-busy state is global.**
+  `isStreaming()` in the WebSocket store returns true only when the
+  current stream's `streamingThreadId` matches `activeThreadId` — the
+  stop-generation button and Escape-stop-stream shortcut both gate on
+  it, and a stop affordance with no visible target is more confusing
+  than useful. Cross-thread streams reveal themselves via the sidebar
+  unread badge instead. `isAgentBusy()` is the parallel agnostic
+  check used to drive the three-stage thinking indicator: `Waiting...`
+  (queued behind another thread's stream — `isAgentBusy() && !isStreaming()`),
+  `<companion> is thinking...` (this thread's stream started, no
+  tokens yet), full message bubble (tokens flowing). Don't merge
+  these two getters; their split is the load-bearing distinction.
+- **Per-thread Files drawer is read-only; Library owns delete authority.**
+  `FilePanel.svelte` (paperclip icon in chat header) lists this
+  thread's attachments via the existing `messages` store with no
+  delete affordance. The Library page (`/files`, title "Library")
+  is the cross-thread store and the ONLY surface that issues a
+  `DELETE /api/files/:id`. If a delete affordance is ever added to
+  the per-thread drawer, route it through the Library's authority,
+  not direct to the API.
 
 ### State ownership boundaries
 
 - **Only `services/db/*` writes to SQLite.** Callers pass plain data;
   the module handles SQL. Writing SQL elsewhere is the pattern that
   leads to schema drift and untracked queries.
+
+  > **⚠️ Under review — invariant aspirational, not enforced.** Several
+  > services and routes currently issue direct SQL writes outside
+  > `services/db/*`. Known sites at the time of writing — **not an
+  > exhaustive list** — include `services/cc.ts`,
+  > `services/audit.ts`, `services/discord/pairing.ts`,
+  > `services/commands.ts` (the `/rename` slash command updates
+  > `threads` directly), `services/ws/handlers/messages.ts` (marks
+  > newly created user messages `delivered_at` / `read_at` directly),
+  > and `routes/threads.ts`. The boundary will resolve in a future
+  > pass via either (a) updating this section to describe the real
+  > partial boundary, or (b) moving the offending writes behind
+  > `services/db/` modules. Until then, do not rely on this invariant
+  > when writing new code, and treat any new out-of-`services/db/`
+  > write as a deliberate exception that needs justification — not a
+  > free pass because "others do it."
 - **Only `Orchestrator` owns application/background scheduling
   timers.** Services that need scheduling register with the
   orchestrator. The WebSocket heartbeat in `services/ws/socket.ts`
