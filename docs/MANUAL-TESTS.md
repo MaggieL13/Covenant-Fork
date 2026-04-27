@@ -144,6 +144,62 @@ If anything feels off: stop, restore from `.pre-migration.bak`, diagnose.
 
 ---
 
+## 🕒 After the timezone-sovereignty pass
+
+For installs in zones whose tzdata Node may be late to update (Paraguay's 2024 DST abolition, late-arriving IANA changes for Greenland, anywhere else recently rule-shifted). These confirm scheduling lands on the correct local wall-clock moment regardless of Node ICU freshness.
+
+### 14. Per-thread Files drawer
+- [ ] Click the paperclip icon in the chat header → slide-out panel opens from the right
+- [ ] Panel lists every file in the active thread, newest first
+- [ ] Image attachments render as inline thumbnails; text files (≤50 KB) show a snippet preview; audio and other binaries show a glyph + extension badge
+- [ ] Click any tile → file opens in a new browser tab via `/api/files/<id>`
+- [ ] On mobile (≤768 px viewport), drawer goes full-screen
+- [ ] Empty thread shows "No files yet. Attach something in chat to get started."
+
+### 15. Library page (renamed from "Files")
+- [ ] Open the library icon in the chat header → page title reads **Library** (not "Files")
+- [ ] Files render as a thumbnail grid, not a vertical text list
+- [ ] Filter tabs (all / image / audio / file / orphan) still work
+- [ ] Delete-with-confirm flow: click Delete → Confirm/Cancel pair appears → Confirm removes the file and updates total size + count + orphan count without a page reload
+- [ ] Switch to the "orphan" filter — any file on disk whose UUID isn't referenced by message metadata appears here. To synthesize one for testing without going through the share path (which would create a referencing message): copy an existing file like `data/files/<some-uuid>.txt` to `data/files/<freshly-generated-uuid>.txt`. The new file has no corresponding message row, so Library flags it orphan.
+
+### 16. Long-paste auto-converts to file attachment
+- [ ] In the composer, paste a block of text ≥1000 chars (a markdown doc, JSON, or just a long paragraph)
+- [ ] Composer textarea stays empty; a file card appears in the attachment tray named `pasted-text-YYYYMMDD-HHMMSS.{ext}`
+- [ ] Sniffed extension matches the content shape: `.md` for markdown, `.json` for valid JSON, `.txt` otherwise
+- [ ] Paste a short block (<1000 chars) → text drops inline as before, no file card
+- [ ] Paste an image (clipboard screenshot) → file card uploads as image regardless of any text alongside (image takes priority)
+
+### 17. Voice fallback when synthesis unavailable
+- [ ] With `ELEVENLABS_API_KEY` unset, ask the companion to send a voice message
+- [ ] Companion responds with a normal chat reply (NOT a canvas, file, or any persistence-based workaround)
+- [ ] Confirm the same fallback behavior on a network error if the env is set but ElevenLabs is unreachable
+
+### 18. Timer wall-clock parsing
+
+> **Precondition for the equivalence checks below:** `identity.timezone` set to a UTC−3 zone (e.g. `America/Asuncion` while DST is abolished there). The three example shapes only resolve to the same UTC instant under that offset; in any other zone the wall-clock and ISO-with-offset forms will diverge — adjust accordingly. Replace `<future-date>` with a YYYY-MM-DD a few minutes in the future so you can actually wait for the fire window.
+
+- [ ] Create a timer using identity-zone wall-clock: `sc timer create "test" "ctx" "<future-date> 09:00"`
+- [ ] Response includes both canonical UTC `fire_at` AND `fire_at_local` (a human-readable string in identity timezone)
+- [ ] `sc timer list` shows the same two fields per row
+- [ ] Wait for the fire window — the timer fires within ~60 seconds of 09:00 LOCAL, not 09:00 UTC, regardless of host process timezone
+- [ ] Repeat with explicit ISO offset (`<future-date>T09:00:00-03:00`) — under a UTC−3 identity timezone this fires at the same instant as the wall-clock form above
+- [ ] Repeat with `Z` (`<future-date>T12:00:00Z`) — same instant under UTC−3, intentionally NOT under any other zone
+
+### 19. Cron startup hardening
+- [ ] In the DB config table, set `cron.morning.schedule` to an obviously malformed value (e.g. `0 0 8 * * *` — six fields) or `not-a-cron`
+- [ ] Restart the backend
+- [ ] Server starts cleanly (no crash) and logs a warning naming the rejected value and the default fallback it used
+- [ ] Reset to `0 8 * * *` and confirm normal behavior resumes after restart
+
+### 20. Orchestrator recency awareness
+- [ ] Have a real conversation with the companion (a few exchanges)
+- [ ] Within 5 minutes, manually trigger a scheduled wake (or wait for one)
+- [ ] Wake response acknowledges the recent activity — does NOT perform a fresh "good morning" / full-orientation entrance
+- [ ] Brand-new thread + manual wake trigger → wake DOES do full intro behavior (no recency context to dampen it)
+
+---
+
 ## How to use this file
 
 1. Run the relevant section after a batch merges
