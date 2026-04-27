@@ -1,5 +1,8 @@
 import crypto from 'crypto';
-import { getDb } from './db.js';
+import { insertAuditEvent, listRecentAuditEntries } from './db/audit.js';
+
+const TOOL_INPUT_MAX = 5000;
+const TOOL_OUTPUT_MAX = 1000;
 
 export function logToolUse(params: {
   sessionId: string;
@@ -9,30 +12,18 @@ export function logToolUse(params: {
   toolOutput?: string;
   triggeringMessageId?: string;
 }): void {
-  const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO audit_log (id, session_id, thread_id, tool_name, tool_input, tool_output, triggering_message_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  stmt.run(
-    crypto.randomUUID(),
-    params.sessionId,
-    params.threadId,
-    params.toolName,
-    params.toolInput ? params.toolInput.substring(0, 5000) : null,
-    params.toolOutput ? params.toolOutput.substring(0, 1000) : null,
-    params.triggeringMessageId || null,
-    new Date().toISOString()
-  );
+  insertAuditEvent({
+    id: crypto.randomUUID(),
+    sessionId: params.sessionId,
+    threadId: params.threadId,
+    toolName: params.toolName,
+    toolInput: params.toolInput ? params.toolInput.substring(0, TOOL_INPUT_MAX) : null,
+    toolOutput: params.toolOutput ? params.toolOutput.substring(0, TOOL_OUTPUT_MAX) : null,
+    triggeringMessageId: params.triggeringMessageId || null,
+    createdAt: new Date().toISOString(),
+  });
 }
 
 export function getRecentAuditEntries(limit = 50): Array<Record<string, unknown>> {
-  const db = getDb();
-  const stmt = db.prepare(`
-    SELECT * FROM audit_log
-    ORDER BY created_at DESC
-    LIMIT ?
-  `);
-  return stmt.all(limit) as Array<Record<string, unknown>>;
+  return listRecentAuditEntries(limit);
 }
