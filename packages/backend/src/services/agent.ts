@@ -319,6 +319,21 @@ interface ThinkingInsertion {
   summary: string;
 }
 
+// Options for autonomous (orchestrator-driven) queries. Pulse uses these to
+// run a model turn that may decide to stay silent — in that case the
+// response is dropped before persist/push and the client gets a
+// `stream_end { suppressed: true }` instead of a final message.
+//
+// streamToClient gates BOTH the stream_start and stream_token broadcasts
+// for the duration of the query. It does NOT gate thinking, tool_use, or
+// tool_result broadcasts; those flow through their own hook channels and
+// are cleaned up frontend-side if a suppressed stream_end follows.
+export interface AutonomousOpts {
+  suppressIf?: (response: string) => boolean;
+  streamToClient?: boolean;
+  suppressedLogLabel?: string;
+}
+
 // Build interleaved text/tool/thinking segments from response text + insertions
 function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], thinkingBlocks: ThinkingInsertion[] = []): MessageSegment[] {
   if (toolInsertions.length === 0 && thinkingBlocks.length === 0) return [];
@@ -562,13 +577,13 @@ export class AgentService {
     });
   }
 
-  async processAutonomous(threadId: string, prompt: string): Promise<string> {
+  async processAutonomous(threadId: string, prompt: string, opts: AutonomousOpts = {}): Promise<string> {
     return queryQueue.enqueue(PRIORITIES.autonomous, async () => {
-      return this._processQuery(threadId, prompt, true);
+      return this._processQuery(threadId, prompt, true, undefined, undefined, opts);
     });
   }
 
-  private async _processQuery(threadId: string, content: string, isAutonomous = false, threadMeta?: { name: string; type: 'daily' | 'named' }, platformOpts?: { platform?: 'web' | 'discord' | 'telegram' | 'api'; platformContext?: string }): Promise<string> {
+  private async _processQuery(threadId: string, content: string, isAutonomous = false, threadMeta?: { name: string; type: 'daily' | 'named' }, platformOpts?: { platform?: 'web' | 'discord' | 'telegram' | 'api'; platformContext?: string }, autonomousOpts: AutonomousOpts = {}): Promise<string> {
     ensureInit();
     const thread = getThread(threadId);
     if (!thread) throw new Error(`Thread ${threadId} not found`);
@@ -658,11 +673,13 @@ export class AgentService {
       options.resume = thread.current_session_id;
     }
 
-    registry.broadcast({
-      type: 'stream_start',
-      messageId: streamMsgId,
-      threadId,
-    });
+    if (autonomousOpts.streamToClient !== false) {
+      registry.broadcast({
+        type: 'stream_start',
+        messageId: streamMsgId,
+        threadId,
+      });
+    }
 
     let sessionId: string | null = null;
 
@@ -809,11 +826,13 @@ export class AgentService {
                     responseTruncated = true;
                   }
 
-                  registry.broadcast({
-                    type: 'stream_token',
-                    messageId: streamMsgId,
-                    token: fullResponse,
-                  });
+                  if (autonomousOpts.streamToClient !== false) {
+                    registry.broadcast({
+                      type: 'stream_token',
+                      messageId: streamMsgId,
+                      token: fullResponse,
+                    });
+                  }
                 }
               }
               // Thinking blocks are captured from stream_event, not here (avoids duplicates)
@@ -957,6 +976,24 @@ export class AgentService {
     }
 
     console.log(`[Agent] Response complete: ${thinkingBlocks.length} thinking block(s), ${toolInsertions.length} tool call(s)`);
+
+    // Pre-persist suppression hook (used by orchestrator pulse). When the
+    // caller passed a suppressIf predicate and it matches the assembled
+    // response, drop the message entirely: skip createMessage, skip push,
+    // and tell the client via stream_end { suppressed: true } so any
+    // streaming-state / tool / thinking offsets keyed to this messageId
+    // get cleaned up on the frontend.
+    if (autonomousOpts.suppressIf && autonomousOpts.suppressIf(fullResponse)) {
+      const label = autonomousOpts.suppressedLogLabel ?? 'suppressed';
+      const preview = fullResponse.slice(0, 120).replace(/\n/g, ' ');
+      console.log(`[Agent] ${label}: ${fullResponse.length} chars, ${preview}`);
+      registry.broadcast({
+        type: 'stream_end',
+        messageId: streamMsgId,
+        suppressed: true,
+      });
+      return fullResponse;
+    }
 
     // Build segments for interleaved tool/thinking display
     const segments = buildSegments(fullResponse, toolInsertions, thinkingBlocks);

@@ -293,6 +293,27 @@ function handleMessage(event: MessageEvent) {
         break;
 
       case 'stream_end':
+        // Pulse suppression: backend dropped the response pre-persist, so
+        // there's no `final` to append, no sidebar update, no notification.
+        // We still need to clear streaming state plus any tool / thinking
+        // offsets keyed to this messageId — those broadcasts may have
+        // arrived during the run before suppression fired on the backend.
+        if (msg.suppressed) {
+          if (toolOffsets[msg.messageId]) {
+            const { [msg.messageId]: _s, ...restS } = toolOffsets;
+            toolOffsets = restS;
+          }
+          if (thinkingEvents[msg.messageId]) {
+            const { [msg.messageId]: __s, ...rest2S } = thinkingEvents;
+            thinkingEvents = rest2S;
+          }
+          if (streamingMessageId === msg.messageId) {
+            streamingMessageId = null;
+            streamingThreadId = null;
+            streamingTokens = '';
+          }
+          break;
+        }
         // Replace streaming state with the final message
         if (msg.final && msg.final.thread_id === activeThreadId) {
           messages = [...messages, msg.final];
