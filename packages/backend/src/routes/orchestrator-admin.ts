@@ -102,6 +102,57 @@ router.patch('/failsafe', (req, res) => {
   }
 });
 
+// Get pulse config
+router.get('/pulse', (req, res) => {
+  try {
+    const orchestrator = req.app.locals.orchestrator as Orchestrator | undefined;
+    if (!orchestrator) {
+      res.status(503).json({ error: 'Orchestrator not available' });
+      return;
+    }
+    res.json(orchestrator.getPulseConfig());
+  } catch (error) {
+    console.error('Error fetching pulse config:', error);
+    res.status(500).json({ error: 'Failed to fetch pulse config' });
+  }
+});
+
+// Update pulse config. Validates at the route layer (returns 400 on
+// bad input) because the underlying setPulseConfig setter silently
+// no-ops on invalid frequency rather than throwing — fine for the
+// internal CLI surface, wrong for a UI/admin surface.
+router.patch('/pulse', (req, res) => {
+  try {
+    const orchestrator = req.app.locals.orchestrator as Orchestrator | undefined;
+    if (!orchestrator) {
+      res.status(503).json({ error: 'Orchestrator not available' });
+      return;
+    }
+
+    const { enabled, frequency } = req.body;
+
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled must be a boolean' });
+      return;
+    }
+
+    if (frequency !== undefined && (
+      typeof frequency !== 'number' ||
+      !Number.isFinite(frequency) ||
+      frequency < 5
+    )) {
+      res.status(400).json({ error: 'frequency must be a number >= 5' });
+      return;
+    }
+
+    orchestrator.setPulseConfig({ enabled, frequency });
+    res.json({ success: true, ...orchestrator.getPulseConfig() });
+  } catch (error) {
+    console.error('Error updating pulse config:', error);
+    res.status(500).json({ error: 'Failed to update pulse config' });
+  }
+});
+
 // Get active triggers
 router.get('/triggers', (req, res) => {
   try {

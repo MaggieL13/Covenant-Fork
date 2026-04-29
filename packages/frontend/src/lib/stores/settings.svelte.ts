@@ -7,6 +7,12 @@ let config = $state<Record<string, string>>({});
 let failsafe = $state<{ enabled: boolean; gentle: number; concerned: number; emergency: number }>({
   enabled: true, gentle: 120, concerned: 720, emergency: 1440,
 });
+// Pulse defaults mirror the Orchestrator class fields
+// (pulseEnabled = false, pulseFrequency = 15) so the panel reflects
+// reality if the initial /pulse fetch fails.
+let pulse = $state<{ enabled: boolean; frequency: number }>({
+  enabled: false, frequency: 15,
+});
 let triggers = $state<TriggerStatus[]>([]);
 let orchestratorTasks = $state<OrchestratorTaskStatus[]>([]);
 let companionName = $state('Companion');
@@ -18,10 +24,11 @@ let loading = $state(false);
 export async function loadSettings(): Promise<void> {
   loading = true;
   try {
-    const [configRes, orchRes, failsafeRes, triggersRes, prefsRes, identityRes] = await Promise.all([
+    const [configRes, orchRes, failsafeRes, pulseRes, triggersRes, prefsRes, identityRes] = await Promise.all([
       apiFetch('/api/settings'),
       apiFetch('/api/orchestrator/status'),
       apiFetch('/api/orchestrator/failsafe'),
+      apiFetch('/api/orchestrator/pulse'),
       apiFetch('/api/orchestrator/triggers'),
       apiFetch('/api/preferences'),
       apiFetch('/api/identity'),
@@ -55,6 +62,11 @@ export async function loadSettings(): Promise<void> {
     if (failsafeRes.ok) {
       const data = await failsafeRes.json();
       failsafe = data;
+    }
+
+    if (pulseRes.ok) {
+      const data = await pulseRes.json();
+      pulse = { enabled: data.enabled, frequency: data.frequency };
     }
 
     if (triggersRes.ok) {
@@ -158,6 +170,25 @@ export async function updateFailsafe(update: { enabled?: boolean; gentle?: numbe
   }
 }
 
+// Update pulse config
+export async function updatePulse(update: { enabled?: boolean; frequency?: number }): Promise<boolean> {
+  try {
+    const res = await apiFetch('/api/orchestrator/pulse', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      pulse = { enabled: data.enabled, frequency: data.frequency };
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // Called from websocket store when system_status message arrives
 // mcpServers param allows partial update from mcp_status_updated events
 export function setSystemStatus(status: SystemStatus | null, mcpServers?: import('@resonant/shared').McpServerInfo[]): void {
@@ -189,6 +220,7 @@ export async function cancelTriggerById(id: string): Promise<boolean> {
 export function getSystemStatus() { return systemStatus; }
 export function getConfig() { return config; }
 export function getFailsafe() { return failsafe; }
+export function getPulse() { return pulse; }
 export function getTriggers() { return triggers; }
 export function getOrchestratorTasks() { return orchestratorTasks; }
 export function getCompanionName() { return companionName; }
