@@ -1124,6 +1124,56 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   return joined;
 }
 
+export function buildPulseOrientationContext(ctx: HookContext): string {
+  const config = getResonantConfig();
+  const userName = config.identity.user_name;
+  const timezone = config.identity.timezone || 'UTC';
+
+  const nowDate = new Date();
+  const timeStr = localTimeStr(timezone, nowDate);
+  const dateStr = localDateStr(timezone, nowDate);
+  const parts: string[] = [
+    'CHANNEL: Internal pulse check. This is not a user message and not a greeting opportunity.',
+    `Thread: "${sanitizeForContext(ctx.threadName)}" (${ctx.threadType})`,
+    `Time: ${timeStr} ${timezone} — ${dateStr}`,
+  ];
+
+  try {
+    const reg = ctx.registry as any;
+    if (typeof reg.getUserPresenceState === 'function') {
+      const presence = reg.getUserPresenceState();
+      const gap = typeof reg.minutesSinceLastUserActivity === 'function'
+        ? reg.minutesSinceLastUserActivity()
+        : 0;
+      parts.push(`${userName}'s presence: ${presence} (last real interaction: ${formatTimeGap(gap)})`);
+    }
+    if (typeof reg.getUserDeviceType === 'function') {
+      const deviceType = reg.getUserDeviceType();
+      if (deviceType !== 'unknown') parts.push(`${userName}'s device: ${deviceType}`);
+    }
+  } catch {}
+
+  try {
+    const triggers = getActiveTriggers();
+    if (triggers.length > 0) {
+      const impulses = triggers.filter(t => t.kind === 'impulse').length;
+      const watchers = triggers.filter(t => t.kind === 'watcher').length;
+      const triggerParts: string[] = [];
+      if (watchers > 0) triggerParts.push(`${watchers} watcher${watchers > 1 ? 's' : ''}`);
+      if (impulses > 0) triggerParts.push(`${impulses} impulse${impulses > 1 ? 's' : ''}`);
+      parts.push(`Active triggers: ${triggerParts.join(', ')}`);
+    }
+  } catch {}
+
+  parts.push('Tools are unavailable during pulse. Reply PULSE_OK unless the prompt identifies a concrete reason to interrupt.');
+
+  const joined = parts.join('\n');
+  const estimatedTokens = Math.ceil(joined.length / 4);
+  const partsBreakdown = parts.map((p, i) => `${i}:${Math.ceil(p.length / 4)}t`).join(' ');
+  console.log(`[Pulse Orientation] ~${estimatedTokens} tokens (${parts.length} parts: ${partsBreakdown}) | thread="${ctx.threadName}"`);
+  return joined;
+}
+
 // SessionStart hook — kept as fallback in case SDK adds V1 support
 function buildSessionStart(ctx: HookContext): HookCallback {
   return safeHook('SessionStart', async (input: HookInput) => {

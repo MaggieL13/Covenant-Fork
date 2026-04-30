@@ -29,6 +29,7 @@ export interface ResonantConfig {
     mcp_json_path: string;
     model: string;
     model_autonomous: string;
+    model_pulse: string;
     thinking_effort: string;
     query_timeout_ms: number;
   };
@@ -105,6 +106,11 @@ const DEFAULTS: ResonantConfig = {
     mcp_json_path: './.mcp.json',
     model: 'claude-sonnet-4-6',
     model_autonomous: 'claude-sonnet-4-6',
+    // Pulse runs on Haiku by default — heartbeat decisions are extremely
+    // shallow (PULSE_OK or a brief reason-first reach-out) and fit Haiku's
+    // strengths. Override here or via the `agent.model_pulse` DB config
+    // if you want a different model for the pulse path specifically.
+    model_pulse: 'claude-haiku-4-5',
     thinking_effort: 'max',
     query_timeout_ms: 300000,
   },

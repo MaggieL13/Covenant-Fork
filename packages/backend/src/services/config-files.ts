@@ -79,6 +79,7 @@ export function readPreferences() {
     agent: {
       model: config.agent.model,
       model_autonomous: config.agent.model_autonomous,
+      model_pulse: config.agent.model_pulse,
       thinking_effort: config.agent.thinking_effort || 'max',
     },
     orchestrator: {
@@ -119,6 +120,7 @@ export function savePreferences(updates: Record<string, any>): void {
     if (!parsed.agent) parsed.agent = {};
     if (updates.agent.model !== undefined) parsed.agent.model = updates.agent.model;
     if (updates.agent.model_autonomous !== undefined) parsed.agent.model_autonomous = updates.agent.model_autonomous;
+    if (updates.agent.model_pulse !== undefined) parsed.agent.model_pulse = updates.agent.model_pulse;
     if (updates.agent.thinking_effort !== undefined) parsed.agent.thinking_effort = updates.agent.thinking_effort;
   }
 
