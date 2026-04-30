@@ -428,6 +428,15 @@ function handleMessage(event: MessageEvent) {
         break;
 
       case 'compaction_notice':
+        // Dev-mode tripwire — silent in production, useful if compaction
+        // ever stops surfacing in the UI again. Minimal payload by design.
+        if (import.meta.env.DEV) {
+          console.debug('[compaction_notice]', {
+            preTokens: msg.preTokens,
+            message: msg.message,
+            isComplete: msg.isComplete,
+          });
+        }
         compactionNotice = { preTokens: msg.preTokens, message: msg.message, isComplete: msg.isComplete };
         if (compactionTimeout) clearTimeout(compactionTimeout);
         if (msg.isComplete) {
