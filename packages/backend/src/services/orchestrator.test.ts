@@ -28,7 +28,7 @@ vi.mock('../config.js', () => ({
   PROJECT_ROOT: '/tmp/test',
 }));
 
-import { isValidCron, parseWakePromptsFile, DEFAULT_TASKS } from './orchestrator.js';
+import { isValidCron, parseWakePromptsFile, DEFAULT_TASKS, isSuppressiblePulseResponse } from './orchestrator.js';
 
 describe('isValidCron', () => {
   it('accepts standard cron expressions', () => {
@@ -339,5 +339,56 @@ describe('resolveCronExpression', async () => {
     const r = resolveCronExpression('0 24 * * *', '0 8 * * *');
     expect(r.expr).toBe('0 8 * * *');
     expect(r.warning).toMatch(/invalid/);
+  });
+});
+
+describe('isSuppressiblePulseResponse', () => {
+  it('treats the bare PULSE_OK sentinel as suppressible', () => {
+    expect(isSuppressiblePulseResponse('PULSE_OK')).toBe(true);
+    expect(isSuppressiblePulseResponse(' PULSE_OK ')).toBe(true);
+    expect(isSuppressiblePulseResponse('PULSE_OK\n')).toBe(true);
+    expect(isSuppressiblePulseResponse('\n  PULSE_OK\n\n')).toBe(true);
+  });
+
+  it('treats PULSE_OK with surrounding decoration as suppressible', () => {
+    expect(isSuppressiblePulseResponse('**PULSE_OK**')).toBe(true);
+    expect(isSuppressiblePulseResponse('— PULSE_OK —')).toBe(true);
+  });
+
+  it('catches the documented okay-pulse soft-acknowledgment phrasings', () => {
+    expect(isSuppressiblePulseResponse('Okay, all quiet here.')).toBe(true);
+    expect(isSuppressiblePulseResponse('ok, just checking in')).toBe(true);
+    expect(isSuppressiblePulseResponse('Alright, here if you need me.')).toBe(true);
+    expect(isSuppressiblePulseResponse('All quiet — back to it.')).toBe(true);
+    expect(isSuppressiblePulseResponse('Just checking in, no pressure.')).toBe(true);
+    expect(isSuppressiblePulseResponse('Nothing to report yet.')).toBe(true);
+    expect(isSuppressiblePulseResponse('Nothing needs attention right now.')).toBe(true);
+    expect(isSuppressiblePulseResponse('Here if you want me.')).toBe(true);
+  });
+
+  it('does NOT suppress reason-first reach-out content', () => {
+    expect(isSuppressiblePulseResponse(
+      "Watcher 'mood-low + idle 90min' met — checking in."
+    )).toBe(false);
+    expect(isSuppressiblePulseResponse(
+      "Timer 'tea' just fired. Your tea is ready."
+    )).toBe(false);
+    expect(isSuppressiblePulseResponse(
+      'Hey — that routine you asked me to nudge you on at 2pm just hit.'
+    )).toBe(false);
+  });
+
+  it('does NOT suppress long thoughtful content even if it starts with "Okay"', () => {
+    // Length gate: anything ≥ 200 chars is presumed substantive.
+    const longResponse = 'Okay, ' + 'I noticed something worth flagging. '.repeat(20);
+    expect(longResponse.length).toBeGreaterThanOrEqual(200);
+    expect(isSuppressiblePulseResponse(longResponse)).toBe(false);
+  });
+
+  it('does NOT match phrases that merely contain soft-ack words mid-sentence', () => {
+    // Anchors are at start-of-string; embedded "okay" / "ok" should not trip.
+    expect(isSuppressiblePulseResponse(
+      'A timer is overdue, the tea is no longer okay to drink.'
+    )).toBe(false);
   });
 });

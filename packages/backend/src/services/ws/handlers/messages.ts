@@ -2,11 +2,11 @@ import crypto from 'crypto';
 import type { ClientMessage, Thread } from '@resonant/shared';
 import { registry, type ExtendedWebSocket } from '../../registry.js';
 import {
-  getDb,
   createMessage,
   createThread,
   getThread,
   getTodayThread,
+  markMessageDelivered,
   updateThreadActivity,
 } from '../../db.js';
 import { AgentService } from '../../agent.js';
@@ -61,7 +61,7 @@ export async function handleMessageSend(
     createdAt: now,
   });
 
-  getDb().prepare('UPDATE messages SET delivered_at = ?, read_at = ? WHERE id = ?').run(now, now, userMessage.id);
+  markMessageDelivered(userMessage.id, now, now);
   userMessage.delivered_at = now;
   userMessage.read_at = now;
 

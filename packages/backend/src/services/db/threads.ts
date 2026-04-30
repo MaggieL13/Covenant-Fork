@@ -159,6 +159,10 @@ export function deleteThread(threadId: string): string[] {
   return fileIds;
 }
 
+export function renameThread(threadId: string, name: string): void {
+  getDb().prepare('UPDATE threads SET name = ? WHERE id = ?').run(name, threadId);
+}
+
 export function pinThread(threadId: string): void {
   const stmt = getDb().prepare('UPDATE threads SET pinned_at = ? WHERE id = ?');
   stmt.run(new Date().toISOString(), threadId);

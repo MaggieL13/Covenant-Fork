@@ -178,12 +178,14 @@ Emoji reactions on messages are stored in message metadata. The agent can:
 | **Watcher** | Recurring trigger with cooldown | DB (repeats) | `sc watch create` |
 | **Timer** | Fire at specific time | DB (one-shot) | `sc timer create` |
 | **Routine** | Scheduled autonomous session | DB (cron-based) | `sc routine create` |
-| **Pulse** | Lightweight periodic check | Config (toggle) | `sc pulse enable` |
+| **Pulse** | Lightweight periodic check | Config (toggle/frequency; Settings panel or sc) | `sc pulse enable` |
 | **Failsafe** | Inactivity escalation (3 tiers) | Config (thresholds) | `sc failsafe` |
 
 **Conditions available:** `presence_state`, `presence_transition`, `time_window`, `routine_missing`, `agent_free` (AND-joinable)
 
 **Auto-injected:** Number of active triggers shown in orientation context.
+
+**Configuring Pulse and Failsafe:** both are exposed in the Settings → Orchestrator tab in addition to the agent-side `sc` commands. The panel surfaces the same controls — `enabled` and `frequency` for Pulse (frequency floor 5 minutes), and the three escalation thresholds for Failsafe.
 
 ---
 

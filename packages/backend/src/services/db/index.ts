@@ -14,6 +14,7 @@ export {
   deleteThread,
   pinThread,
   unpinThread,
+  renameThread,
 } from './threads.js';
 export {
   getNextSequence,
@@ -24,9 +25,25 @@ export {
   getMessageContext,
   editMessage,
   softDeleteMessage,
+  markMessageDelivered,
   markMessagesRead,
   searchMessages,
 } from './messages.js';
+export type { AuditEventRow } from './audit.js';
+export { insertAuditEvent, listRecentAuditEntries } from './audit.js';
+export type { PendingPairingRecord } from './discord-pairings.js';
+export {
+  approvePairing,
+  cleanExpiredPairings,
+  createPairing,
+  deletePairingsForUser,
+  expirePairingByCode,
+  findActivePendingPairingForUser,
+  getPendingPairingByCode,
+  isDiscordUserApproved,
+  listApprovedPairings,
+  listPendingPairings,
+} from './discord-pairings.js';
 export { addReaction, removeReaction } from './reactions.js';
 export {
   saveEmbedding,

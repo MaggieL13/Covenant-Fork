@@ -12,6 +12,7 @@ import {
   getDb,
   pinThread,
   unpinThread,
+  renameThread,
   getTodayThread,
 } from '../services/db.js';
 import { deleteFile } from '../services/files.js';
@@ -291,8 +292,7 @@ router.patch('/:id', (req, res) => {
       return;
     }
 
-    const db = getDb();
-    db.prepare('UPDATE threads SET name = ? WHERE id = ?').run(name, id);
+    renameThread(id, name);
 
     // Broadcast updated thread to all clients
     registry.broadcast({

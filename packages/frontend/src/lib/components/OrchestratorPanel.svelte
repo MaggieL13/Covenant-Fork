@@ -5,12 +5,15 @@
     rescheduleTask,
     updateFailsafe,
     getFailsafe,
+    updatePulse,
+    getPulse,
     cancelTriggerById,
   } from '$lib/stores/settings.svelte';
 
   let { tasks = [], triggers = [] }: { tasks: OrchestratorTaskStatus[]; triggers: TriggerStatus[] } = $props();
 
   let failsafe = $derived(getFailsafe());
+  let pulse = $derived(getPulse());
   let editingTask = $state<string | null>(null);
   let editCronValue = $state('');
 
@@ -62,6 +65,20 @@
     const num = parseInt(value);
     if (!isNaN(num) && num > 0) {
       await updateFailsafe({ [field]: num });
+    }
+  }
+
+  async function handlePulseToggle() {
+    await updatePulse({ enabled: !pulse.enabled });
+  }
+
+  // Number() (not parseInt) so '5abc' and '5.9' don't sneak through as
+  // accepted-ish values. isInteger because pulse frequency is whole
+  // minutes — setInterval(freq * 60_000) gains nothing from fractions.
+  async function handlePulseFrequency(value: string) {
+    const num = Number(value);
+    if (Number.isInteger(num) && num >= 5) {
+      await updatePulse({ frequency: num });
     }
   }
 
@@ -286,6 +303,43 @@
               value={failsafe.emergency}
               min="120"
               onchange={(e) => handleFailsafeThreshold('emergency', (e.target as HTMLInputElement).value)}
+            />
+            <span class="threshold-unit">min</span>
+          </div>
+        </label>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Pulse -->
+  <div class="section">
+    <h3 class="section-title">
+      Pulse
+      <button
+        class="toggle-btn"
+        class:on={pulse.enabled}
+        onclick={handlePulseToggle}
+        aria-label={pulse.enabled ? 'Disable pulse' : 'Enable pulse'}
+      >
+        <span class="toggle-slider"></span>
+      </button>
+    </h3>
+    <p class="section-description">
+      Lightweight awareness check. Wakes only when idle; stays silent unless something concrete needs attention.
+    </p>
+    {#if pulse.enabled}
+      <div class="threshold-grid">
+        <label class="threshold-label">
+          <span>Frequency</span>
+          <div class="threshold-input-row">
+            <input
+              type="number"
+              class="threshold-input"
+              value={pulse.frequency}
+              min="5"
+              step="1"
+              inputmode="numeric"
+              onchange={(e) => handlePulseFrequency((e.target as HTMLInputElement).value)}
             />
             <span class="threshold-unit">min</span>
           </div>
@@ -546,6 +600,13 @@
     font-size: 0.8125rem;
     color: var(--text-muted);
     font-style: italic;
+  }
+
+  .section-description {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem 0;
+    line-height: 1.4;
   }
 
   .trigger-group {

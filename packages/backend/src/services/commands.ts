@@ -7,7 +7,6 @@ import crypto from 'crypto';
 import type { CommandRegistryEntry, ServerMessage } from '@resonant/shared';
 import { scanSkills } from './skills.js';
 import {
-  getDb,
   getThread,
   createThread,
   getMessages,
@@ -16,6 +15,7 @@ import {
   setConfig,
   getActiveTriggers,
   listTriggers,
+  renameThread,
 } from './db.js';
 import { AgentService } from './agent.js';
 import { Orchestrator } from './orchestrator.js';
@@ -211,7 +211,7 @@ function handleRename(threadId: string | undefined, args: string | undefined): S
     return { type: 'command_result', name: 'rename', success: false, error: 'Thread not found', display: 'toast' };
   }
 
-  getDb().prepare('UPDATE threads SET name = ? WHERE id = ?').run(newName, threadId);
+  renameThread(threadId, newName);
 
   return {
     type: 'command_result',

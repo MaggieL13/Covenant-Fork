@@ -292,6 +292,23 @@ const DEFAULT_FAILSAFE_GENTLE = 120;
 const DEFAULT_FAILSAFE_CONCERNED = 720;
 const DEFAULT_FAILSAFE_EMERGENCY = 1440;
 
+// --- Pulse soft-ack policy ---
+//
+// Treat the model's pulse response as "stay silent" when it matches the
+// PULSE_OK sentinel exactly OR appears to be empty acknowledgment chatter
+// (the documented okay-pulse failure mode). Exported as a pure helper so
+// the regex policy is testable in isolation without spinning up the
+// orchestrator.
+const PULSE_SOFT_ACK_RE = /^(okay|ok|alright|all\s+(quiet|good)|just\s+checking|here\s+if|nothing\s+(to|needs))/i;
+
+export function isSuppressiblePulseResponse(resp: string): boolean {
+  const trimmed = resp.trim();
+  if (trimmed === 'PULSE_OK') return true;
+  if (/^\W*PULSE_OK\W*$/.test(trimmed)) return true;
+  if (trimmed.length < 200 && PULSE_SOFT_ACK_RE.test(trimmed)) return true;
+  return false;
+}
+
 // --- Orchestrator ---
 
 export class Orchestrator {
@@ -774,6 +791,10 @@ export class Orchestrator {
     if (hour < 8) return;
     if (this.agent.isProcessing()) return;
     if (registry.getUserPresenceState() === 'active') return;
+    // Recency gate: pulse window is every 15 min; if the user was active
+    // within the last 15 minutes, state hasn't materially changed since
+    // the previous tick and there's nothing for the model to react to.
+    if (registry.minutesSinceLastUserActivity() < 15) return;
 
     const presence = registry.getUserPresenceState();
     const minutesSince = Math.round(registry.minutesSinceLastUserActivity());
@@ -782,24 +803,36 @@ export class Orchestrator {
     const triggers = getActiveTriggers();
 
     const pulsePrompt = [
-      'Quick awareness check. You don\'t have to say anything.',
+      'Heartbeat check. Default outcome is silence.',
       '',
-      `User: ${presence}, last active ${minutesSince}min ago. Device: ${device}.`,
+      `State: User ${presence}, last active ${minutesSince}min ago. Device ${device}.`,
       `Time: ${localTime}. Active triggers: ${triggers.length}.`,
       '',
-      'If something here warrants reaching out — a message, a reminder, a gentle pull — do it.',
-      'If nothing needs attention, respond with just: PULSE_OK',
+      'Output the literal token PULSE_OK on its own line — nothing else — UNLESS',
+      'there is a specific, concrete reason to interrupt right now (a missed',
+      'timer firing, a watcher condition met, a routine she explicitly asked for',
+      'at this hour). A vague urge to check in, greet, or acknowledge is NOT a',
+      'reason. You were already present in this thread today; this is not a',
+      'greeting opportunity.',
+      '',
+      'If you do reach out, the first line must name the concrete reason',
+      "(e.g. \"Timer 'tea' just fired\" / \"Watcher 'mood-low + idle 90min' met\").",
     ].join('\n');
 
     try {
       let thread = getTodayThread();
       if (!thread) return;
 
-      const response = await this.agent.processAutonomous(thread.id, pulsePrompt);
+      const response = await this.agent.processAutonomous(thread.id, pulsePrompt, {
+        suppressIf: isSuppressiblePulseResponse,
+        streamToClient: false,
+        suppressedLogLabel: 'PULSE suppressed',
+      });
 
-      if (response.trim().startsWith('PULSE_OK')) {
-        return;
-      }
+      // The agent layer already suppressed persist/push for soft-ack
+      // responses; we just need to skip the activity bump so a quiet pulse
+      // doesn't move the thread's last-activity timestamp.
+      if (isSuppressiblePulseResponse(response)) return;
 
       updateThreadActivity(thread.id, new Date().toISOString(), true);
       olog(`PULSE: responded (${response.length} chars)`);

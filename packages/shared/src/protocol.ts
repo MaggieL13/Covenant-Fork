@@ -55,7 +55,8 @@ export type ServerMessage =
   | { type: 'message_deleted'; messageId: string }
   | { type: 'stream_start'; messageId: string; threadId: string }
   | { type: 'stream_token'; messageId: string; token: string }
-  | { type: 'stream_end'; messageId: string; final: Message }
+  | { type: 'stream_end'; messageId: string; final: Message; suppressed?: never }
+  | { type: 'stream_end'; messageId: string; final?: undefined; suppressed: true }
   | { type: 'presence'; status: PresenceStatus }
   | { type: 'unread_update'; threadId: string; count: number }
   | { type: 'thread_created'; thread: Thread }

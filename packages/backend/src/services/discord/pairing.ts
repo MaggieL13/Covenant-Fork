@@ -1,8 +1,24 @@
-// SQLite-backed pairing system for Discord user approval
+// SQLite-backed pairing system for Discord user approval.
+// SQL lives in services/db/discord-pairings.ts; this file is the domain
+// surface — code generation, expiry windows, approver resolution, and
+// the success/error contract for callers.
 
-import { getDb } from '../db.js';
+import {
+  approvePairing,
+  cleanExpiredPairings,
+  createPairing,
+  deletePairingsForUser,
+  expirePairingByCode,
+  findActivePendingPairingForUser,
+  getPendingPairingByCode,
+  isDiscordUserApproved,
+  listApprovedPairings,
+  listPendingPairings,
+} from '../db/discord-pairings.js';
 import { getResonantConfig } from '../../config.js';
 import type { PairingCode } from './types.js';
+
+const PAIRING_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export class PairingService {
   private generateCode(): string {
@@ -15,87 +31,59 @@ export class PairingService {
   }
 
   createOrGet(userId: string, username: string, channelId: string): string {
-    const db = getDb();
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour
+    const expiresAt = new Date(now.getTime() + PAIRING_TTL_MS);
 
-    // Check for existing valid code
-    const existing = db.prepare(`
-      SELECT code FROM discord_pairings
-      WHERE user_id = ? AND approved_at IS NULL AND expires_at > ?
-    `).get(userId, now.toISOString()) as { code: string } | undefined;
-
+    const existing = findActivePendingPairingForUser(userId, now.toISOString());
     if (existing) return existing.code;
 
-    // Generate new code
     const code = this.generateCode();
-    db.prepare(`
-      INSERT INTO discord_pairings (code, user_id, username, channel_id, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(code, userId, username, channelId, now.toISOString(), expiresAt.toISOString());
+    createPairing({
+      code,
+      userId,
+      username,
+      channelId,
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    });
 
     return code;
   }
 
   isApproved(userId: string): boolean {
-    const db = getDb();
-    const row = db.prepare(`
-      SELECT 1 FROM discord_pairings
-      WHERE user_id = ? AND approved_at IS NOT NULL
-      LIMIT 1
-    `).get(userId);
-    return !!row;
+    return isDiscordUserApproved(userId);
   }
 
   approve(code: string, approvedBy?: string): { success: boolean; userId?: string; error?: string } {
-    const db = getDb();
     const config = getResonantConfig();
     const now = new Date().toISOString();
     const approver = approvedBy || config.identity.user_name;
+    const normalized = code.toUpperCase();
 
-    const pairing = db.prepare(`
-      SELECT * FROM discord_pairings
-      WHERE code = ? AND approved_at IS NULL
-    `).get(code.toUpperCase()) as PairingCode & { approved_at: string | null } | undefined;
-
+    const pairing = getPendingPairingByCode(normalized);
     if (!pairing) {
       return { success: false, error: 'Invalid or already approved code' };
     }
 
     if (pairing.expiresAt < now) {
-      db.prepare('DELETE FROM discord_pairings WHERE code = ?').run(code.toUpperCase());
+      expirePairingByCode(normalized);
       return { success: false, error: 'Code has expired' };
     }
 
-    db.prepare(`
-      UPDATE discord_pairings SET approved_at = ?, approved_by = ?
-      WHERE code = ?
-    `).run(now, approver, code.toUpperCase());
-
+    approvePairing({ code: normalized, approvedAt: now, approvedBy: approver });
     return { success: true, userId: pairing.userId };
   }
 
   revoke(userId: string): boolean {
-    const db = getDb();
-    const result = db.prepare('DELETE FROM discord_pairings WHERE user_id = ?').run(userId);
-    return result.changes > 0;
+    return deletePairingsForUser(userId) > 0;
   }
 
   listPending(): PairingCode[] {
-    const db = getDb();
-    const now = new Date().toISOString();
-    // Clean expired
-    db.prepare('DELETE FROM discord_pairings WHERE approved_at IS NULL AND expires_at < ?').run(now);
-    return db.prepare(`
-      SELECT * FROM discord_pairings WHERE approved_at IS NULL ORDER BY created_at DESC
-    `).all() as unknown as PairingCode[];
+    cleanExpiredPairings(new Date().toISOString());
+    return listPendingPairings();
   }
 
   listApproved(): Array<{ userId: string; username: string | null; approvedAt: string }> {
-    const db = getDb();
-    return db.prepare(`
-      SELECT user_id as userId, username, approved_at as approvedAt
-      FROM discord_pairings WHERE approved_at IS NOT NULL
-    `).all() as any[];
+    return listApprovedPairings();
   }
 }

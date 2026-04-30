@@ -1175,25 +1175,30 @@ subsection in Section 4 for canonical-list purposes.
 
 ### State ownership boundaries
 
-- **Only `services/db/*` writes to SQLite.** Callers pass plain data;
-  the module handles SQL. Writing SQL elsewhere is the pattern that
+- **All runtime SQLite writes live in `services/db/*`** — with one
+  sanctioned exception at the runtime layer. Callers pass plain data;
+  the db module handles SQL. Writing SQL elsewhere is the pattern that
   leads to schema drift and untracked queries.
 
-  > **⚠️ Under review — invariant aspirational, not enforced.** Several
-  > services and routes currently issue direct SQL writes outside
-  > `services/db/*`. Known sites at the time of writing — **not an
-  > exhaustive list** — include `services/cc.ts`,
-  > `services/audit.ts`, `services/discord/pairing.ts`,
-  > `services/commands.ts` (the `/rename` slash command updates
-  > `threads` directly), `services/ws/handlers/messages.ts` (marks
-  > newly created user messages `delivered_at` / `read_at` directly),
-  > and `routes/threads.ts`. The boundary will resolve in a future
-  > pass via either (a) updating this section to describe the real
-  > partial boundary, or (b) moving the offending writes behind
-  > `services/db/` modules. Until then, do not rely on this invariant
-  > when writing new code, and treat any new out-of-`services/db/`
-  > write as a deliberate exception that needs justification — not a
-  > free pass because "others do it."
+  > **Sanctioned runtime exception — Command Center (`services/cc.ts`).**
+  > The Command Center subsystem owns its own data layer: care, tasks,
+  > projects, events, pets, lists, expenses, countdowns, cycles,
+  > daily wins, and scratchpad CRUD all live alongside the analytics
+  > and prediction logic that consume them (cycle phase, care
+  > summaries, life-status derivation). Splitting CRUD off would
+  > fragment a coherent subsystem for no caller-side benefit, since
+  > Command Center is the only consumer of those tables. New SQL
+  > against `cc_*` / `tasks` / `events` / `pets` / `lists` /
+  > `expenses` / `countdowns` / `cycles` / `daily_wins` /
+  > `scratchpad_notes` belongs in `cc.ts`. Anything else writing
+  > SQLite from outside `services/db/*` *at runtime* is a regression.
+  >
+  > **Out of scope:** setup / migration / one-off CLI tooling
+  > (`src/db-init.ts` behind `npm run db:init`, the migration runner
+  > in `services/db/migrate.ts`, schema files under `migrations/*.sql`).
+  > These run before — or instead of — normal application startup, open
+  > their own database handles, and seed defaults. The boundary above
+  > is about runtime persistence patterns, not bootstrap.
 - **Only `Orchestrator` owns application/background scheduling
   timers.** Services that need scheduling register with the
   orchestrator. The WebSocket heartbeat in `services/ws/socket.ts`

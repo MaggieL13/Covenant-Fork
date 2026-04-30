@@ -167,6 +167,12 @@ export function softDeleteMessage(id: string, deletedAt: string): void {
   stmt.run(deletedAt, id);
 }
 
+export function markMessageDelivered(id: string, deliveredAt: string, readAt: string): void {
+  getDb()
+    .prepare('UPDATE messages SET delivered_at = ?, read_at = ? WHERE id = ?')
+    .run(deliveredAt, readAt, id);
+}
+
 export function markMessagesRead(threadId: string, beforeId: string, readAt: string): void {
   const db = getDb();
   const run = db.transaction(() => {
