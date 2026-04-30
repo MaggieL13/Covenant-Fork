@@ -48,6 +48,17 @@ export function localFullStr(tz: string, at?: Date): string {
   return moment.tz(at ?? now(), tz).format('DD/MM/YYYY, HH:mm:ss');
 }
 
+/**
+ * Sortable local timestamp for log lines: "YYYY-MM-DD HH:mm:ss.SSS".
+ * Year-first order keeps lexical sort matching chronological sort, and
+ * the millisecond suffix matches the precision of the previous
+ * `Date#toISOString()`-based format so log readers don't lose detail
+ * when we move from UTC to wall-clock-in-tz.
+ */
+export function localLogStr(tz: string, at?: Date): string {
+  return moment.tz(at ?? now(), tz).format('YYYY-MM-DD HH:mm:ss.SSS');
+}
+
 /** Local hour (0-23) as integer. Used for DND, quiet hours, scheduling. */
 export function localHour(tz: string, at?: Date): number {
   return moment.tz(at ?? now(), tz).hour();

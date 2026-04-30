@@ -34,7 +34,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
-import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, localTimeStr, isCronSupported } from './time.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, localTimeStr, localLogStr, isCronSupported } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -64,7 +64,17 @@ function rotateLogIfNeeded(): void {
 }
 
 function olog(message: string): void {
-  const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  // Wall-clock-in-tz timestamps for the orchestrator log. The log file is
+  // user-visible (read during debugging), so sovereignty applies — same
+  // rule as user-facing strings elsewhere. Fall back to UTC ISO if config
+  // isn't available yet (e.g. during early bootstrap before loadConfig).
+  let ts: string;
+  try {
+    const tz = getResonantConfig().identity.timezone;
+    ts = localLogStr(tz);
+  } catch {
+    ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  }
   const line = `${ts}  ${message}\n`;
   rotateLogIfNeeded();
   appendFileSync(LOG_PATH, line);
