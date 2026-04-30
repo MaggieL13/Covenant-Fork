@@ -34,7 +34,7 @@ import { fetchLifeStatus } from './life-status.js';
 import { getResonantConfig } from '../config.js';
 import type { OrchestratorTaskStatus } from '@resonant/shared';
 import { runDigest } from './digest.js';
-import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, localTimeStr, isCronSupported } from './time.js';
+import { localHour as tzLocalHour, localMinute as tzLocalMinute, localDateStr, localTimeStr, localLogStr, isCronSupported } from './time.js';
 
 // --- Orchestrator log ---
 
@@ -64,7 +64,17 @@ function rotateLogIfNeeded(): void {
 }
 
 function olog(message: string): void {
-  const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  // Wall-clock-in-tz timestamps for the orchestrator log. The log file is
+  // user-visible (read during debugging), so sovereignty applies — same
+  // rule as user-facing strings elsewhere. Fall back to UTC ISO if config
+  // isn't available yet (e.g. during early bootstrap before loadConfig).
+  let ts: string;
+  try {
+    const tz = getResonantConfig().identity.timezone;
+    ts = localLogStr(tz);
+  } catch {
+    ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  }
   const line = `${ts}  ${message}\n`;
   rotateLogIfNeeded();
   appendFileSync(LOG_PATH, line);
@@ -337,6 +347,11 @@ export class Orchestrator {
   private digestInterval: ReturnType<typeof setInterval> | null = null;
   private pulseEnabled = false;
   private pulseFrequency = 15; // minutes
+  // Track the last pulse-gate skip reason so we coalesce repeated skips
+  // (e.g. "presence active" hitting every 5 min while you're chatting)
+  // down to one log line per state-transition. Reset when pulse actually
+  // fires so the next skip cycle logs once on entry.
+  private lastPulseSkipKey: string | null = null;
   private lastUserPresenceState: 'active' | 'idle' | 'offline' = 'offline';
   private wakePrompts: Record<string, string> = {};
 
@@ -788,13 +803,41 @@ export class Orchestrator {
     const timezone = getResonantConfig().identity.timezone;
     const hour = tzLocalHour(timezone, now);
 
-    if (hour < 8) return;
-    if (this.agent.isProcessing()) return;
-    if (registry.getUserPresenceState() === 'active') return;
+    // Coalesce gate skips: log once per state-transition, stay silent on
+    // repeat skips of the same reason. Caller passes a stable `key` per
+    // gate so e.g. `idle 5m` and `idle 10m` count as the same state.
+    const skip = (key: string, message: string): void => {
+      if (key !== this.lastPulseSkipKey) {
+        olog(message);
+        this.lastPulseSkipKey = key;
+      }
+    };
+
+    if (hour < 8) {
+      skip('hour', `Pulse skipped: local hour ${hour} < 8 (sleep window)`);
+      return;
+    }
+    if (this.agent.isProcessing()) {
+      skip('busy', 'Pulse skipped: agent busy');
+      return;
+    }
+    if (registry.getUserPresenceState() === 'active') {
+      skip('presence', 'Pulse skipped: presence active');
+      return;
+    }
     // Recency gate: pulse window is every 15 min; if the user was active
     // within the last 15 minutes, state hasn't materially changed since
     // the previous tick and there's nothing for the model to react to.
-    if (registry.minutesSinceLastUserActivity() < 15) return;
+    const idleMins = Math.round(registry.minutesSinceLastUserActivity());
+    if (idleMins < 15) {
+      skip('idle', `Pulse skipped: idle ${idleMins}m < 15m`);
+      return;
+    }
+
+    // All gates passed — pulse will fire. Reset so the next skip cycle
+    // logs once on entry instead of staying silent because we happened
+    // to last skip with the same reason.
+    this.lastPulseSkipKey = null;
 
     const presence = registry.getUserPresenceState();
     const minutesSince = Math.round(registry.minutesSinceLastUserActivity());
@@ -827,6 +870,7 @@ export class Orchestrator {
         suppressIf: isSuppressiblePulseResponse,
         streamToClient: false,
         suppressedLogLabel: 'PULSE suppressed',
+        orientationMode: 'pulse',
       });
 
       // The agent layer already suppressed persist/push for soft-ack

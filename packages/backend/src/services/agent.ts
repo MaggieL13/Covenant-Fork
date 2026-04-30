@@ -2,7 +2,7 @@ import { query, AbortError, listSessions, type Options, type Query, type McpServ
 import type { McpServerInfo } from '@resonant/shared';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
-import { createHooks, buildOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
+import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
 import type { PushService } from './push.js';
 import { getResonantConfig } from '../config.js';
@@ -188,6 +188,21 @@ function getConfiguredModel(isAutonomous: boolean): string {
   return 'claude-sonnet-4-6';
 }
 
+// Pulse runs on its own model tier — heartbeat decisions are extremely
+// shallow and fit Haiku's strengths. DB > YAML > default ('claude-haiku-4-5').
+// Kept separate from getConfiguredModel so that the autonomous tier (used by
+// wakes / impulses / watchers / timers) can stay on Sonnet while pulse drops
+// to Haiku without tier-flag gymnastics.
+function getConfiguredPulseModel(): string {
+  const dbValue = getDbConfig('agent.model_pulse');
+  if (dbValue) return dbValue;
+
+  const cfg = getResonantConfig();
+  if (cfg.agent.model_pulse) return cfg.agent.model_pulse;
+
+  return 'claude-haiku-4-5';
+}
+
 function getConfiguredThinkingEffort(): string {
   const dbValue = getDbConfig('agent.thinking_effort');
   if (dbValue) return dbValue;
@@ -332,6 +347,7 @@ export interface AutonomousOpts {
   suppressIf?: (response: string) => boolean;
   streamToClient?: boolean;
   suppressedLogLabel?: string;
+  orientationMode?: 'full' | 'pulse';
 }
 
 // Build interleaved text/tool/thinking segments from response text + insertions
@@ -589,6 +605,7 @@ export class AgentService {
     if (!thread) throw new Error(`Thread ${threadId} not found`);
 
     const cfg = getResonantConfig();
+    const isPulseOrientation = autonomousOpts.orientationMode === 'pulse';
 
     // Stream message placeholder
     const streamMsgId = crypto.randomUUID();
@@ -622,12 +639,18 @@ export class AgentService {
     const isFirstMessage = !thread.current_session_id;
 
     // Build query options — V1 API (full config support)
-    // Two-tier model: autonomous wakes use cheaper model (configurable)
-    // Interactive queries use primary model (configurable)
-    // Priority: DB config > YAML config > env var > default
-    const model = getConfiguredModel(isAutonomous);
+    // Three-tier model: pulse uses its own (Haiku by default), autonomous wakes
+    // use the autonomous tier, interactive queries use the primary tier.
+    // Interactive + autonomous resolve via DB > YAML > env var > default.
+    // Pulse resolves via DB > YAML > default (no env var; pulse is narrow
+    // enough that operator config doesn't need a third override path).
+    const model = isPulseOrientation
+      ? getConfiguredPulseModel()
+      : getConfiguredModel(isAutonomous);
     const effort = getConfiguredThinkingEffort();
-    console.log(`[Agent] Model: ${model} (${isAutonomous ? 'autonomous' : 'interactive'}, effort: ${effort})`);
+    const effectiveEffort = isPulseOrientation ? 'low' : effort;
+    const tier = isPulseOrientation ? 'pulse' : (isAutonomous ? 'autonomous' : 'interactive');
+    console.log(`[Agent] Model: ${model} (${tier}, effort: ${effectiveEffort})`);
 
     // Tool-behavior rule prepended to the system prompt. Lives here
     // rather than in CLAUDE.md so the personal persona file stays
@@ -647,29 +670,39 @@ export class AgentService {
       ? `${TOOL_BEHAVIOR_RULES}\n\n${claudeMdContent}`
       : TOOL_BEHAVIOR_RULES;
 
+    const pulseSystemPrompt = [
+      `You are ${cfg.identity.companion_name}, running a lightweight internal pulse check for ${cfg.identity.user_name}.`,
+      'Your default behavior is silence: output exactly PULSE_OK unless there is a specific, concrete reason to interrupt now.',
+      'Do not greet, narrate availability, acknowledge the check, or use tools. If you do reach out, be brief and name the concrete reason first.',
+    ].join('\n');
+
     const options: Options = {
       model,
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: appendText },
+      systemPrompt: isPulseOrientation
+        ? pulseSystemPrompt
+        : { type: 'preset', preset: 'claude_code', append: appendText },
       cwd: AGENT_CWD,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      maxTurns: 30,
+      permissionMode: isPulseOrientation ? 'plan' : 'bypassPermissions',
+      allowDangerouslySkipPermissions: !isPulseOrientation,
+      maxTurns: isPulseOrientation ? 1 : 30,
 
-      includePartialMessages: true,
-      thinking: { type: 'adaptive' },
-      effort: effort as any,
-      hooks: createHooks(hookContext),
+      includePartialMessages: !isPulseOrientation,
+      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive' },
+      effort: effectiveEffort as any,
+      tools: isPulseOrientation ? [] : undefined,
+      persistSession: isPulseOrientation ? false : undefined,
+      hooks: isPulseOrientation ? undefined : createHooks(hookContext),
       // Plugin: native skill discovery from .claude/skills/
-      plugins: [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
+      plugins: isPulseOrientation ? undefined : [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
       // Explicitly pass MCP servers — SDK isolation mode doesn't auto-discover .mcp.json
       // Dynamic loading: CC and Mind MCP servers are keyword-gated to reduce token overhead
-      ...(Object.keys(mcpServersFromConfig).length > 0 && {
+      ...(!isPulseOrientation && Object.keys(mcpServersFromConfig).length > 0 && {
         mcpServers: buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage),
       }),
     };
 
     // Resume existing session if available
-    if (thread.current_session_id) {
+    if (!isPulseOrientation && thread.current_session_id) {
       options.resume = thread.current_session_id;
     }
 
@@ -687,23 +720,27 @@ export class AgentService {
       presenceStatus = 'active';
       registry.broadcast({ type: 'presence', status: 'active' });
 
-      // Write thread ID for CLI tool integration (only if cwd dir exists)
-      try {
-        const threadFilePath = join(cfg.agent.cwd, '.resonant-thread');
-        if (existsSync(cfg.agent.cwd)) {
-          writeFileSync(threadFilePath, threadId);
-        }
-      } catch {}
+      if (!isPulseOrientation) {
+        // Write thread ID for CLI tool integration (only if cwd dir exists)
+        try {
+          const threadFilePath = join(cfg.agent.cwd, '.resonant-thread');
+          if (existsSync(cfg.agent.cwd)) {
+            writeFileSync(threadFilePath, threadId);
+          }
+        } catch {}
+      }
 
       // Build orientation context (thread, time, gap, status, vault)
       // Prepended to prompt because SessionStart hooks don't fire in V1 query()
       // Static content (CHAT TOOLS, skills, vault path) only on first message of session
-      const orientation = await buildOrientationContext(hookContext, isFirstMessage, content);
+      const orientation = isPulseOrientation
+        ? buildPulseOrientationContext(hookContext)
+        : await buildOrientationContext(hookContext, isFirstMessage, content);
 
       // On fresh sessions (e.g. after model swap), inject recent message history
       // so the new model has conversational context instead of starting blind
       let historyBlock = '';
-      if (isFirstMessage) {
+      if (!isPulseOrientation && isFirstMessage) {
         const recentMessages = getMessages({ threadId, limit: 10 });
         if (recentMessages.length > 0) {
           const historyLines = recentMessages.map((m, i) => {
@@ -731,47 +768,51 @@ export class AgentService {
       }, timeoutMs);
 
       // File checkpointing for rewind support
-      options.enableFileCheckpointing = true;
+      if (!isPulseOrientation) {
+        options.enableFileCheckpointing = true;
+      }
 
       // V1 query — single params object with prompt and options
       const result = query({ prompt: enrichedPrompt, options });
       activeQuery = result;
 
-      // Enforce MCP server preferences on query start
-      const disabledServers = getDisabledMcpServers();
-      result.mcpServerStatus().then(async (statuses) => {
-        for (const s of statuses) {
-          if (disabledServers.has(s.name) && s.status !== 'disabled') {
-            // Disable servers that should be off
-            try {
-              await result.toggleMcpServer(s.name, false);
-              console.log(`[MCP] Disabled "${s.name}" on query start (persistent preference)`);
-            } catch { /* best-effort */ }
-          } else if (!disabledServers.has(s.name) && s.status === 'disabled') {
-            // Re-enable servers that should be on (were disabled in a previous message)
-            try {
-              await result.toggleMcpServer(s.name, true);
-              await result.reconnectMcpServer(s.name);
-              console.log(`[MCP] Re-enabled "${s.name}" on query start (persistent preference)`);
-            } catch { /* best-effort */ }
+      if (!isPulseOrientation) {
+        // Enforce MCP server preferences on query start
+        const disabledServers = getDisabledMcpServers();
+        result.mcpServerStatus().then(async (statuses) => {
+          for (const s of statuses) {
+            if (disabledServers.has(s.name) && s.status !== 'disabled') {
+              // Disable servers that should be off
+              try {
+                await result.toggleMcpServer(s.name, false);
+                console.log(`[MCP] Disabled "${s.name}" on query start (persistent preference)`);
+              } catch { /* best-effort */ }
+            } else if (!disabledServers.has(s.name) && s.status === 'disabled') {
+              // Re-enable servers that should be on (were disabled in a previous message)
+              try {
+                await result.toggleMcpServer(s.name, true);
+                await result.reconnectMcpServer(s.name);
+                console.log(`[MCP] Re-enabled "${s.name}" on query start (persistent preference)`);
+              } catch { /* best-effort */ }
+            }
           }
-        }
-      }).catch(() => {});
+        }).catch(() => {});
 
-      // Refresh MCP server status (non-blocking — caches for settings panel)
-      result.mcpServerStatus().then(statuses => {
-        cachedMcpStatus = statuses.map(s => ({
-          name: s.name,
-          status: s.status,
-          error: s.error,
-          toolCount: s.tools?.length ?? 0,
-          tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
-          scope: s.scope,
-        }));
-        console.log(`MCP status refreshed: ${cachedMcpStatus.length} servers`);
-      }).catch(err => {
-        console.warn('Failed to get MCP status:', err instanceof Error ? err.message : err);
-      });
+        // Refresh MCP server status (non-blocking — caches for settings panel)
+        result.mcpServerStatus().then(statuses => {
+          cachedMcpStatus = statuses.map(s => ({
+            name: s.name,
+            status: s.status,
+            error: s.error,
+            toolCount: s.tools?.length ?? 0,
+            tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
+            scope: s.scope,
+          }));
+          console.log(`MCP status refreshed: ${cachedMcpStatus.length} servers`);
+        }).catch(err => {
+          console.warn('Failed to get MCP status:', err instanceof Error ? err.message : err);
+        });
+      }
 
       // Simplified stream loop — hooks handle tool activity, audit, images
       // Inner try/catch for AbortError (stop_generation)
@@ -941,7 +982,7 @@ export class AgentService {
       activeAbortController = null;
       activeQuery = null;
       // Track session transition and update for future resume
-      if (sessionId) {
+      if (sessionId && !isPulseOrientation) {
         const previousSessionId = thread.current_session_id;
         const now = new Date().toISOString();
 

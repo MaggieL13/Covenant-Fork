@@ -31,7 +31,8 @@ vi.mock('./files.js', () => ({
   getContentTypeFromMime: vi.fn(),
 }));
 
-import { DESTRUCTIVE_BASH_PATTERNS, EMOTIONAL_MARKERS, getSafeWritePrefixes } from './hooks.js';
+import { getActiveTriggers } from './db.js';
+import { DESTRUCTIVE_BASH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes } from './hooks.js';
 
 describe('DESTRUCTIVE_BASH_PATTERNS', () => {
   function matchesDestructive(command: string): boolean {
@@ -114,5 +115,40 @@ describe('getSafeWritePrefixes', () => {
     expect(prefixes).toContain('/home/user/companion/');
     // Also backslash variant
     expect(prefixes).toContain('\\home\\user\\companion\\');
+  });
+});
+
+describe('buildPulseOrientationContext', () => {
+  it('stays slim and excludes full orientation/tool reference content', () => {
+    vi.mocked(getActiveTriggers).mockReturnValue([
+      { kind: 'watcher' },
+      { kind: 'impulse' },
+    ] as any);
+
+    const context = buildPulseOrientationContext({
+      threadId: 'thread-1',
+      threadName: 'Today',
+      threadType: 'daily',
+      streamMsgId: 'stream-1',
+      isAutonomous: true,
+      registry: {
+        getUserPresenceState: () => 'idle',
+        minutesSinceLastUserActivity: () => 42,
+        getUserDeviceType: () => 'mobile',
+      } as any,
+      sessionId: null,
+      platform: 'web',
+      toolInsertions: [],
+      getTextLength: () => 0,
+    });
+
+    expect(context).toContain('Internal pulse check');
+    expect(context).toContain('User\'s presence: idle');
+    expect(context).toContain('Active triggers: 1 watcher, 1 impulse');
+    expect(context).toContain('Tools are unavailable during pulse');
+    expect(context).not.toContain('CHAT TOOLS');
+    expect(context).not.toContain('TIMERS:');
+    expect(context).not.toContain('Custom stickers');
+    expect(Math.ceil(context.length / 4)).toBeLessThan(180);
   });
 });

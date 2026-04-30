@@ -132,8 +132,9 @@ The orientation context is optimized to reduce token usage:
 - **Platform context** — bounded to `hooks.platform_context_max_tokens` (default 500 tokens), truncates oldest messages first
 - **CC MCP tools** (~2000 tokens) — dynamically loaded only when message contains relevant keywords (task, calendar, pet, etc.)
 - **Mind MCP tools** — loaded on first message, autonomous wakes, or keyword match
+- **Pulse orientation mode** (~95 tokens) — the orchestrator's lightweight pulse heartbeat opts into `orientationMode: 'pulse'` via `AutonomousOpts`. This swaps the full orientation pipeline for a tiny pulse-only context (`buildPulseOrientationContext` in `hooks.ts`) and bypasses MCP servers, plugins, hooks, persona append, session resume, message history, file checkpointing, and thinking. Pulse decisions don't need any of that — they're just "should I interrupt right now, yes/no."
 
-These optimizations reduce per-message overhead from ~4,600 tokens to ~1,400 tokens (3-4x reduction).
+These optimizations reduce per-message overhead from ~4,600 tokens to ~1,400 tokens for normal turns (3-4x reduction), and to ~95 tokens for pulse heartbeats (~50x reduction).
 
 ## Configuring Safe Write Prefixes
 
