@@ -960,16 +960,16 @@ export class AgentService {
               message: `Context compacted (was ${Math.round(preTokens / 1000)}K tokens)`,
               isComplete: true,
             });
-            // Reset tracking — new context window after compaction
+            // Context window is fresh post-compaction; reset only the tracking
+            // counter. Do NOT reset fullResponse / toolInsertions / thinkingBlocks
+            // — the model continues writing into the same response buffer, with
+            // the strict anti-narration instruction injected by PreCompact
+            // (hooks.ts buildPreCompact) preventing meta-event leakage. The
+            // previous resets defended against re-grounding monologue leaking
+            // into Discord/phone replies; that defense is now in the prompt
+            // itself, unified across all platforms, so the user's in-flight
+            // response is preserved across the compaction boundary.
             contextTokensUsed = 0;
-            // Reset response buffer — pre-compaction text was incomplete and post-compaction
-            // re-grounding monologue must not leak into Discord/phone replies
-            if (fullResponse) {
-              console.log(`[Compaction] Resetting fullResponse (was ${fullResponse.length} chars, platform: ${platform})`);
-              fullResponse = '';
-            }
-            toolInsertions.length = 0;
-            thinkingBlocks.length = 0;
           } else if (systemMsg.status === 'compacting') {
             console.log('[Compaction] Compacting in progress...');
           }

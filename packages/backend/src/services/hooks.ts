@@ -798,8 +798,13 @@ function buildPreCompact(ctx: HookContext): HookCallback {
     const emotionalContext = buildEmotionalContext(ctx.threadId);
     const now = new Date();
 
-    const isExternalPlatform = ctx.platform === 'discord' || ctx.platform === 'telegram';
-
+    // Unified anti-narration instruction across all platforms. The web
+    // variant used to soften this to "re-ground if you have memory tools"
+    // — but that actively invited the model to narrate its re-grounding
+    // into the visible response, which is why the agent.ts compact_boundary
+    // handler used to nuke fullResponse as a belt-and-suspenders. With the
+    // strict instruction unified here, the buffer reset is no longer
+    // needed and pre-compaction text can be preserved across the boundary.
     const systemMessage = [
       '--- CONTEXT PRESERVATION (pre-compaction) ---',
       CHANNEL_CONTEXTS[ctx.platform] || CHANNEL_CONTEXTS.web,
@@ -807,9 +812,7 @@ function buildPreCompact(ctx: HookContext): HookCallback {
       `Mode: ${ctx.isAutonomous ? 'autonomous' : 'interactive'}`,
       `Time: ${now.toISOString()}`,
       '',
-      isExternalPlatform
-        ? 'CRITICAL: Context was just compacted. You were composing a reply. DO NOT narrate re-grounding, DO NOT output inner monologue. Continue directly with your response to the message. Your text output IS the reply.'
-        : 'CRITICAL: Context was just compacted. You may have lost emotional thread. Re-ground if you have memory/orientation tools available.',
+      'CRITICAL: A context compaction boundary is occurring while you are mid-reply. Continue directly with your response — do NOT narrate re-grounding, do NOT output inner monologue, do NOT acknowledge the compaction event in your visible output. Continue the response naturally as if no boundary occurred.',
       '',
       emotionalContext,
       '--- END CONTEXT PRESERVATION ---',
