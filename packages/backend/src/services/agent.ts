@@ -210,6 +210,27 @@ function getConfiguredThinkingEffort(): string {
   return cfg.agent.thinking_effort || 'max';
 }
 
+// /recap slash command intercept. Matches `/recap` with optional trailing
+// args ("/recap today only", "/recap focus on decisions") so that args are
+// folded into the rewritten prompt as a focus hint instead of slipping
+// through as literal slash-command text. The full rewrite happens in
+// processMessage before the prompt enters the queue.
+const RECAP_COMMAND_RE = /^\s*\/recap(?:\s+(.+?))?\s*$/i;
+const RECAP_BASE_PROMPT = [
+  'Summarize this conversation so far. Cover the key beats, decisions made, and where we are right now — 5-7 bullets, then a short "currently:" line at the end.',
+  'Skip greetings, skip "happy to recap" style preambles. Lead with the recap itself.',
+  'This is for the user who just walked back to their desk and wants a fast orientation. Be specific, not generic.',
+].join(' ');
+
+function buildRecapPrompt(focus: string | undefined): string {
+  if (!focus) return RECAP_BASE_PROMPT;
+  // Sanitize: strip surrounding quotes, collapse whitespace, cap length so
+  // a wildly long focus arg can't blow out the prompt budget.
+  const cleaned = focus.replace(/^["'`]+|["'`]+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!cleaned) return RECAP_BASE_PROMPT;
+  return `${RECAP_BASE_PROMPT} The user asked you to focus on: ${cleaned}. Prioritize that lens while keeping the recap structured.`;
+}
+
 
 // Presence state
 let presenceStatus: 'active' | 'dormant' | 'waking' | 'offline' = 'offline';
@@ -569,6 +590,17 @@ export class AgentService {
     platform?: 'web' | 'discord' | 'telegram' | 'api';
     platformContext?: string;
   }): Promise<string> {
+    // /recap intercept — rewrite the literal slash command into a curated
+    // summary instruction before queuing. Keeps the user-facing affordance
+    // tight ("recap" is one word, easy to type) while making the model's
+    // behavior deterministic instead of relying on whichever speaker
+    // happens to interpret the slash command first. Supports optional args
+    // ("/recap focus on decisions") that get folded in as a focus hint.
+    const recapMatch = content.match(RECAP_COMMAND_RE);
+    if (recapMatch) {
+      content = buildRecapPrompt(recapMatch[1]);
+    }
+
     // Determine priority based on platform
     const platform = opts?.platform || 'web';
     let priority: number;
@@ -928,16 +960,16 @@ export class AgentService {
               message: `Context compacted (was ${Math.round(preTokens / 1000)}K tokens)`,
               isComplete: true,
             });
-            // Reset tracking — new context window after compaction
+            // Context window is fresh post-compaction; reset only the tracking
+            // counter. Do NOT reset fullResponse / toolInsertions / thinkingBlocks
+            // — the model continues writing into the same response buffer, with
+            // the strict anti-narration instruction injected by PreCompact
+            // (hooks.ts buildPreCompact) preventing meta-event leakage. The
+            // previous resets defended against re-grounding monologue leaking
+            // into Discord/phone replies; that defense is now in the prompt
+            // itself, unified across all platforms, so the user's in-flight
+            // response is preserved across the compaction boundary.
             contextTokensUsed = 0;
-            // Reset response buffer — pre-compaction text was incomplete and post-compaction
-            // re-grounding monologue must not leak into Discord/phone replies
-            if (fullResponse) {
-              console.log(`[Compaction] Resetting fullResponse (was ${fullResponse.length} chars, platform: ${platform})`);
-              fullResponse = '';
-            }
-            toolInsertions.length = 0;
-            thinkingBlocks.length = 0;
           } else if (systemMsg.status === 'compacting') {
             console.log('[Compaction] Compacting in progress...');
           }

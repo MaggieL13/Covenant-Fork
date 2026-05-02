@@ -61,6 +61,10 @@
   let toolEventsMap = $derived(getToolEvents());
   let contextUsage = $derived(getContextUsage());
   let compactionNotice = $derived(getCompactionNotice());
+  // True only while compaction is in flight — flips false on completion so
+  // the activity panel goes back to "{companionName} is thinking..." once
+  // the SDK is done preserving context.
+  let isCompacting = $derived(!!compactionNotice && !compactionNotice.isComplete);
   let activeCanvasId = $derived(getActiveCanvasId());
   let streamingSegments = $derived(getStreamingSegments());
   let isStreamingNow = $derived(isStreaming());
@@ -488,6 +492,7 @@
       {streaming}
       {streamingSegments}
       {isWaitingForReply}
+      {isCompacting}
       {activeThreadId}
       {loadingOlder}
       {hasMoreMessages}
@@ -572,6 +577,10 @@
     overflow-x: hidden;
   }
 
+  /* Completed state — restrained, settles in for ~8s then auto-clears
+     (timeout in websocket.svelte.ts). The activity panel inside the
+     message list owns the "in-progress" signal now; this banner is
+     secondary / global status. */
   .compaction-banner {
     display: flex;
     align-items: center;
@@ -585,8 +594,16 @@
     animation: bannerFadeIn 0.3s ease-out;
   }
 
+  /* In-progress state — louder so the user notices when the SDK is
+     compacting context. Brighter background, bolder text, more contrast.
+     Pulse animation is preserved but with wider amplitude than before. */
   .compaction-banner.compacting {
-    animation: bannerFadeIn 0.3s ease-out, compactingPulse 2s ease-in-out infinite;
+    padding: 0.625rem 1rem;
+    background: rgba(155, 114, 207, 0.18);
+    border-bottom: 1px solid rgba(155, 114, 207, 0.4);
+    color: var(--gold);
+    font-weight: 500;
+    animation: bannerFadeIn 0.3s ease-out, compactingPulse 1.6s ease-in-out infinite;
   }
 
   @keyframes bannerFadeIn {
@@ -595,8 +612,8 @@
   }
 
   @keyframes compactingPulse {
-    0%, 100% { background: rgba(155, 114, 207, 0.08); }
-    50% { background: rgba(155, 114, 207, 0.16); }
+    0%, 100% { background: rgba(155, 114, 207, 0.18); }
+    50% { background: rgba(155, 114, 207, 0.32); }
   }
 
   .rate-limit-banner {

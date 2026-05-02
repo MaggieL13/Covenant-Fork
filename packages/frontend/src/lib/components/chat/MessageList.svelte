@@ -25,6 +25,7 @@
     streaming,
     streamingSegments,
     isWaitingForReply = false,
+    isCompacting = false,
     activeThreadId,
     loadingOlder,
     hasMoreMessages,
@@ -41,6 +42,7 @@
     streaming: { messageId: string | null; tokens: string };
     streamingSegments: MessageSegment[] | null;
     isWaitingForReply?: boolean;
+    isCompacting?: boolean;
     activeThreadId: string | null;
     loadingOlder: boolean;
     hasMoreMessages: boolean;
@@ -180,12 +182,17 @@
               {companionName}
             />
           {:else}
-            <div class="activity-panel" aria-label="Companion is working">
+            <div
+              class="activity-panel"
+              aria-label={isCompacting ? 'Chat context is being compacted' : 'Companion is working'}
+            >
               <div class="activity-header">
                 <span class="typing-dot"></span>
                 <span class="typing-dot"></span>
                 <span class="typing-dot"></span>
-                <span class="activity-label">{companionName} is thinking...</span>
+                <span class="activity-label">
+                  {isCompacting ? 'Chat context is being compacted...' : `${companionName} is thinking...`}
+                </span>
               </div>
               {#if liveTools.length > 0}
                 <div class="activity-tools">

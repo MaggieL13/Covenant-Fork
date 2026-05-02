@@ -1,5 +1,7 @@
 // Command system — registry for the dropdown, handlers for UI-only commands.
-// Skills, custom commands, /compact, /clear all pass through to the Agent SDK as prompt text.
+// Skills and custom commands pass through to the agent as prompt text. /recap
+// is intercepted server-side in AgentService.processMessage and rewritten into
+// a curated summary instruction before reaching the model.
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -40,10 +42,17 @@ const UI_COMMANDS: CommandRegistryEntry[] = [
   { name: 'help', description: 'Show all available commands', category: 'builtin', clientOnly: true },
 ];
 
-// SDK-handled commands (listed in dropdown, passed straight through as prompt)
+// Server-intercepted commands (rewritten before reaching the model).
+// /recap was previously /compact — but the SDK doesn't expose a programmatic
+// compaction trigger and the literal text /compact was just confusing the
+// model (it would defer to "the system handles that" and either greet or
+// improvise a manual summary). Renamed to /recap with a deterministic
+// intercept that rewrites the prompt into "summarize the conversation so
+// far" before sending to the model. Useful for "I just walked back to my
+// desk, where were we" — does NOT free up context tokens (real SDK
+// compaction is auto-triggered when context fills up).
 const SDK_COMMANDS: CommandRegistryEntry[] = [
-  { name: 'compact', description: 'Compact the conversation context', category: 'builtin' },
-  { name: 'clear', description: 'Clear conversation and start fresh', category: 'builtin' },
+  { name: 'recap', description: 'Summarize the conversation so far', category: 'builtin' },
 ];
 
 // ---------------------------------------------------------------------------
