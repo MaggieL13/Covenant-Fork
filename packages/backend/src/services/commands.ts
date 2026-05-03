@@ -18,6 +18,8 @@ import {
   getActiveTriggers,
   listTriggers,
   renameThread,
+  updateThreadSession,
+  endSessionRecord,
 } from './db.js';
 import { AgentService } from './agent.js';
 import { Orchestrator } from './orchestrator.js';
@@ -31,6 +33,7 @@ import type { ConnectionRegistry } from '../types.js';
 const UI_COMMANDS: CommandRegistryEntry[] = [
   { name: 'new', description: 'Create a new named thread', category: 'builtin', args: '[name]' },
   { name: 'rename', description: 'Rename the current thread', category: 'builtin', args: '[name]' },
+  { name: 'clear', description: 'Start a fresh model session in this thread', category: 'builtin' },
   { name: 'model', description: 'Switch the active model', category: 'builtin', args: '[model]' },
   { name: 'status', description: 'System status — uptime, MCP, queue', category: 'builtin' },
   { name: 'cost', description: 'Token usage for the current session', category: 'builtin' },
@@ -144,6 +147,7 @@ export async function handleCommand(
       switch (name) {
         case 'new': return handleNew(args);
         case 'rename': return handleRename(threadId, args);
+        case 'clear': return handleClear(threadId, services);
         case 'model': return handleModel(args);
         case 'status': return await handleStatus(services);
         case 'cost': return handleCost(services);
@@ -227,6 +231,60 @@ function handleRename(threadId: string | undefined, args: string | undefined): S
     name: 'rename',
     success: true,
     data: { message: `Renamed "${thread.name}" to "${newName}"` },
+    display: 'toast',
+  };
+}
+
+function handleClear(threadId: string | undefined, services: CommandServices): ServerMessage {
+  if (!threadId) {
+    return { type: 'command_result', name: 'clear', success: false, error: 'No active thread', display: 'toast' };
+  }
+
+  // Block /clear while an agent query is in flight. AgentService._processQuery
+  // captures thread.current_session_id into a local snapshot at the start of
+  // the turn and writes it back in its finally block; if /clear runs mid-turn
+  // it gets silently undone when the query finishes, breaking the toast's
+  // promise. Refuse the command with an action-oriented message instead.
+  // Global isProcessing is acceptable over-blocking at chip scale; per-thread
+  // tracking can refine this later if it ever feels annoying.
+  if (services.agent.isProcessing()) {
+    console.log(`[Session] /clear refused for thread "${threadId}" — agent is processing`);
+    return {
+      type: 'command_result',
+      name: 'clear',
+      success: false,
+      error: 'A reply is still in progress. Stop generation first, then run /clear.',
+      display: 'toast',
+    };
+  }
+
+  const thread = getThread(threadId);
+  if (!thread) {
+    console.log(`[Session] /clear refused for thread "${threadId}" — thread not found`);
+    return { type: 'command_result', name: 'clear', success: false, error: 'Thread not found', display: 'toast' };
+  }
+
+  // End the current SDK session record (if any) with end_reason: manual,
+  // then clear the thread's current_session_id. Next user message will
+  // create a fresh session — first-message orientation re-injects the
+  // static context (chat tools, skills, vault). Past chat history stays
+  // visible; only the model's session memory is reset.
+  const previousSessionId = thread.current_session_id;
+  if (previousSessionId) {
+    endSessionRecord({
+      sessionId: previousSessionId,
+      endedAt: new Date().toISOString(),
+      endReason: 'manual',
+    });
+  }
+  updateThreadSession(threadId, null);
+  console.log(`[Session] cleared (manual) thread "${thread.name}" — previous session: ${previousSessionId ?? '(none)'}`);
+
+  return {
+    type: 'command_result',
+    name: 'clear',
+    success: true,
+    data: { message: 'Next reply will start a fresh session in this thread' },
     display: 'toast',
   };
 }
