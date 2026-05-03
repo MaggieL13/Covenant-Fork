@@ -43,15 +43,22 @@ export type NormalizedSemanticSearchDateFilters =
  * inputs also return { error } rather than silently filtering with
  * a bad boundary.
  */
+/** typeof reports arrays as "object" — distinguish them in error messages. */
+function describeType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
 export function normalizeSemanticSearchDateFilters(
   tz: string,
   { after, before }: { after?: unknown; before?: unknown },
 ): NormalizedSemanticSearchDateFilters {
   if (after !== undefined && typeof after !== 'string') {
-    return { error: `'after' must be a string, got ${typeof after}` };
+    return { error: `'after' must be a string, got ${describeType(after)}` };
   }
   if (before !== undefined && typeof before !== 'string') {
-    return { error: `'before' must be a string, got ${typeof before}` };
+    return { error: `'before' must be a string, got ${describeType(before)}` };
   }
 
   const result: { after?: string; before?: string } = {};

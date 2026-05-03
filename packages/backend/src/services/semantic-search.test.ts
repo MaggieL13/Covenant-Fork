@@ -116,6 +116,18 @@ describe('normalizeSemanticSearchDateFilters', () => {
     expect(result).toEqual({ error: `'before' must be a string, got object` });
   });
 
+  it('reports array-typed filters as "array" rather than "object"', () => {
+    // typeof [] returns "object" in JS — distinguish in error messages so
+    // a caller sending after: ["2026-04-21"] gets a useful diagnostic.
+    const result = normalizeSemanticSearchDateFilters(ASUNCION, { after: ['2026-04-21'] });
+    expect(result).toEqual({ error: `'after' must be a string, got array` });
+  });
+
+  it('reports null-typed filters as "null" rather than "object"', () => {
+    const result = normalizeSemanticSearchDateFilters(ASUNCION, { before: null });
+    expect(result).toEqual({ error: `'before' must be a string, got null` });
+  });
+
   it('returns error for empty/whitespace-only string', () => {
     expect(normalizeSemanticSearchDateFilters(ASUNCION, { after: '' })).toEqual({
       error: `'after' is empty or whitespace`,
