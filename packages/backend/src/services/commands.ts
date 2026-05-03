@@ -278,6 +278,13 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
     });
   }
   updateThreadSession(threadId, null);
+  // Mark the thread as having a pending /clear. Autonomous turns
+  // (watchers, impulses, scheduled wakes, timer prompts, manual wakes)
+  // that complete on this thread before the next user-initiated message
+  // will skip writing thread.current_session_id, preserving the
+  // fresh-session slot the user reserved with this command. The next
+  // interactive turn drains the flag.
+  services.agent.markThreadSessionClearPending(threadId);
   console.log(`[Session] cleared (manual) thread "${thread.name}" — previous session: ${previousSessionId ?? '(none)'}`);
 
   return {

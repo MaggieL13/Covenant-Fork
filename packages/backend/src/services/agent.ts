@@ -438,6 +438,19 @@ function seedMcpStatusIfNeeded(): void {
 
 export class AgentService {
   private pushService: PushService | null = null;
+  // Threads with a pending /clear that should reserve the next interactive
+  // turn as the fresh-session starter. Autonomous turns (watchers,
+  // impulses, scheduled wakes, timer prompts, manual wakes — anything
+  // that runs through processAutonomous outside of pulse mode) that
+  // complete on a thread in this set still persist their message to the
+  // transcript, but they do NOT update thread.current_session_id, which
+  // would otherwise consume the fresh-session slot the user reserved
+  // with /clear. The next user-initiated turn drains the flag.
+  // In-memory by design: backend restart loses the pending state, worst
+  // case is one missed clear-honoring window which the user can /clear
+  // again. Pulse turns are naturally excluded by the existing
+  // !isPulseOrientation guard around the session-persistence block.
+  private clearPendingForThread = new Set<string>();
 
   setPushService(service: PushService): void {
     this.pushService = service;
@@ -449,6 +462,17 @@ export class AgentService {
 
   isProcessing(): boolean {
     return queryQueue.isProcessing;
+  }
+
+  /**
+   * Mark a thread as having a pending /clear. Called by commands.ts
+   * handleClear after the DB session-pointer reset. The next interactive
+   * turn on this thread will start fresh AND drain the flag; any
+   * autonomous turns that fire before that interactive turn will skip
+   * the session-pointer write so they do not consume the reserved slot.
+   */
+  markThreadSessionClearPending(threadId: string): void {
+    this.clearPendingForThread.add(threadId);
   }
 
   getQueueDepth(): number {
@@ -1017,32 +1041,60 @@ export class AgentService {
       if (sessionId && !isPulseOrientation) {
         const previousSessionId = thread.current_session_id;
         const now = new Date().toISOString();
+        const clearPending = this.clearPendingForThread.has(threadId);
+        const skipForClearPending = clearPending && isAutonomous;
 
-        // End the previous session record (if tracked)
-        if (previousSessionId && previousSessionId !== sessionId) {
-          try {
-            endSessionRecord({ sessionId: previousSessionId, endedAt: now, endReason: 'resumed' });
-          } catch { /* Previous session may not have a record yet */ }
-        }
+        if (skipForClearPending) {
+          // /clear reserved the next interactive turn as the fresh-session
+          // starter. This autonomous turn must not consume that slot —
+          // skip ALL session_history bookkeeping for this turn:
+          //   - Don't endSessionRecord the previous session from the turn
+          //     snapshot; /clear already ended and nulled the thread
+          //     pointer.
+          //   - Don't createSessionRecord for this autonomous session.
+          //     If we created and immediately closed it, the row's
+          //     [started_at, ended_at] would both equal `now` (this finally
+          //     block runs BEFORE createMessage below) and wouldn't cover
+          //     the actual companion message's createdAt. It would also
+          //     risk closing someone else's row on a UNIQUE collision via
+          //     endSessionRecord({sessionId}). Cleaner to never create it.
+          //   - Don't updateThreadSession (the actual /clear reservation
+          //     stays intact).
+          // The autonomous output still persists via createMessage below;
+          // the transcript is intact. Only session_history bookkeeping is
+          // skipped.
+          console.log(`[Session] autonomous session skipped after /clear for thread "${thread.name}"`);
+        } else {
+          // End the previous session record (if tracked)
+          if (previousSessionId && previousSessionId !== sessionId) {
+            try {
+              endSessionRecord({ sessionId: previousSessionId, endedAt: now, endReason: 'resumed' });
+            } catch { /* Previous session may not have a record yet */ }
+          }
 
-        // Create a record for the new session
-        if (sessionId !== previousSessionId) {
-          try {
-            createSessionRecord({
-              id: crypto.randomUUID(),
-              threadId,
-              sessionId,
-              sessionType: (thread.session_type as 'v1' | 'v2') || 'v2',
-              startedAt: now,
-            });
-          } catch (err) {
-            if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
-              console.warn('Failed to create session record:', err);
+          // Create a record for the new session
+          if (sessionId !== previousSessionId) {
+            try {
+              createSessionRecord({
+                id: crypto.randomUUID(),
+                threadId,
+                sessionId,
+                sessionType: (thread.session_type as 'v1' | 'v2') || 'v2',
+                startedAt: now,
+              });
+            } catch (err) {
+              if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
+                console.warn('Failed to create session record:', err);
+              }
             }
           }
-        }
 
-        updateThreadSession(threadId, sessionId);
+          updateThreadSession(threadId, sessionId);
+          if (clearPending) {
+            this.clearPendingForThread.delete(threadId);
+            console.log(`[Session] interactive turn claimed fresh session after /clear for thread "${thread.name}"`);
+          }
+        }
       }
       presenceStatus = 'dormant';
       registry.broadcast({ type: 'presence', status: 'dormant' });
