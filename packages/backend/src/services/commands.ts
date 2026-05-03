@@ -248,6 +248,7 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
   // Global isProcessing is acceptable over-blocking at chip scale; per-thread
   // tracking can refine this later if it ever feels annoying.
   if (services.agent.isProcessing()) {
+    console.log(`[Session] /clear refused for thread "${threadId}" — agent is processing`);
     return {
       type: 'command_result',
       name: 'clear',
@@ -259,6 +260,7 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
 
   const thread = getThread(threadId);
   if (!thread) {
+    console.log(`[Session] /clear refused for thread "${threadId}" — thread not found`);
     return { type: 'command_result', name: 'clear', success: false, error: 'Thread not found', display: 'toast' };
   }
 
@@ -267,14 +269,16 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
   // create a fresh session — first-message orientation re-injects the
   // static context (chat tools, skills, vault). Past chat history stays
   // visible; only the model's session memory is reset.
-  if (thread.current_session_id) {
+  const previousSessionId = thread.current_session_id;
+  if (previousSessionId) {
     endSessionRecord({
-      sessionId: thread.current_session_id,
+      sessionId: previousSessionId,
       endedAt: new Date().toISOString(),
       endReason: 'manual',
     });
   }
   updateThreadSession(threadId, null);
+  console.log(`[Session] cleared (manual) thread "${thread.name}" — previous session: ${previousSessionId ?? '(none)'}`);
 
   return {
     type: 'command_result',
