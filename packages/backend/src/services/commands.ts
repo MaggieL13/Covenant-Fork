@@ -18,6 +18,8 @@ import {
   getActiveTriggers,
   listTriggers,
   renameThread,
+  updateThreadSession,
+  endSessionRecord,
 } from './db.js';
 import { AgentService } from './agent.js';
 import { Orchestrator } from './orchestrator.js';
@@ -31,6 +33,7 @@ import type { ConnectionRegistry } from '../types.js';
 const UI_COMMANDS: CommandRegistryEntry[] = [
   { name: 'new', description: 'Create a new named thread', category: 'builtin', args: '[name]' },
   { name: 'rename', description: 'Rename the current thread', category: 'builtin', args: '[name]' },
+  { name: 'clear', description: 'Start a fresh model session in this thread', category: 'builtin' },
   { name: 'model', description: 'Switch the active model', category: 'builtin', args: '[model]' },
   { name: 'status', description: 'System status — uptime, MCP, queue', category: 'builtin' },
   { name: 'cost', description: 'Token usage for the current session', category: 'builtin' },
@@ -144,6 +147,7 @@ export async function handleCommand(
       switch (name) {
         case 'new': return handleNew(args);
         case 'rename': return handleRename(threadId, args);
+        case 'clear': return handleClear(threadId);
         case 'model': return handleModel(args);
         case 'status': return await handleStatus(services);
         case 'cost': return handleCost(services);
@@ -227,6 +231,38 @@ function handleRename(threadId: string | undefined, args: string | undefined): S
     name: 'rename',
     success: true,
     data: { message: `Renamed "${thread.name}" to "${newName}"` },
+    display: 'toast',
+  };
+}
+
+function handleClear(threadId: string | undefined): ServerMessage {
+  if (!threadId) {
+    return { type: 'command_result', name: 'clear', success: false, error: 'No active thread', display: 'toast' };
+  }
+  const thread = getThread(threadId);
+  if (!thread) {
+    return { type: 'command_result', name: 'clear', success: false, error: 'Thread not found', display: 'toast' };
+  }
+
+  // End the current SDK session record (if any) with end_reason: manual,
+  // then clear the thread's current_session_id. Next user message will
+  // create a fresh session — first-message orientation re-injects the
+  // static context (chat tools, skills, vault). Past chat history stays
+  // visible; only the model's session memory is reset.
+  if (thread.current_session_id) {
+    endSessionRecord({
+      sessionId: thread.current_session_id,
+      endedAt: new Date().toISOString(),
+      endReason: 'manual',
+    });
+  }
+  updateThreadSession(threadId, null);
+
+  return {
+    type: 'command_result',
+    name: 'clear',
+    success: true,
+    data: { message: 'Next reply will start a fresh session in this thread' },
     display: 'toast',
   };
 }
