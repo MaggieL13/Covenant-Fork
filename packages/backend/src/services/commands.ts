@@ -147,7 +147,7 @@ export async function handleCommand(
       switch (name) {
         case 'new': return handleNew(args);
         case 'rename': return handleRename(threadId, args);
-        case 'clear': return handleClear(threadId);
+        case 'clear': return handleClear(threadId, services);
         case 'model': return handleModel(args);
         case 'status': return await handleStatus(services);
         case 'cost': return handleCost(services);
@@ -235,10 +235,28 @@ function handleRename(threadId: string | undefined, args: string | undefined): S
   };
 }
 
-function handleClear(threadId: string | undefined): ServerMessage {
+function handleClear(threadId: string | undefined, services: CommandServices): ServerMessage {
   if (!threadId) {
     return { type: 'command_result', name: 'clear', success: false, error: 'No active thread', display: 'toast' };
   }
+
+  // Block /clear while an agent query is in flight. AgentService._processQuery
+  // captures thread.current_session_id into a local snapshot at the start of
+  // the turn and writes it back in its finally block; if /clear runs mid-turn
+  // it gets silently undone when the query finishes, breaking the toast's
+  // promise. Refuse the command with an action-oriented message instead.
+  // Global isProcessing is acceptable over-blocking at chip scale; per-thread
+  // tracking can refine this later if it ever feels annoying.
+  if (services.agent.isProcessing()) {
+    return {
+      type: 'command_result',
+      name: 'clear',
+      success: false,
+      error: 'A reply is still in progress. Stop generation first, then run /clear.',
+      display: 'toast',
+    };
+  }
+
   const thread = getThread(threadId);
   if (!thread) {
     return { type: 'command_result', name: 'clear', success: false, error: 'Thread not found', display: 'toast' };
