@@ -1041,53 +1041,53 @@ export class AgentService {
       if (sessionId && !isPulseOrientation) {
         const previousSessionId = thread.current_session_id;
         const now = new Date().toISOString();
+        const clearPending = this.clearPendingForThread.has(threadId);
+        const skipForClearPending = clearPending && isAutonomous;
 
-        // End the previous session record (if tracked)
-        if (previousSessionId && previousSessionId !== sessionId) {
-          try {
-            endSessionRecord({ sessionId: previousSessionId, endedAt: now, endReason: 'resumed' });
-          } catch { /* Previous session may not have a record yet */ }
-        }
+        if (skipForClearPending) {
+          // /clear reserved the next interactive turn as the fresh-session
+          // starter. This autonomous turn must not consume that slot —
+          // skip ALL session_history bookkeeping for this turn:
+          //   - Don't endSessionRecord the previous (it was already nulled
+          //     out by /clear, so previousSessionId is null here anyway).
+          //   - Don't createSessionRecord for this autonomous session.
+          //     If we created and immediately closed it, the row's
+          //     [started_at, ended_at] would both equal `now` (this finally
+          //     block runs BEFORE createMessage below) and wouldn't cover
+          //     the actual companion message's createdAt. It would also
+          //     risk closing someone else's row on a UNIQUE collision via
+          //     endSessionRecord({sessionId}). Cleaner to never create it.
+          //   - Don't updateThreadSession (the actual /clear reservation
+          //     stays intact).
+          // The autonomous output still persists via createMessage below;
+          // the transcript is intact. Only session_history bookkeeping is
+          // skipped.
+          console.log(`[Session] autonomous session skipped after /clear for thread "${thread.name}"`);
+        } else {
+          // End the previous session record (if tracked)
+          if (previousSessionId && previousSessionId !== sessionId) {
+            try {
+              endSessionRecord({ sessionId: previousSessionId, endedAt: now, endReason: 'resumed' });
+            } catch { /* Previous session may not have a record yet */ }
+          }
 
-        // Create a record for the new session
-        if (sessionId !== previousSessionId) {
-          try {
-            createSessionRecord({
-              id: crypto.randomUUID(),
-              threadId,
-              sessionId,
-              sessionType: (thread.session_type as 'v1' | 'v2') || 'v2',
-              startedAt: now,
-            });
-          } catch (err) {
-            if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
-              console.warn('Failed to create session record:', err);
+          // Create a record for the new session
+          if (sessionId !== previousSessionId) {
+            try {
+              createSessionRecord({
+                id: crypto.randomUUID(),
+                threadId,
+                sessionId,
+                sessionType: (thread.session_type as 'v1' | 'v2') || 'v2',
+                startedAt: now,
+              });
+            } catch (err) {
+              if (!(err instanceof Error && err.message.includes('UNIQUE'))) {
+                console.warn('Failed to create session record:', err);
+              }
             }
           }
-        }
 
-        // Honor a pending /clear: if the user reserved the next interactive
-        // turn as the fresh-session starter, autonomous turns that complete
-        // before that user message must NOT consume the slot. Only skip the
-        // session-pointer write — the message itself was already persisted
-        // above (createMessage), so the autonomous turn's output stays in
-        // the transcript. The interactive turn that drains the flag DOES
-        // claim the new session normally.
-        const clearPending = this.clearPendingForThread.has(threadId);
-        if (clearPending && isAutonomous) {
-          console.log(`[Session] autonomous session pointer skipped after /clear for thread "${thread.name}"`);
-          // The createSessionRecord call above already wrote a row with
-          // ended_at = NULL. Without closing it here, the autonomous
-          // session would remain "open" in session_history alongside
-          // the next interactive turn's session. semantic-search.ts and
-          // similar lookups that LIMIT 1 across open sessions per thread
-          // would then nondeterministically attach later messages to
-          // the orphan. End it now with reason 'manual' since the
-          // user's /clear is what orphaned it.
-          try {
-            endSessionRecord({ sessionId, endedAt: now, endReason: 'manual' });
-          } catch { /* best-effort — record may have failed to insert above */ }
-        } else {
           updateThreadSession(threadId, sessionId);
           if (clearPending) {
             this.clearPendingForThread.delete(threadId);
