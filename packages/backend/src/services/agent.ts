@@ -1048,8 +1048,9 @@ export class AgentService {
           // /clear reserved the next interactive turn as the fresh-session
           // starter. This autonomous turn must not consume that slot —
           // skip ALL session_history bookkeeping for this turn:
-          //   - Don't endSessionRecord the previous (it was already nulled
-          //     out by /clear, so previousSessionId is null here anyway).
+          //   - Don't endSessionRecord the previous session from the turn
+          //     snapshot; /clear already ended and nulled the thread
+          //     pointer.
           //   - Don't createSessionRecord for this autonomous session.
           //     If we created and immediately closed it, the row's
           //     [started_at, ended_at] would both equal `now` (this finally
