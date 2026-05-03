@@ -107,11 +107,15 @@ Search results include session context when available — which session the mess
 - **Pre-filtering**: `--role`, `--after`, `--before` filters are applied before vector math, cutting the search space
 - **Memory**: Embedding model uses ~100MB RAM when loaded; vector cache uses ~1.5 KB per message
 
-### Known limitation: `--after` / `--before` are ISO-string cutoffs, not local-day ranges
+### Date filter behavior: `--after` / `--before` use local-day boundaries
 
-The date filters currently compare raw `YYYY-MM-DD` strings lexicographically against ISO `created_at` timestamps stored in UTC. That means `--after 2026-03-01` filters as "string-greater-than `2026-03-01`" — effectively a UTC midnight cutoff, not a local-zone calendar-day boundary. A message created at `2026-03-01T02:00:00Z` (which is still 2026-02-28 evening in `America/Asuncion`) will match `--after 2026-03-01` even though it falls on the prior local day.
+The semantic search routes (`POST /api/search-semantic` and the localhost-only equivalent under `/api/internal/search-semantic`) normalize the `after` and `before` filters server-side before comparing them against stored `created_at` timestamps. Behavior depends on the input shape:
 
-For installs whose `identity.timezone` is far enough from UTC for this to matter, results near the boundary will be off by one in either direction. Local-day normalization (parsing `--after` / `--before` against `identity.timezone` and converting to start/end UTC instants before the SQL comparison) is a known follow-up — until then, callers should treat the filters as approximate around midnight or pass an extra day of slack.
+- **Date-only `YYYY-MM-DD`** — interpreted as a local-day range in the configured `identity.timezone`. `after` snaps to the start of that day; `before` snaps to the last millisecond of that day (so `--before 2026-04-21` includes the user's late-evening messages from April 21 local). DST-aware via `moment.tz(...).endOf('day')`.
+- **Full timestamp with explicit `Z` or offset** — parsed as the absolute moment it represents and re-emitted as UTC. No day expansion.
+- **Offsetless date+time** (e.g. `2026-04-21 09:00`) — interpreted as a wall-clock moment in the configured timezone. No day expansion.
+
+Invalid inputs (non-string, empty/whitespace, unparseable, out-of-range) return HTTP 400 with a descriptive message; previously they would silently filter with a bad boundary. The vector-cache comparison itself is unchanged — `m.createdAt > before` is strict, so the last-millisecond `before` correctly excludes messages at exactly start-of-next-day local.
 
 ## Troubleshooting
 
