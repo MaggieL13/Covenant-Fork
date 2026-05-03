@@ -1,6 +1,8 @@
+import moment from 'moment-timezone';
 import { embed } from './embeddings.js';
 import { searchVectors, getCacheStats, type SearchFilter } from './vector-cache.js';
 import { getDb, getEmbeddingCount, getMessageContext } from './db.js';
+import { parseLocalDateTime } from './time.js';
 
 export interface SemanticSearchOptions {
   query: string;
@@ -10,6 +12,89 @@ export interface SemanticSearchOptions {
   before?: string;
   limit?: number;
   context?: number;
+}
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export type NormalizedSemanticSearchDateFilters =
+  | { after?: string; before?: string; error?: undefined }
+  | { error: string };
+
+/**
+ * Normalize the after / before filters supplied to /search-semantic into
+ * UTC ISO strings that align with local-day boundaries in the supplied
+ * timezone. Compensates for the historical bug where date-only inputs
+ * (e.g. "2026-04-21") were compared lexicographically against UTC ISO
+ * timestamps in vector-cache, off-by-one for ~3 hours every night around
+ * local midnight.
+ *
+ * Behavior by input shape:
+ * - Date-only `YYYY-MM-DD` after  → start of that local day
+ * - Date-only `YYYY-MM-DD` before → end of that local day (last
+ *   millisecond, DST-aware via moment.tz endOf('day')). Pairs with the
+ *   strict `m.createdAt > filter.before` comparison in vector-cache.
+ * - Date+time with explicit Z/offset → parsed as an absolute moment
+ *   and re-emitted as UTC ISO (no day expansion).
+ * - Date+time without offset → interpreted as wall-clock in the
+ *   supplied timezone and re-emitted as UTC ISO (no day expansion).
+ *
+ * Type validation is internal: non-string filters return { error }
+ * for the caller to surface as 400. Whitespace-only and unparseable
+ * inputs also return { error } rather than silently filtering with
+ * a bad boundary.
+ */
+/** typeof reports arrays as "object" — distinguish them in error messages. */
+function describeType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+export function normalizeSemanticSearchDateFilters(
+  tz: string,
+  { after, before }: { after?: unknown; before?: unknown },
+): NormalizedSemanticSearchDateFilters {
+  if (after !== undefined && typeof after !== 'string') {
+    return { error: `'after' must be a string, got ${describeType(after)}` };
+  }
+  if (before !== undefined && typeof before !== 'string') {
+    return { error: `'before' must be a string, got ${describeType(before)}` };
+  }
+
+  const result: { after?: string; before?: string } = {};
+
+  if (typeof after === 'string') {
+    const value = after.trim();
+    if (!value) return { error: `'after' is empty or whitespace` };
+    if (DATE_ONLY_RE.test(value)) {
+      const m = moment.tz(value, 'YYYY-MM-DD', true, tz);
+      if (!m.isValid()) return { error: `Invalid 'after' value: ${after}` };
+      result.after = m.startOf('day').toISOString();
+    } else {
+      const d = parseLocalDateTime(tz, value);
+      if (!d) return { error: `Invalid 'after' value: ${after}` };
+      result.after = d.toISOString();
+    }
+  }
+
+  if (typeof before === 'string') {
+    const value = before.trim();
+    if (!value) return { error: `'before' is empty or whitespace` };
+    if (DATE_ONLY_RE.test(value)) {
+      const m = moment.tz(value, 'YYYY-MM-DD', true, tz);
+      if (!m.isValid()) return { error: `Invalid 'before' value: ${before}` };
+      // Last ms of the local day. Pairs with vector-cache's strict
+      // > comparison: a message at exactly start-of-next-day local
+      // is > this bound and correctly excluded.
+      result.before = m.endOf('day').toISOString();
+    } else {
+      const d = parseLocalDateTime(tz, value);
+      if (!d) return { error: `Invalid 'before' value: ${before}` };
+      result.before = d.toISOString();
+    }
+  }
+
+  return result;
 }
 
 export interface SemanticSearchResult {

@@ -749,13 +749,25 @@ router.post('/search-semantic', async (req, res) => {
       res.status(400).json({ error: 'query is required' });
       return;
     }
-    const { performSemanticSearch } = await import('../services/semantic-search.js');
+    const { performSemanticSearch, normalizeSemanticSearchDateFilters } = await import('../services/semantic-search.js');
+
+    // Normalize after / before into UTC ISO strings aligned to local-day
+    // boundaries in the configured timezone. Same helper backs the public
+    // /api/search-semantic route — see services/semantic-search.ts for
+    // the full behavior matrix.
+    const tz = getResonantConfig().identity.timezone;
+    const normalized = normalizeSemanticSearchDateFilters(tz, { after, before });
+    if ('error' in normalized) {
+      res.status(400).json({ error: normalized.error });
+      return;
+    }
+
     const response = await performSemanticSearch({
       query,
       threadId: threadId as string | undefined,
       role: role as string | undefined,
-      after: after as string | undefined,
-      before: before as string | undefined,
+      after: normalized.after,
+      before: normalized.before,
       limit: typeof limit === 'number' ? limit : 10,
       context: typeof context === 'number' ? context : 2,
     });

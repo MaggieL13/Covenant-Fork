@@ -2,7 +2,8 @@ import { Router } from 'express';
 import type { AgentService } from '../services/agent.js';
 import { getRecentAuditEntries } from '../services/audit.js';
 import { searchMessages } from '../services/db.js';
-import { performSemanticSearch } from '../services/semantic-search.js';
+import { performSemanticSearch, normalizeSemanticSearchDateFilters } from '../services/semantic-search.js';
+import { getResonantConfig } from '../config.js';
 
 const router = Router();
 
@@ -51,12 +52,23 @@ router.post('/search-semantic', async (req, res) => {
       return;
     }
 
+    // Normalize after / before into UTC ISO strings aligned to local-day
+    // boundaries in the configured timezone. Compensates for the historical
+    // off-by-one around local midnight where date-only inputs were compared
+    // lex-wise against UTC ISO timestamps in vector-cache.
+    const tz = getResonantConfig().identity.timezone;
+    const normalized = normalizeSemanticSearchDateFilters(tz, { after, before });
+    if ('error' in normalized) {
+      res.status(400).json({ error: normalized.error });
+      return;
+    }
+
     const response = await performSemanticSearch({
       query,
       threadId: threadId as string | undefined,
       role: role as string | undefined,
-      after: after as string | undefined,
-      before: before as string | undefined,
+      after: normalized.after,
+      before: normalized.before,
       limit: typeof limit === 'number' ? limit : 10,
       context: typeof context === 'number' ? context : 2,
     });
