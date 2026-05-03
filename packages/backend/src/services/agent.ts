@@ -438,6 +438,19 @@ function seedMcpStatusIfNeeded(): void {
 
 export class AgentService {
   private pushService: PushService | null = null;
+  // Threads with a pending /clear that should reserve the next interactive
+  // turn as the fresh-session starter. Autonomous turns (watchers,
+  // impulses, scheduled wakes, timer prompts, manual wakes — anything
+  // that runs through processAutonomous outside of pulse mode) that
+  // complete on a thread in this set still persist their message to the
+  // transcript, but they do NOT update thread.current_session_id, which
+  // would otherwise consume the fresh-session slot the user reserved
+  // with /clear. The next user-initiated turn drains the flag.
+  // In-memory by design: backend restart loses the pending state, worst
+  // case is one missed clear-honoring window which the user can /clear
+  // again. Pulse turns are naturally excluded by the existing
+  // !isPulseOrientation guard around the session-persistence block.
+  private clearPendingForThread = new Set<string>();
 
   setPushService(service: PushService): void {
     this.pushService = service;
@@ -449,6 +462,17 @@ export class AgentService {
 
   isProcessing(): boolean {
     return queryQueue.isProcessing;
+  }
+
+  /**
+   * Mark a thread as having a pending /clear. Called by commands.ts
+   * handleClear after the DB session-pointer reset. The next interactive
+   * turn on this thread will start fresh AND drain the flag; any
+   * autonomous turns that fire before that interactive turn will skip
+   * the session-pointer write so they do not consume the reserved slot.
+   */
+  markThreadSessionClearPending(threadId: string): void {
+    this.clearPendingForThread.add(threadId);
   }
 
   getQueueDepth(): number {
@@ -1042,7 +1066,23 @@ export class AgentService {
           }
         }
 
-        updateThreadSession(threadId, sessionId);
+        // Honor a pending /clear: if the user reserved the next interactive
+        // turn as the fresh-session starter, autonomous turns that complete
+        // before that user message must NOT consume the slot. Only skip the
+        // session-pointer write — the message itself was already persisted
+        // above (createMessage), so the autonomous turn's output stays in
+        // the transcript. The interactive turn that drains the flag DOES
+        // claim the new session normally.
+        const clearPending = this.clearPendingForThread.has(threadId);
+        if (clearPending && isAutonomous) {
+          console.log(`[Session] autonomous session pointer skipped after /clear for thread "${thread.name}"`);
+        } else {
+          updateThreadSession(threadId, sessionId);
+          if (clearPending) {
+            this.clearPendingForThread.delete(threadId);
+            console.log(`[Session] interactive turn claimed fresh session after /clear for thread "${thread.name}"`);
+          }
+        }
       }
       presenceStatus = 'dormant';
       registry.broadcast({ type: 'presence', status: 'dormant' });
