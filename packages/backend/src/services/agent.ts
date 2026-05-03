@@ -1076,6 +1076,17 @@ export class AgentService {
         const clearPending = this.clearPendingForThread.has(threadId);
         if (clearPending && isAutonomous) {
           console.log(`[Session] autonomous session pointer skipped after /clear for thread "${thread.name}"`);
+          // The createSessionRecord call above already wrote a row with
+          // ended_at = NULL. Without closing it here, the autonomous
+          // session would remain "open" in session_history alongside
+          // the next interactive turn's session. semantic-search.ts and
+          // similar lookups that LIMIT 1 across open sessions per thread
+          // would then nondeterministically attach later messages to
+          // the orphan. End it now with reason 'manual' since the
+          // user's /clear is what orphaned it.
+          try {
+            endSessionRecord({ sessionId, endedAt: now, endReason: 'manual' });
+          } catch { /* best-effort — record may have failed to insert above */ }
         } else {
           updateThreadSession(threadId, sessionId);
           if (clearPending) {
