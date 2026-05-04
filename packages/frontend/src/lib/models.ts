@@ -1,7 +1,6 @@
-export const MODELS = [
-  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
-  { id: 'claude-opus-4-5', label: 'Opus 4.5' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-  { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5' },
-  { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
-] as const;
+// MODELS — re-exported from the shared model manifest so backend and
+// frontend stay in lockstep. Add new models / min-CC requirements in
+// packages/shared/src/model-manifest.ts; both surfaces pick them up
+// automatically.
+
+export { MODELS, type ModelEntry } from '@resonant/shared';

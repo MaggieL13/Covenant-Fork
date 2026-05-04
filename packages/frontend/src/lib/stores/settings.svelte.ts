@@ -13,6 +13,17 @@ let failsafe = $state<{ enabled: boolean; gentle: number; concerned: number; eme
 let pulse = $state<{ enabled: boolean; frequency: number }>({
   enabled: false, frequency: 15,
 });
+// Runtime health — populated lazily on Settings → System mount via
+// loadRuntimeHealth(). Null until first fetch.
+interface RuntimeHealth {
+  activeRuntimeVersion: string | null;
+  installedRuntimeVersion: string | null;
+  systemCcVersion: string | null;
+  minRequired: { version: string; reason: string } | null;
+  restartRequired: boolean;
+}
+let runtimeHealth = $state<RuntimeHealth | null>(null);
+
 let triggers = $state<TriggerStatus[]>([]);
 let orchestratorTasks = $state<OrchestratorTaskStatus[]>([]);
 let companionName = $state('Companion');
@@ -189,6 +200,51 @@ export async function updatePulse(update: { enabled?: boolean; frequency?: numbe
   }
 }
 
+// Runtime health — fetch the current snapshot from /api/runtime/health.
+// Lazy: called from the Settings → System tab on mount, refresh button,
+// and after a successful SDK update so the installed version reflects
+// the new on-disk value.
+export async function loadRuntimeHealth(): Promise<void> {
+  try {
+    const res = await apiFetch('/api/runtime/health');
+    if (res.ok) {
+      runtimeHealth = await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to load runtime health:', err);
+  }
+}
+
+// Trigger an SDK update. Destructive — modifies package-lock.json and
+// requires a backend restart for the new bundled runtime to load.
+// Returns the parsed response (success + new versions) or an error
+// object with stderr/stdout tails on failure.
+export interface SdkUpdateResult {
+  success: boolean;
+  newInstalledVersion?: string | null;
+  activeVersion?: string | null;
+  restartRequired?: boolean;
+  message?: string;
+  error?: string;
+  stderrTail?: string;
+  stdoutTail?: string;
+}
+
+export async function updateSdk(): Promise<SdkUpdateResult> {
+  try {
+    const res = await apiFetch('/api/runtime/update-sdk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return await res.json();
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 // Called from websocket store when system_status message arrives
 // mcpServers param allows partial update from mcp_status_updated events
 export function setSystemStatus(status: SystemStatus | null, mcpServers?: import('@resonant/shared').McpServerInfo[]): void {
@@ -221,6 +277,7 @@ export function getSystemStatus() { return systemStatus; }
 export function getConfig() { return config; }
 export function getFailsafe() { return failsafe; }
 export function getPulse() { return pulse; }
+export function getRuntimeHealth() { return runtimeHealth; }
 export function getTriggers() { return triggers; }
 export function getOrchestratorTasks() { return orchestratorTasks; }
 export function getCompanionName() { return companionName; }

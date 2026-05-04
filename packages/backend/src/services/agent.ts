@@ -174,18 +174,46 @@ function buildMcpServersForQuery(
 // ---------------------------------------------------------------------------
 // Model resolution — checks DB config, YAML config, env, then defaults
 // ---------------------------------------------------------------------------
-function getConfiguredModel(isAutonomous: boolean): string {
-  const dbKey = isAutonomous ? 'agent.model_autonomous' : 'agent.model';
+
+/** Three independent model-resolution tiers. */
+export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse';
+
+/**
+ * Resolve the configured model ID for a given tier. Honors the cascade
+ * DB config > YAML config > env var > default. Exported so other modules
+ * (services/runtime-health.ts, settings UI surfaces) can ask the same
+ * question without duplicating the cascade logic.
+ *
+ * Tier semantics:
+ * - interactive: chat turns initiated by the user
+ * - autonomous: wakes / timers / watchers / impulses (full-mode autonomous)
+ * - pulse: lightweight heartbeat checks (separate cheap-model tier)
+ */
+export function resolveConfiguredAgentModel(tier: AgentModelTier): string {
+  if (tier === 'pulse') {
+    const dbValue = getDbConfig('agent.model_pulse');
+    if (dbValue) return dbValue;
+    const cfg = getResonantConfig();
+    if (cfg.agent.model_pulse) return cfg.agent.model_pulse;
+    return 'claude-haiku-4-5';
+  }
+
+  const dbKey = tier === 'autonomous' ? 'agent.model_autonomous' : 'agent.model';
   const dbValue = getDbConfig(dbKey);
   if (dbValue) return dbValue;
 
   const cfg = getResonantConfig();
-  const yamlValue = isAutonomous ? cfg.agent.model_autonomous : cfg.agent.model;
+  const yamlValue = tier === 'autonomous' ? cfg.agent.model_autonomous : cfg.agent.model;
   if (yamlValue) return yamlValue;
 
   if (process.env.AGENT_MODEL) return process.env.AGENT_MODEL;
 
   return 'claude-sonnet-4-6';
+}
+
+// Thin wrappers for existing call sites — delegate to the unified resolver.
+function getConfiguredModel(isAutonomous: boolean): string {
+  return resolveConfiguredAgentModel(isAutonomous ? 'autonomous' : 'interactive');
 }
 
 // Pulse runs on its own model tier — heartbeat decisions are extremely
@@ -194,13 +222,7 @@ function getConfiguredModel(isAutonomous: boolean): string {
 // wakes / impulses / watchers / timers) can stay on Sonnet while pulse drops
 // to Haiku without tier-flag gymnastics.
 function getConfiguredPulseModel(): string {
-  const dbValue = getDbConfig('agent.model_pulse');
-  if (dbValue) return dbValue;
-
-  const cfg = getResonantConfig();
-  if (cfg.agent.model_pulse) return cfg.agent.model_pulse;
-
-  return 'claude-haiku-4-5';
+  return resolveConfiguredAgentModel('pulse');
 }
 
 function getConfiguredThinkingEffort(): string {

@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import OrchestratorPanel from '$lib/components/OrchestratorPanel.svelte';
   import SystemStatusPanel from '$lib/components/SystemStatusPanel.svelte';
+  import RuntimeHealthCard from '$lib/components/RuntimeHealthCard.svelte';
   import McpActivityPanel from '$lib/components/McpActivityPanel.svelte';
   import SkillsPanel from '$lib/components/SkillsPanel.svelte';
   import StickerManager from '$lib/components/StickerManager.svelte';
@@ -148,6 +149,7 @@
           {:else if activeTab === 'orchestrator'}
             <OrchestratorPanel tasks={systemStatus?.orchestratorTasks ?? getOrchestratorTasks()} triggers={getTriggers()} />
           {:else if activeTab === 'system'}
+            <RuntimeHealthCard />
             <SystemStatusPanel status={systemStatus} />
           {:else if activeTab === 'mcp'}
             <McpActivityPanel status={systemStatus} />
