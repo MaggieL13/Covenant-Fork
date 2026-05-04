@@ -1,6 +1,7 @@
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { MODEL_MIN_CC } from '@resonant/shared';
 import { PROJECT_ROOT } from '../config.js';
 import { resolveConfiguredAgentModel, type AgentModelTier } from './agent.js';
 
@@ -116,21 +117,13 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/**
- * Models that have a hard minimum Claude Code version requirement. Most
- * models work with any current CC version — only entries here. Mirrors
- * the optional `minClaudeCodeVersion` field on `packages/frontend/src/lib/models.ts`
- * entries. When a new model with a min-version requirement ships, both
- * surfaces need updating.
- *
- * The `opus` family alias is included because it currently resolves to
- * 4.7 server-side and will track future Opus releases — keeping it here
- * means alias-using configurations show the right requirement.
- */
-export const MODEL_MIN_CC = new Map<string, string>([
-  ['claude-opus-4-7', '2.1.111'],
-  ['opus', '2.1.111'],
-]);
+// MODEL_MIN_CC now lives in `packages/shared/src/model-manifest.ts`,
+// derived from the same MODELS list the frontend selector renders.
+// Single source of truth — adding a new model with a min-CC requirement
+// is a one-line edit in shared, picked up automatically by both surfaces.
+// Re-exported here so existing imports of MODEL_MIN_CC from this module
+// continue to work.
+export { MODEL_MIN_CC };
 
 export interface MinRequirement {
   version: string;
