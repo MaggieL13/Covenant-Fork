@@ -54,6 +54,15 @@ export function readClaudeCodeVersionFromSdk(
 
 // Captured once at module load — represents what the running process
 // actually has in memory. Will stay frozen until backend restart.
+//
+// Dev-mode caveat: under tsx watch / nodemon, an SDK update can trigger
+// a module reload mid-install if the watcher catches `node_modules`
+// changes. If the package.json is being atomically rewritten in that
+// instant the read returns null, and ACTIVE_RUNTIME caches that null
+// until the backend is fully restarted. Production `npm run start`
+// doesn't watch, so this stays frozen the way it should. The card
+// surfaces the symptom (Active = "—") clearly enough that the operator
+// knows to restart manually.
 const ACTIVE_RUNTIME = readClaudeCodeVersionFromSdk();
 
 /** Returns the Claude Code version the running backend has loaded. */

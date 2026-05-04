@@ -45,6 +45,12 @@
 
   async function handleRefresh() {
     loading = true;
+    // Clear any stale post-update toast — once the user has refreshed
+    // (typically after restarting the backend), the "SDK updated, restart
+    // to load" banner is misleading because the action it prompted is
+    // either done or no longer relevant. Refresh is the natural moment
+    // to wipe the one-shot result.
+    lastResult = null;
     await loadRuntimeHealth();
     loading = false;
   }
