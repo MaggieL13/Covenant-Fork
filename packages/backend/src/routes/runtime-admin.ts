@@ -1,6 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { PROJECT_ROOT, getResonantConfig } from '../config.js';
 import {
   getRuntimeHealth,
@@ -8,8 +7,9 @@ import {
   getInstalledRuntimeVersion,
 } from '../services/runtime-health.js';
 
-const execFileAsync = promisify(execFile);
 const router = Router();
+const UPDATE_TIMEOUT_MS = 5 * 60_000;
+const TAIL_BYTES = 2000;
 
 // Module-level lock — prevents two concurrent SDK updates from racing.
 // Survives across HTTP requests but NOT across backend restarts (which
@@ -66,30 +66,99 @@ router.post('/update-sdk', async (_req: Request, res: Response) => {
     // Platform-aware npm command — `npm.cmd` on Windows, `npm` elsewhere.
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-    const result = await execFileAsync(
-      npm,
-      ['install', '@anthropic-ai/claude-agent-sdk@latest', '--workspace=packages/backend'],
-      { cwd: PROJECT_ROOT, timeout: 5 * 60_000 },
-    );
+    // Use spawn (not execFile) so npm progress streams to the backend
+    // terminal in real time — running operators can watch the install
+    // tick over instead of staring at a silent "Updating…" spinner.
+    // We still buffer stdout/stderr so the UI response can include the
+    // last 2KB of each on failure (preserves the original diagnostic
+    // value: distinguishes "network failed" vs "permission denied" vs
+    // "lockfile sad" without forcing the user to tail logs).
+    console.log('[Runtime SDK] update started');
 
+    const { stdoutTail, stderrTail, exitCode, timedOut } = await new Promise<{
+      stdoutTail: string;
+      stderrTail: string;
+      exitCode: number | null;
+      timedOut: boolean;
+    }>((resolve, reject) => {
+      const child = spawn(
+        npm,
+        ['install', '@anthropic-ai/claude-agent-sdk@latest', '--workspace=packages/backend'],
+        { cwd: PROJECT_ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+
+      let stdoutBuf = '';
+      let stderrBuf = '';
+      let timedOutFlag = false;
+
+      const timer = setTimeout(() => {
+        timedOutFlag = true;
+        child.kill('SIGKILL');
+      }, UPDATE_TIMEOUT_MS);
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        const s = chunk.toString();
+        stdoutBuf = (stdoutBuf + s).slice(-TAIL_BYTES);
+        process.stdout.write(`[Runtime SDK] ${s}`);
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        const s = chunk.toString();
+        stderrBuf = (stderrBuf + s).slice(-TAIL_BYTES);
+        process.stderr.write(`[Runtime SDK] ${s}`);
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({
+          stdoutTail: stdoutBuf,
+          stderrTail: stderrBuf,
+          exitCode: code,
+          timedOut: timedOutFlag,
+        });
+      });
+    });
+
+    if (timedOut) {
+      console.error(`[Runtime SDK] update timed out after ${UPDATE_TIMEOUT_MS}ms`);
+      res.status(500).json({
+        success: false,
+        error: `npm install timed out after ${UPDATE_TIMEOUT_MS / 1000}s`,
+        stdoutTail,
+        stderrTail,
+      });
+      return;
+    }
+
+    if (exitCode !== 0) {
+      console.error(`[Runtime SDK] update failed (exit ${exitCode})`);
+      res.status(500).json({
+        success: false,
+        error: `npm install exited with code ${exitCode}`,
+        stdoutTail,
+        stderrTail,
+      });
+      return;
+    }
+
+    console.log('[Runtime SDK] update complete — restart required');
     res.json({
       success: true,
       newInstalledVersion: getInstalledRuntimeVersion(),
       activeVersion: getActiveRuntimeVersion(),
       restartRequired: true,
       message: 'SDK updated. Restart the backend for the new bundled runtime to load.',
-      stdoutTail: result.stdout.slice(-2000),
+      stdoutTail,
     });
   } catch (error) {
-    // Surface stderr/stdout tails — distinguishes "network failed" vs
-    // "permission denied" vs "lockfile sad" without making the user
-    // tail logs manually.
-    const err = error as { message?: string; stderr?: string | Buffer; stdout?: string | Buffer };
+    const err = error as { message?: string };
+    console.error('[Runtime SDK] update threw:', err?.message ?? error);
     res.status(500).json({
       success: false,
       error: err?.message ?? String(error),
-      stderrTail: err?.stderr ? String(err.stderr).slice(-2000) : undefined,
-      stdoutTail: err?.stdout ? String(err.stdout).slice(-2000) : undefined,
     });
   } finally {
     updateSdkLock.running = false;
