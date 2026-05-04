@@ -66,6 +66,37 @@ attach the WebSocket upgrade handler → initialize optional gateways
 and background services (Discord, Telegram, voice, orchestrator).
 See `packages/backend/src/server.ts` for the canonical sequence.
 
+### Bundled vs system Claude Code
+
+The agent runtime depends on `@anthropic-ai/claude-agent-sdk`, which
+ships its own Claude Code executable (`cli.js`) and uses it by default.
+This is independent of any `claude` CLI the user may have installed
+system-wide; the backend launches the SDK-bundled runtime, not the
+system one. The two versions drift independently:
+
+- The SDK-bundled runtime updates only when the SDK package is bumped
+  in `packages/backend/package.json` and `npm install` runs.
+- The system Claude Code updates on its own cadence.
+
+Some Anthropic models declare a minimum bundled-runtime requirement
+(e.g. Opus 4.7 needs Claude Code 2.1.111+). Selecting such a model
+without a recent enough bundled runtime fails silently at request
+time. The Settings → System tab includes a Claude Runtime Health
+card that surfaces:
+
+- The active runtime (cached at backend startup; frozen until restart)
+- The installed runtime (current on disk; reflects post-`npm install`
+  state)
+- The system Claude Code version (informational only)
+- The maximum minimum-version requirement across all configured model
+  tiers (`agent.model`, `agent.model_autonomous`, `agent.model_pulse`)
+
+The active-vs-installed split prevents the panel from lying right
+after an SDK update — the running Node process keeps the old SDK
+loaded in memory until the backend restarts. See
+`packages/backend/src/services/runtime-health.ts` for the readers
+and `packages/backend/src/routes/runtime-admin.ts` for the endpoints.
+
 ## Principles
 
 Eight things the code assumes without restating them per-file:
