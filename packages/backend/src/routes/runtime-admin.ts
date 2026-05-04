@@ -18,19 +18,6 @@ const router = Router();
 const updateSdkLock = { running: false };
 
 /**
- * Localhost check that bypasses Express's `trust proxy` setting. Express
- * has `app.set('trust proxy', 1)` (server.ts:72), which means `req.ip`
- * honors the `X-Forwarded-For` header — a remote attacker behind a
- * misconfigured proxy could forge a localhost source IP. For the
- * destructive endpoint's password-optional fallback, we use the actual
- * TCP-level peer address instead, which can't be spoofed via headers.
- */
-function isDirectLocalhost(req: Request): boolean {
-  const addr = req.socket.remoteAddress || '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
-}
-
-/**
  * Read-only health snapshot. Active runtime (cached at module load),
  * installed runtime (fresh from disk), system Claude Code, computed
  * minimum requirement across all configured tiers, restart-required flag.
@@ -49,23 +36,22 @@ router.get('/health', (_req: Request, res: Response) => {
  * in the repo root. Modifies `package-lock.json` and possibly
  * `packages/backend/package.json`. Backend restart required after.
  *
- * Auth gating:
- * - If `auth.password` is configured in resonant.yaml, the existing
- *   authMiddleware in api.ts has already validated the session by the
- *   time we get here.
- * - If `auth.password` is empty (passwordless mode), require the request
- *   to come from a direct localhost connection. Without this fallback,
- *   any network-reachable client could trigger an `npm install` on a
- *   passwordless deployment — a real risk for VPS installs where the
- *   operator forgot to configure a password.
+ * Auth gating: requires `auth.password` to be configured in resonant.yaml.
+ * The existing authMiddleware in api.ts validates the session before this
+ * handler runs. We deliberately do NOT fall back to a "direct localhost"
+ * check in passwordless mode: when the backend sits behind a same-host
+ * reverse proxy (e.g. nginx forwarding from a public interface to
+ * 127.0.0.1), the TCP peer is always loopback, so any localhost-based
+ * fallback would expose this destructive endpoint to the public internet.
+ * Setting a password is the only safe gate here.
  *
  * Concurrency: in-memory lock prevents two simultaneous updates.
  */
-router.post('/update-sdk', async (req: Request, res: Response) => {
+router.post('/update-sdk', async (_req: Request, res: Response) => {
   const cfg = getResonantConfig();
-  if (!cfg.auth.password && !isDirectLocalhost(req)) {
+  if (!cfg.auth.password) {
     res.status(403).json({
-      error: 'SDK update requires either an auth password or a direct localhost connection. Set auth.password in resonant.yaml, or run this from the same host.',
+      error: 'Set auth.password in resonant.yaml before using in-app SDK updates. Passwordless deployments cannot trigger destructive runtime changes (a same-host reverse proxy would otherwise make this endpoint publicly reachable).',
     });
     return;
   }
