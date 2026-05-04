@@ -22,6 +22,7 @@ import stickersRouter from './stickers.js';
 import canvasesRouter from './canvases.js';
 import pushAdminRouter from './push-admin.js';
 import voiceRouter from './voice.js';
+import runtimeAdminRouter from './runtime-admin.js';
 
 const router = Router();
 
@@ -65,6 +66,7 @@ router.use('/threads', threadsRouter);
 router.use(markReadHandler);
 router.use('/discord', discordAdminRouter);
 router.use('/orchestrator', orchestratorAdminRouter);
+router.use('/runtime', runtimeAdminRouter);
 router.use(configAdminRouter);
 router.use(filesRouter);
 router.use(searchRouter);
