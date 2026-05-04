@@ -81,10 +81,18 @@ router.post('/update-sdk', async (_req: Request, res: Response) => {
       exitCode: number | null;
       timedOut: boolean;
     }>((resolve, reject) => {
+      // `shell: true` is required on Windows since Node 20.12 / 18.20 to
+      // spawn `.cmd`/`.bat` files (CVE-2024-27980 hardening). Without it
+      // we get `spawn EINVAL`. The args are all static literals — no
+      // user input — so shell expansion isn't a vector here.
       const child = spawn(
         npm,
         ['install', '@anthropic-ai/claude-agent-sdk@latest', '--workspace=packages/backend'],
-        { cwd: PROJECT_ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
+        {
+          cwd: PROJECT_ROOT,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: process.platform === 'win32',
+        },
       );
 
       let stdoutBuf = '';
