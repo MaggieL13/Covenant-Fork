@@ -765,7 +765,15 @@ export class AgentService {
       maxTurns: isPulseOrientation ? 1 : 30,
 
       includePartialMessages: !isPulseOrientation,
-      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive' },
+      // `display: 'summarized'` is required to actually see thinking on Opus
+      // 4.7+ — those models default `display` to `'omitted'`, which causes the
+      // API to return empty `thinking` blocks (only `signature` for continuity).
+      // On 4.6 / Sonnet 4.6 the default is already `'summarized'` so this is
+      // a no-op. Without it, the streaming capture path at the bottom of this
+      // file never sees `thinking_delta` events on 4.7 and the panel logs
+      // "0 thinking block(s)" even when the model thought hard.
+      // Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive', display: 'summarized' },
       effort: effectiveEffort as any,
       tools: isPulseOrientation ? [] : undefined,
       persistSession: isPulseOrientation ? false : undefined,
