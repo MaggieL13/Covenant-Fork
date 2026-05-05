@@ -124,7 +124,7 @@ identity:
 agent:
   model: "claude-sonnet-4-6"          # Interactive messages
   model_autonomous: "claude-sonnet-4-6" # Scheduled wakes
-  thinking_effort: "high"             # max | high | medium | low
+  thinking_effort: "auto"             # auto | max | xhigh | high | medium | low
 
 orchestrator:
   enabled: true                       # Autonomous scheduling
