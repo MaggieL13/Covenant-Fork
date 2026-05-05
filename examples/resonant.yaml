@@ -24,10 +24,17 @@ agent:
   mcp_json_path: "./.mcp.json"     # MCP server configuration
   model: "claude-sonnet-4-6"       # Model for interactive messages
   model_autonomous: "claude-sonnet-4-6"  # Model for scheduled wakes (can be cheaper)
-  thinking_effort: "high"          # max | high | medium | low
-                                   # Controls reasoning depth when the model thinks
-                                   # Thinking is adaptive — the model decides when to think
-                                   # 4.5 models think more eagerly; 4.6 models are selective
+  thinking_effort: "auto"          # auto | max | xhigh | high | medium | low
+                                   # Controls reasoning depth when the model thinks.
+                                   # 'auto' picks per-model: high on Opus/Sonnet, medium on
+                                   # Haiku — a sensible cheap default. 'xhigh' is recommended
+                                   # for deep agentic/coding work; 'max' is frontier reasoning
+                                   # (Opus 4.6+ only, spend freely). Setting an explicit value
+                                   # other than 'auto' is respected verbatim across all models.
+                                   # Thinking is adaptive — the model decides when to think;
+                                   # this knob only sets the depth ceiling.
+                                   # Pulse heartbeats don't use thinking, so this is irrelevant
+                                   # for the pulse tier.
 
 orchestrator:
   enabled: true                    # Enable autonomous scheduling system
