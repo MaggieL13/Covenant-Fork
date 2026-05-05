@@ -31,6 +31,26 @@
   // the backend resolver via the shared `resolveEffortForModel` helper.
   let autoChatResolved = $derived(resolveEffortForModel(model, 'auto'));
   let autoAutonomousResolved = $derived(resolveEffortForModel(modelAutonomous, 'auto'));
+
+  // 'max' is documented as "Opus 4.6+ only" in the SDK type comments.
+  // Picking it globally when the autonomous tier is on Sonnet/Haiku is a
+  // quiet footgun: chat works, but autonomous wakes can fail at the API.
+  // Surface a warning when the configured effort is max AND either
+  // non-pulse model isn't an Opus variant. Match by id substring so
+  // both pinned ids (`claude-opus-4-7`) and the family alias (`opus`)
+  // count as Opus. Sonnet / Haiku / aliases / unknown future models all
+  // trip the warning.
+  function isOpus(id: string): boolean {
+    return /opus/i.test(id);
+  }
+  let maxWarningTargets = $derived(
+    thinkingEffort === 'max'
+      ? [
+          ...(isOpus(model) ? [] : [{ tier: 'chat', label: labelFor(model) }]),
+          ...(isOpus(modelAutonomous) ? [] : [{ tier: 'autonomous', label: labelFor(modelAutonomous) }]),
+        ]
+      : [],
+  );
 </script>
 
 <section class="section">
@@ -92,6 +112,13 @@
         · Autonomous <strong>{labelFor(modelAutonomous)}</strong> → {autoAutonomousResolved}
       </span>
     {/if}
+    {#if maxWarningTargets.length > 0}
+      <span class="field-hint warning-hint">
+        ⚠️ Max may fail on non-Opus models. Your
+        {maxWarningTargets.map((t) => `${t.tier} model is ${t.label}`).join(' and ')}.
+        Switch to Auto, or pick XHigh, to avoid silent failures on those tiers.
+      </span>
+    {/if}
   </div>
 </section>
 
@@ -104,5 +131,13 @@
   .resolved-hint strong {
     color: var(--text);
     font-weight: 500;
+  }
+  .warning-hint {
+    margin-top: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    border-radius: 0.25rem;
+    background: rgba(220, 180, 80, 0.1);
+    color: rgb(200, 160, 80);
+    font-size: 0.75rem;
   }
 </style>
