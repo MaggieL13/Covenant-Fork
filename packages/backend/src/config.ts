@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
+import type { ThinkingEffort } from '@resonant/shared';
 
 // Derive project root from this module's location (packages/backend/src/config.ts → ../../..)
 // This is stable regardless of process.cwd(), which npm workspaces can change.
@@ -30,7 +31,7 @@ export interface ResonantConfig {
     model: string;
     model_autonomous: string;
     model_pulse: string;
-    thinking_effort: string;
+    thinking_effort: ThinkingEffort | string;
     query_timeout_ms: number;
   };
   orchestrator: {
@@ -111,7 +112,9 @@ const DEFAULTS: ResonantConfig = {
     // strengths. Override here or via the `agent.model_pulse` DB config
     // if you want a different model for the pulse path specifically.
     model_pulse: 'claude-haiku-4-5',
-    thinking_effort: 'max',
+    // Default 'auto' picks per-model: high on Opus/Sonnet, medium on Haiku.
+    // Existing user configs with explicit values are respected verbatim.
+    thinking_effort: 'auto' satisfies ThinkingEffort,
     query_timeout_ms: 300000,
   },
   orchestrator: {
