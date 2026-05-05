@@ -1,5 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
+import { resolveEffortForModel } from '@resonant/shared';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -229,7 +230,13 @@ function getConfiguredThinkingEffort(): string {
   const dbValue = getDbConfig('agent.thinking_effort');
   if (dbValue) return dbValue;
   const cfg = getResonantConfig();
-  return cfg.agent.thinking_effort || 'max';
+  // Default changed from 'max' → 'auto' (PR #9). Auto delegates to
+  // resolveEffortForModel() at the call site, picking 'high' on
+  // Opus/Sonnet and 'medium' on Haiku — sensible and cheap by default.
+  // Existing user configs with `agent.thinking_effort: max` keep max
+  // as their explicit intentional choice — auto only applies when the
+  // value is missing/unset, NOT when it's explicitly configured.
+  return cfg.agent.thinking_effort || 'auto';
 }
 
 // /recap slash command intercept. Matches `/recap` with optional trailing
@@ -725,9 +732,16 @@ export class AgentService {
     const model = isPulseOrientation
       ? getConfiguredPulseModel()
       : getConfiguredModel(isAutonomous);
-    const effort = getConfiguredThinkingEffort();
-    const effectiveEffort = isPulseOrientation ? 'low' : effort;
     const tier = isPulseOrientation ? 'pulse' : (isAutonomous ? 'autonomous' : 'interactive');
+    // Effort resolves AFTER model selection so `auto` can pick the right
+    // value per model class (high for Opus/Sonnet, medium for Haiku).
+    // Pulse short-circuits to 'low' because it doesn't actually use
+    // thinking (`thinking: { type: 'disabled' }` below) — the value is
+    // just for the log line.
+    const configuredEffort = getConfiguredThinkingEffort();
+    const effectiveEffort = isPulseOrientation
+      ? 'low'
+      : resolveEffortForModel(model, configuredEffort);
     console.log(`[Agent] Model: ${model} (${tier}, effort: ${effectiveEffort})`);
 
     // Tool-behavior rule prepended to the system prompt. Lives here
@@ -765,7 +779,15 @@ export class AgentService {
       maxTurns: isPulseOrientation ? 1 : 30,
 
       includePartialMessages: !isPulseOrientation,
-      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive' },
+      // `display: 'summarized'` is required to actually see thinking on Opus
+      // 4.7+ — those models default `display` to `'omitted'`, which causes the
+      // API to return empty `thinking` blocks (only `signature` for continuity).
+      // On 4.6 / Sonnet 4.6 the default is already `'summarized'` so this is
+      // a no-op. Without it, the streaming capture path at the bottom of this
+      // file never sees `thinking_delta` events on 4.7 and the panel logs
+      // "0 thinking block(s)" even when the model thought hard.
+      // Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive', display: 'summarized' },
       effort: effectiveEffort as any,
       tools: isPulseOrientation ? [] : undefined,
       persistSession: isPulseOrientation ? false : undefined,

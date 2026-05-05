@@ -288,6 +288,62 @@ Each digest block extracts:
 
 ---
 
+## Spawning Agents — Model Selection
+
+When the companion spawns subagents via the `Agent` tool, a `model` parameter controls which Claude model handles the work. The parameter accepts either a **family alias** (server-side resolves to "latest in that family") or a **pinned model ID** (locks to a specific version). Pinned IDs are useful when you want the new generation explicitly — family aliases lag the latest pinned by a week or so.
+
+### Available values
+
+**Family aliases** (auto-track latest of each family):
+
+| Alias | Currently resolves to | Min CC | Best for |
+|-------|----------------------|--------|----------|
+| `"sonnet"` | Sonnet 4.6 | — | Research agents, quick scans, parallel scouts — faster, newer |
+| `"opus"` | Opus 4.7 | 2.1.111 | Deep dives, synthesis, complex reasoning — matches main brain |
+| `"haiku"` | Haiku 4.5 | — | Lightweight tasks, summaries (what the Scribe runs on) |
+
+**Pinned model IDs** (stable until you change them):
+
+| ID | Min CC | Notes |
+|----|--------|-------|
+| `"claude-opus-4-7"` | 2.1.111 | Latest Opus generation. Newer reasoning, longer context window. |
+| `"claude-opus-4-6"` | — | Previous Opus. Stable fallback if 4.7 misbehaves. |
+| `"claude-opus-4-5"` | — | Older Opus. |
+| `"claude-sonnet-4-6"` | — | Latest Sonnet. Currently what `"sonnet"` alias points to. |
+| `"claude-sonnet-4-5"` | — | Older Sonnet. |
+| `"claude-haiku-4-5"` | — | Latest Haiku. Currently what `"haiku"` alias points to. |
+
+The "Min CC" column shows the minimum bundled Claude Code runtime required. Settings → System → Claude Runtime Health surfaces the current bundled version and warns if a configured model needs a higher floor than what's loaded.
+
+### Usage
+
+```
+Agent({
+  model: "sonnet",                 // family alias — auto-tracks latest Sonnet
+  description: "...",
+  prompt: "..."
+})
+
+Agent({
+  model: "claude-opus-4-7",        // pinned — locks to Opus 4.7 explicitly
+  description: "...",
+  prompt: "..."
+})
+```
+
+If `model` is omitted, the spawned agent inherits from the parent — see `agent.model` / `agent.model_autonomous` in `resonant.yaml` for the configured tier defaults.
+
+### Practical guidance
+
+- **Use `"sonnet"` for research and discovery agents** — faster output, current generation, good for parallel spawns
+- **Use `"opus"` (or `"claude-opus-4-7"` pinned) when you need top reasoning** — slower but the best at synthesis and architecture work
+- **Pin a specific ID when behavior matters** — family aliases auto-migrate when Anthropic ships a new generation, which can shift the feel of an agent's output unexpectedly
+- **Model versions change over time.** The tables above reflect what was live when this was written. Test with a self-report prompt to confirm what a model resolves to.
+
+> **Discovery note (2026-05-04):** Opus 4.7 became reachable after the bundled Claude Code runtime crossed 2.1.111 (currently 2.1.126). Selecting it before that floor would silently fail at request time — the runtime-health panel surfaces the requirement and offers in-app SDK updates.
+
+---
+
 ## Slash Commands
 
 Type `/` in the chat input to open the CommandPalette. Commands are auto-discovered from installed skills and built-in UI commands.

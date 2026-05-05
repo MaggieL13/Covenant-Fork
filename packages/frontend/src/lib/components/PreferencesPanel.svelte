@@ -39,7 +39,7 @@
   let timezone = $state('');
   let model = $state('');
   let modelAutonomous = $state('');
-  let thinkingEffort = $state('max');
+  let thinkingEffort = $state('auto');
   let orchestratorEnabled = $state(true);
   let voiceEnabled = $state(false);
   let discordEnabled = $state(false);
@@ -113,7 +113,13 @@
       const dbConfig = getConfig();
       model = dbConfig['agent.model'] || prefs!.agent.model;
       modelAutonomous = prefs!.agent.model_autonomous;
-      thinkingEffort = prefs!.agent.thinking_effort || 'max';
+      // ORDER: DB-backed thinking_effort wins over YAML so the dropdown
+      // reflects what the backend actually uses. Mirrors the model field
+      // above (line 113-114) and the backend's getConfiguredThinkingEffort
+      // cascade (DB > YAML > default). Without this, toggling effort via
+      // the dropdown writes to DB but the panel reload reads YAML only,
+      // showing a stale value while the chat is using the new one.
+      thinkingEffort = dbConfig['agent.thinking_effort'] || prefs!.agent.thinking_effort || 'auto';
       orchestratorEnabled = prefs!.orchestrator.enabled;
       voiceEnabled = prefs!.voice.enabled;
       discordEnabled = prefs!.discord.enabled;

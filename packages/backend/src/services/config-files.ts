@@ -80,7 +80,7 @@ export function readPreferences() {
       model: config.agent.model,
       model_autonomous: config.agent.model_autonomous,
       model_pulse: config.agent.model_pulse,
-      thinking_effort: config.agent.thinking_effort || 'max',
+      thinking_effort: config.agent.thinking_effort || 'auto',
     },
     orchestrator: {
       enabled: (parsed as any)?.orchestrator?.enabled ?? config.orchestrator.enabled,

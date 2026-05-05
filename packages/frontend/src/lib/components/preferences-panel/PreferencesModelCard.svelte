@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { resolveEffortForModel } from '@resonant/shared';
+
   let {
     models,
     model,
@@ -16,6 +18,19 @@
     onautonomousmodelchange?: (value: string) => void;
     onthinkingeffortchange?: (value: string) => void;
   }>();
+
+  // Look up the human-readable label for a model id (falls back to the
+  // raw id if the manifest doesn't carry a matching entry — happens for
+  // legacy/exotic configs).
+  function labelFor(id: string): string {
+    return models.find((m: { id: string; label: string }) => m.id === id)?.label ?? id;
+  }
+
+  // When `thinkingEffort === 'auto'`, surface what each tier resolves
+  // to so users can see the concrete value before committing. Mirrors
+  // the backend resolver via the shared `resolveEffortForModel` helper.
+  let autoChatResolved = $derived(resolveEffortForModel(model, 'auto'));
+  let autoAutonomousResolved = $derived(resolveEffortForModel(modelAutonomous, 'auto'));
 </script>
 
 <section class="section">
@@ -60,11 +75,34 @@
       value={thinkingEffort}
       onchange={(event) => onthinkingeffortchange?.((event.currentTarget as HTMLSelectElement).value)}
     >
-      <option value="max">Max — always thinks deeply, no constraints</option>
-      <option value="high">High — almost always thinks (default)</option>
-      <option value="medium">Medium — thinks when needed, skips simple stuff</option>
+      <option value="auto">Auto — picks safely per model (recommended)</option>
+      <option value="max">Max — frontier reasoning, spend freely (Opus 4.6+ only)</option>
+      <option value="xhigh">XHigh — deep agentic/coding work</option>
+      <option value="high">High — solid reasoning</option>
+      <option value="medium">Medium — thinks when needed</option>
       <option value="low">Low — minimal thinking, fastest responses</option>
     </select>
-    <span class="field-hint">How much the model reasons before responding. Higher = smarter but slower</span>
+    <span class="field-hint">
+      Applies to chat and autonomous turns. Pulse heartbeats don't use thinking.
+    </span>
+    {#if thinkingEffort === 'auto'}
+      <span class="field-hint resolved-hint">
+        Auto resolves to:
+        Chat <strong>{labelFor(model)}</strong> → {autoChatResolved}
+        · Autonomous <strong>{labelFor(modelAutonomous)}</strong> → {autoAutonomousResolved}
+      </span>
+    {/if}
   </div>
 </section>
+
+<style>
+  .resolved-hint {
+    margin-top: 0.25rem;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+  .resolved-hint strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+</style>

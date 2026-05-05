@@ -15,7 +15,7 @@
     "db:backup": "tsx src/cli/db-backup.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.63",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
     "@huggingface/transformers": "^3.8.1",
     "@resonant/shared": "*",
     "better-sqlite3": "^11.0.0",
