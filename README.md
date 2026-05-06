@@ -124,7 +124,10 @@ identity:
 agent:
   model: "claude-sonnet-4-6"          # Interactive messages
   model_autonomous: "claude-sonnet-4-6" # Scheduled wakes
-  thinking_effort: "auto"             # auto | max | xhigh | high | medium | low
+  thinking_effort: "auto"             # auto | max | xhigh | high | medium | low (chat tier)
+  # thinking_effort_autonomous: "auto" # Optional override for autonomous tier (wakes, watchers).
+                                       # Unset = inherit chat. Useful when chat is on Opus + Max
+                                       # but autonomous is on Sonnet (which can't accept max).
 
 orchestrator:
   enabled: true                       # Autonomous scheduling
