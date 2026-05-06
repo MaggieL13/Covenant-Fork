@@ -891,7 +891,10 @@ export class AgentService {
       // Abort controller for stop_generation support + safety timeout
       activeAbortController = new AbortController();
       options.abortController = activeAbortController;
-      const timeoutMs = getResonantConfig().agent.query_timeout_ms || 300000;
+      // Fallback matches the config default — see PR #11 / chip #38
+      // for why this bumped from 300s to 1200s (compaction + Opus 4.7
+      // tool-loop turns ran past the old cap).
+      const timeoutMs = getResonantConfig().agent.query_timeout_ms || 1200000;
       safetyTimeout = setTimeout(() => {
         console.warn(`[Agent] Query timed out after ${timeoutMs / 1000}s, aborting`);
         activeAbortController?.abort();
@@ -951,6 +954,15 @@ export class AgentService {
       // context_usage WS event read from. The last successful fetch
       // before the SDK closes the stream wins.
       let pendingContextRefresh = false;
+      // Per-query flag for chip #38 / PR #11 — track whether a compaction
+      // is currently in flight so the AbortError catch below can broadcast
+      // a synthetic completion notice if the abort fires mid-compaction.
+      // Without this, a turn that aborts during compaction never sees the
+      // SDK's compact_boundary message, and the frontend's "Context
+      // compacting" banner stays pinned because the isComplete: true
+      // signal never arrives. Per-query (not module-level) because each
+      // turn runs its own _processQuery scope.
+      let isCompactionInProgress = false;
       const fireContextUsageRefresh = () => {
         if (pendingContextRefresh) return;
         pendingContextRefresh = true;
@@ -1091,6 +1103,7 @@ export class AgentService {
           if (systemMsg.subtype === 'compact_boundary' && systemMsg.compact_metadata) {
             const preTokens = systemMsg.compact_metadata.pre_tokens || contextTokensUsed;
             console.log(`[Compaction] Context compacted. Pre-tokens: ${preTokens}`);
+            isCompactionInProgress = false;  // PR #11: clear flag — boundary completed normally
             registry.broadcast({
               type: 'compaction_notice',
               preTokens,
@@ -1109,6 +1122,7 @@ export class AgentService {
             contextTokensUsed = 0;
           } else if (systemMsg.status === 'compacting') {
             console.log('[Compaction] Compacting in progress...');
+            isCompactionInProgress = true;  // PR #11: set flag — abort path needs to know
           }
         } else if (msgType === 'rate_limit_event') {
           const rle = msg as any;
@@ -1136,6 +1150,23 @@ export class AgentService {
       } catch (abortErr) {
         if (abortErr instanceof AbortError || (abortErr instanceof Error && abortErr.name === 'AbortError')) {
           console.log('[Agent] Generation stopped by user');
+          // PR #11 / chip #38: if compaction was in flight when the abort
+          // fired, the SDK never gets to send compact_boundary, so the
+          // frontend's "Context compacting" banner stays pinned forever.
+          // Broadcast a synthetic completion notice so the banner exits
+          // via the existing 8-second auto-hide path (same way a real
+          // boundary message clears it). Without this the banner is a
+          // zombie until a manual page reload.
+          if (isCompactionInProgress) {
+            console.log('[Compaction] Abort during compaction — clearing banner');
+            registry.broadcast({
+              type: 'compaction_notice',
+              preTokens: contextTokensUsed,
+              message: 'Context compaction interrupted',
+              isComplete: true,
+            });
+            isCompactionInProgress = false;
+          }
           registry.broadcast({ type: 'generation_stopped' });
         } else {
           throw abortErr; // Re-throw non-abort errors to outer catch
