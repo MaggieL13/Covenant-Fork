@@ -944,6 +944,50 @@ export class AgentService {
         });
       }
 
+      // PR #10: fire-and-forget context-usage refresh, called from the
+      // assistant-message handler on each tick. Debounced — at most one
+      // outstanding control request at a time. Each successful fetch
+      // updates the module-level state that /cost, /status, and the
+      // context_usage WS event read from. The last successful fetch
+      // before the SDK closes the stream wins.
+      let pendingContextRefresh = false;
+      const fireContextUsageRefresh = () => {
+        if (pendingContextRefresh) return;
+        pendingContextRefresh = true;
+        result.getContextUsage().then((usage) => {
+          if (
+            usage
+            && typeof usage.totalTokens === 'number'
+            && typeof usage.maxTokens === 'number'
+            && usage.maxTokens > 0
+          ) {
+            contextTokensUsed = usage.totalTokens;
+            contextWindowSize = usage.maxTokens;
+            const percentage = typeof usage.percentage === 'number'
+              ? Math.round(usage.percentage)
+              : Math.round((usage.totalTokens / usage.maxTokens) * 100);
+            console.log(`Context usage: ${contextTokensUsed} / ${contextWindowSize} (${percentage}%) [${usage.model ?? '?'}]`);
+            registry.broadcast({
+              type: 'context_usage',
+              percentage,
+              tokensUsed: contextTokensUsed,
+              contextWindow: contextWindowSize,
+            });
+          }
+        }).catch((err) => {
+          // Defensive: getContextUsage() can fail if the query closed
+          // between our request and the response. Don't blow up; PR #9's
+          // /cost "unknown" fallback covers the user-facing surface when
+          // state stays at 0.
+          console.warn(
+            '[Agent] getContextUsage failed:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }).finally(() => {
+          pendingContextRefresh = false;
+        });
+      };
+
       // Simplified stream loop — hooks handle tool activity, audit, images
       // Inner try/catch for AbortError (stop_generation)
       try {
@@ -984,6 +1028,26 @@ export class AgentService {
         }
 
         if (msgType === 'assistant') {
+          // PR #10: refresh context-usage state on each assistant tick
+          // while the query is still alive. Calling getContextUsage()
+          // from the `result` handler races the SDK's stream-close (it
+          // fires `Query closed before response received`); calling here
+          // succeeds because we're still mid-stream.
+          //
+          // Fire-and-forget — do NOT await. We don't want to delay the
+          // assistant message handling below for a metrics round-trip.
+          // The helper debounces via `pendingContextRefresh` so multiple
+          // assistant ticks in a single turn don't pile up control
+          // requests. Last successful fetch in the turn wins, which is
+          // what the chat-header / /cost surfaces want.
+          //
+          // Pulse turns deliberately excluded — pulse's tiny session
+          // shouldn't bounce the gauge away from the real chat/autonomous
+          // session value.
+          if (!isPulseOrientation) {
+            fireContextUsageRefresh();
+          }
+
           const assistantMsg = msg as any;
           if (assistantMsg.message?.content) {
             for (const block of assistantMsg.message.content) {
@@ -1011,55 +1075,12 @@ export class AgentService {
           }
         } else if (msgType === 'result') {
           const resultMsg = msg as any;
-
-          // PR #10: replace the previous resultMsg.usage / resultMsg.model_usage
-          // parser with the SDK's native getContextUsage() control request.
-          // The old parser hand-summed input+output tokens against an
-          // unreliable context_window field; we now stop doing our own math
-          // and trust the SDK's context-usage total.
-          //
-          // Pulse turns are deliberately excluded — pulse is a tiny "should
-          // I interrupt?" check, and writing its tiny session into the
-          // global contextTokensUsed/contextWindowSize would cause /cost
-          // and a future chat-header pill to bounce away from the real
-          // chat/autonomous session value. Pulse stays invisible for this
-          // surface.
-          if (!isPulseOrientation) {
-            try {
-              const usage = await result.getContextUsage();
-              if (
-                usage
-                && typeof usage.totalTokens === 'number'
-                && typeof usage.maxTokens === 'number'
-                && usage.maxTokens > 0
-              ) {
-                contextTokensUsed = usage.totalTokens;
-                contextWindowSize = usage.maxTokens;
-                const percentage = typeof usage.percentage === 'number'
-                  ? Math.round(usage.percentage)
-                  : Math.round((usage.totalTokens / usage.maxTokens) * 100);
-                console.log(`Context usage: ${contextTokensUsed} / ${contextWindowSize} (${percentage}%) [${usage.model ?? '?'}]`);
-                registry.broadcast({
-                  type: 'context_usage',
-                  percentage,
-                  tokensUsed: contextTokensUsed,
-                  contextWindow: contextWindowSize,
-                });
-              }
-            } catch (err) {
-              // Defensive: getContextUsage() can fail if the query is
-              // mid-teardown or the SDK declines to report on this turn.
-              // We don't blow up the turn over a metrics call — log and
-              // continue. PR #9's `/cost` "unknown" fallback covers the
-              // user-facing surface for this case (contextWindowSize stays
-              // at its previous value or 0; /cost handler treats 0 as
-              // "context window not reported by Claude Code").
-              console.warn(
-                '[Agent] getContextUsage failed:',
-                err instanceof Error ? err.message : String(err),
-              );
-            }
-          }
+          // Context-usage state is populated by the assistant-message
+          // handler via fireContextUsageRefresh() (defined below). The
+          // result message arrives as the SDK closes the stream, so
+          // calling getContextUsage() here races the close — see the
+          // fire-and-forget pattern in the assistant branch for the
+          // working timing.
 
           if (resultMsg.subtype !== 'success') {
             console.error('Agent error:', resultMsg.subtype, resultMsg.errors);
