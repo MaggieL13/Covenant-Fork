@@ -226,16 +226,41 @@ function getConfiguredPulseModel(): string {
   return resolveConfiguredAgentModel('pulse');
 }
 
-function getConfiguredThinkingEffort(): string {
+/**
+ * Get the configured thinking effort value for a given tier.
+ *
+ * Tier resolution rules:
+ * - `'interactive'`: reads `agent.thinking_effort` (DB > YAML > 'auto').
+ *   This is the historical field; semantics are unchanged for users who
+ *   haven't set the autonomous override.
+ * - `'autonomous'`: reads `agent.thinking_effort_autonomous` first
+ *   (DB > YAML), falls back to the global `agent.thinking_effort`
+ *   (DB > YAML > 'auto') when the autonomous override is unset.
+ *   Back-compat: an unset autonomous override means "match chat" —
+ *   identical behavior to before this field existed.
+ * - Pulse never calls this — its query option is `thinking: { type: 'disabled' }`,
+ *   no effort is sent.
+ *
+ * Returns the configured value verbatim. The actual resolution to a
+ * concrete SDK effort level (handling 'auto', validating per model)
+ * happens in `resolveEffortForModel()` at the call site, after the
+ * tier's model has been resolved.
+ */
+function getConfiguredThinkingEffort(tier: 'interactive' | 'autonomous'): string {
+  const cfg = getResonantConfig();
+
+  if (tier === 'autonomous') {
+    // Autonomous-specific override wins if explicitly set.
+    const dbAutoValue = getDbConfig('agent.thinking_effort_autonomous');
+    if (dbAutoValue) return dbAutoValue;
+    const yamlAutoValue = cfg.agent.thinking_effort_autonomous;
+    if (yamlAutoValue) return String(yamlAutoValue);
+    // Fall through to the global value — preserves pre-PR-#10 behavior.
+  }
+
   const dbValue = getDbConfig('agent.thinking_effort');
   if (dbValue) return dbValue;
-  const cfg = getResonantConfig();
-  // Default changed from 'max' → 'auto' (PR #9). Auto delegates to
-  // resolveEffortForModel() at the call site, picking 'high' on
-  // Opus/Sonnet and 'medium' on Haiku — sensible and cheap by default.
-  // Existing user configs with `agent.thinking_effort: max` keep max
-  // as their explicit intentional choice — auto only applies when the
-  // value is missing/unset, NOT when it's explicitly configured.
+  // Default 'auto' — see PR #8/9 commentary above.
   return cfg.agent.thinking_effort || 'auto';
 }
 
@@ -738,7 +763,12 @@ export class AgentService {
     // Pulse short-circuits to 'low' because it doesn't actually use
     // thinking (`thinking: { type: 'disabled' }` below) — the value is
     // just for the log line.
-    const configuredEffort = getConfiguredThinkingEffort();
+    // Tier-aware lookup (PR #10): autonomous reads `thinking_effort_autonomous`
+    // when set, falls back to global `thinking_effort` otherwise. Lets users
+    // run Chat on Opus + Max while Autonomous stays on Sonnet + a valid level.
+    const configuredEffort = isPulseOrientation
+      ? 'low'  // unused; pulse path passes thinking: disabled
+      : getConfiguredThinkingEffort(isAutonomous ? 'autonomous' : 'interactive');
     const effectiveEffort = isPulseOrientation
       ? 'low'
       : resolveEffortForModel(model, configuredEffort);
