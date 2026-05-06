@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { AgentService } from './agent.js';
+import { AgentService, resolveConfiguredAgentModel } from './agent.js';
 import type { PushService } from './push.js';
 import { registry } from './registry.js';
 import {
@@ -759,11 +759,18 @@ export class Orchestrator {
 
   // --- Pulse config ---
 
-  getPulseConfig(): { enabled: boolean; frequency: number } {
-    return { enabled: this.pulseEnabled, frequency: this.pulseFrequency };
+  getPulseConfig(): { enabled: boolean; frequency: number; model: string } {
+    // Pulse model surfaces the same DB > YAML > default cascade as
+    // agent.ts uses at query time, so the Orchestrator panel's pulse
+    // dropdown shows the value that's actually in effect.
+    return {
+      enabled: this.pulseEnabled,
+      frequency: this.pulseFrequency,
+      model: resolveConfiguredAgentModel('pulse'),
+    };
   }
 
-  setPulseConfig(config: { enabled?: boolean; frequency?: number }): void {
+  setPulseConfig(config: { enabled?: boolean; frequency?: number; model?: string }): void {
     if (config.enabled !== undefined) {
       this.pulseEnabled = config.enabled;
       setConfig('pulse.enabled', String(config.enabled));
@@ -788,7 +795,20 @@ export class Orchestrator {
       }
     }
 
-    olog(`Pulse config updated: enabled=${this.pulseEnabled}, frequency=${this.pulseFrequency}m`);
+    // PR #10: pulse model selector. Writes to DB so the agent.ts
+    // resolveConfiguredAgentModel('pulse') cascade picks it up on the
+    // next pulse turn. Empty string clears the override (returns to
+    // YAML/default fallback). Validation happens at the route layer.
+    if (config.model !== undefined) {
+      const trimmed = config.model.trim();
+      if (trimmed) {
+        setConfig('agent.model_pulse', trimmed);
+      } else {
+        deleteConfig('agent.model_pulse');
+      }
+    }
+
+    olog(`Pulse config updated: enabled=${this.pulseEnabled}, frequency=${this.pulseFrequency}m, model=${resolveConfiguredAgentModel('pulse')}`);
   }
 
   // --- Pulse: lightweight awareness check ---
