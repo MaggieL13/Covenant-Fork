@@ -81,6 +81,11 @@ export function readPreferences() {
       model_autonomous: config.agent.model_autonomous,
       model_pulse: config.agent.model_pulse,
       thinking_effort: config.agent.thinking_effort || 'auto',
+      // Optional autonomous-tier override (PR #10). Returned as undefined
+      // when unset so the frontend can distinguish "match chat" from an
+      // explicit value. Falls through to thinking_effort at resolution
+      // time in agent.ts.
+      thinking_effort_autonomous: config.agent.thinking_effort_autonomous,
     },
     orchestrator: {
       enabled: (parsed as any)?.orchestrator?.enabled ?? config.orchestrator.enabled,
@@ -122,6 +127,17 @@ export function savePreferences(updates: Record<string, any>): void {
     if (updates.agent.model_autonomous !== undefined) parsed.agent.model_autonomous = updates.agent.model_autonomous;
     if (updates.agent.model_pulse !== undefined) parsed.agent.model_pulse = updates.agent.model_pulse;
     if (updates.agent.thinking_effort !== undefined) parsed.agent.thinking_effort = updates.agent.thinking_effort;
+    // PR #10: optional autonomous-tier override. Sending null/empty
+    // string clears the field (returns to "match chat" fallback);
+    // sending an effort value sets it.
+    if (updates.agent.thinking_effort_autonomous !== undefined) {
+      const v = updates.agent.thinking_effort_autonomous;
+      if (v === null || v === '') {
+        delete parsed.agent.thinking_effort_autonomous;
+      } else {
+        parsed.agent.thinking_effort_autonomous = v;
+      }
+    }
   }
 
   if (updates.orchestrator) {
