@@ -1012,34 +1012,52 @@ export class AgentService {
         } else if (msgType === 'result') {
           const resultMsg = msg as any;
 
-          // Extract context window usage from result
-          if (resultMsg.usage || resultMsg.model_usage) {
-            const usage = resultMsg.usage || {};
-            const modelUsage = resultMsg.model_usage;
-
-            // Get context window size from model usage if available
-            if (modelUsage) {
-              for (const model of Object.values(modelUsage) as any[]) {
-                if (model?.context_window) {
-                  contextWindowSize = model.context_window;
-                }
-                if (model?.input_tokens) {
-                  contextTokensUsed = model.input_tokens + (model.output_tokens || 0);
-                }
+          // PR #10: replace the previous resultMsg.usage / resultMsg.model_usage
+          // parser with the SDK's native getContextUsage() control request.
+          // The old parser hand-summed input+output tokens against an
+          // unreliable context_window field; we now stop doing our own math
+          // and trust the SDK's context-usage total.
+          //
+          // Pulse turns are deliberately excluded — pulse is a tiny "should
+          // I interrupt?" check, and writing its tiny session into the
+          // global contextTokensUsed/contextWindowSize would cause /cost
+          // and a future chat-header pill to bounce away from the real
+          // chat/autonomous session value. Pulse stays invisible for this
+          // surface.
+          if (!isPulseOrientation) {
+            try {
+              const usage = await result.getContextUsage();
+              if (
+                usage
+                && typeof usage.totalTokens === 'number'
+                && typeof usage.maxTokens === 'number'
+                && usage.maxTokens > 0
+              ) {
+                contextTokensUsed = usage.totalTokens;
+                contextWindowSize = usage.maxTokens;
+                const percentage = typeof usage.percentage === 'number'
+                  ? Math.round(usage.percentage)
+                  : Math.round((usage.totalTokens / usage.maxTokens) * 100);
+                console.log(`Context usage: ${contextTokensUsed} / ${contextWindowSize} (${percentage}%) [${usage.model ?? '?'}]`);
+                registry.broadcast({
+                  type: 'context_usage',
+                  percentage,
+                  tokensUsed: contextTokensUsed,
+                  contextWindow: contextWindowSize,
+                });
               }
-            } else if (usage.input_tokens) {
-              contextTokensUsed = usage.input_tokens + (usage.output_tokens || 0);
-            }
-
-            if (contextWindowSize > 0 && contextTokensUsed > 0) {
-              const percentage = Math.round((contextTokensUsed / contextWindowSize) * 100);
-              console.log(`Context usage: ${contextTokensUsed} / ${contextWindowSize} (${percentage}%)`);
-              registry.broadcast({
-                type: 'context_usage',
-                percentage,
-                tokensUsed: contextTokensUsed,
-                contextWindow: contextWindowSize,
-              });
+            } catch (err) {
+              // Defensive: getContextUsage() can fail if the query is
+              // mid-teardown or the SDK declines to report on this turn.
+              // We don't blow up the turn over a metrics call — log and
+              // continue. PR #9's `/cost` "unknown" fallback covers the
+              // user-facing surface for this case (contextWindowSize stays
+              // at its previous value or 0; /cost handler treats 0 as
+              // "context window not reported by Claude Code").
+              console.warn(
+                '[Agent] getContextUsage failed:',
+                err instanceof Error ? err.message : String(err),
+              );
             }
           }
 
