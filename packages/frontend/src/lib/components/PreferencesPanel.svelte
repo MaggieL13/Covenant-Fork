@@ -11,7 +11,14 @@
 
   interface Preferences {
     identity: { companion_name: string; user_name: string; timezone: string };
-    agent: { model: string; model_autonomous: string; thinking_effort: string };
+    agent: {
+      model: string;
+      model_autonomous: string;
+      thinking_effort: string;
+      // PR #10: optional autonomous-tier override. Undefined when unset
+      // (autonomous tier inherits chat's effort — pre-PR-#10 behavior).
+      thinking_effort_autonomous?: string;
+    };
     orchestrator: { enabled: boolean };
     voice: { enabled: boolean };
     discord: { enabled: boolean };
@@ -40,6 +47,9 @@
   let model = $state('');
   let modelAutonomous = $state('');
   let thinkingEffort = $state('auto');
+  // PR #10: empty string = "match chat tier" (the default, no override).
+  // Any other value = explicit autonomous-tier override.
+  let thinkingEffortAutonomous = $state('');
   let orchestratorEnabled = $state(true);
   let voiceEnabled = $state(false);
   let discordEnabled = $state(false);
@@ -120,6 +130,12 @@
       // the dropdown writes to DB but the panel reload reads YAML only,
       // showing a stale value while the chat is using the new one.
       thinkingEffort = dbConfig['agent.thinking_effort'] || prefs!.agent.thinking_effort || 'auto';
+      // PR #10: autonomous-tier override. Same DB > YAML cascade as the
+      // chat-tier field. Empty string when unset means "match chat tier"
+      // — that's the UI's representation of the back-compat fallback.
+      thinkingEffortAutonomous = dbConfig['agent.thinking_effort_autonomous']
+        || prefs!.agent.thinking_effort_autonomous
+        || '';
       orchestratorEnabled = prefs!.orchestrator.enabled;
       voiceEnabled = prefs!.voice.enabled;
       discordEnabled = prefs!.discord.enabled;
@@ -142,7 +158,16 @@
     try {
       const updates: Record<string, unknown> = {
         identity: { companion_name: companionName, user_name: userName, timezone },
-        agent: { model, model_autonomous: modelAutonomous, thinking_effort: thinkingEffort },
+        agent: {
+          model,
+          model_autonomous: modelAutonomous,
+          thinking_effort: thinkingEffort,
+          // PR #10: empty string clears the override at the API layer
+          // (deletes the YAML field, returns to chat-tier fallback).
+          // Truthy value sets it. Sending the field is harmless when
+          // the user hasn't touched the autonomous control.
+          thinking_effort_autonomous: thinkingEffortAutonomous || null,
+        },
         orchestrator: { enabled: orchestratorEnabled },
         voice: { enabled: voiceEnabled },
         discord: { enabled: discordEnabled },
@@ -164,6 +189,9 @@
         // ORDER: sync the settings store only after the API save succeeds so the header reflects persisted state.
         await updateSetting('agent.model', model);
         await updateSetting('agent.thinking_effort', thinkingEffort);
+        // PR #10: keep DB layer in sync with YAML save. Empty string
+        // clears via the same delete-on-empty semantics as the API path.
+        await updateSetting('agent.thinking_effort_autonomous', thinkingEffortAutonomous);
       } else {
         error = data.error || 'Failed to save';
       }
@@ -412,9 +440,11 @@
       {model}
       {modelAutonomous}
       {thinkingEffort}
+      {thinkingEffortAutonomous}
       onmodelchange={(value) => model = value}
       onautonomousmodelchange={(value) => modelAutonomous = value}
       onthinkingeffortchange={(value) => thinkingEffort = value}
+      onautonomouseffortchange={(value) => thinkingEffortAutonomous = value}
     />
 
     <PreferencesAuthCard
