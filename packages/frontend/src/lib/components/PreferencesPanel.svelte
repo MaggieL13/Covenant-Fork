@@ -122,7 +122,11 @@
       // ORDER: the DB-backed model selector must win over YAML so the settings draft matches the chat header pill.
       const dbConfig = getConfig();
       model = dbConfig['agent.model'] || prefs!.agent.model;
-      modelAutonomous = prefs!.agent.model_autonomous;
+      // Same DB > YAML cascade for the autonomous model — backend's
+      // resolveConfiguredAgentModel('autonomous') reads DB first, so
+      // skipping it here would let the panel show a stale YAML value
+      // while autonomous wakes use a different model from DB.
+      modelAutonomous = dbConfig['agent.model_autonomous'] || prefs!.agent.model_autonomous;
       // ORDER: DB-backed thinking_effort wins over YAML so the dropdown
       // reflects what the backend actually uses. Mirrors the model field
       // above (line 113-114) and the backend's getConfiguredThinkingEffort
@@ -188,6 +192,11 @@
         newPassword = '';
         // ORDER: sync the settings store only after the API save succeeds so the header reflects persisted state.
         await updateSetting('agent.model', model);
+        // Mirror the chat-model DB sync for autonomous — backend reads
+        // agent.model_autonomous via DB > YAML cascade at query time, so
+        // saving only to YAML would leave the panel disagreeing with what
+        // autonomous wakes actually use whenever a DB override exists.
+        await updateSetting('agent.model_autonomous', modelAutonomous);
         await updateSetting('agent.thinking_effort', thinkingEffort);
         // PR #10: keep DB layer in sync with YAML save. Empty string
         // clears via the same delete-on-empty semantics as the API path.
