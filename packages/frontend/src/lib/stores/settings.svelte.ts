@@ -9,9 +9,11 @@ let failsafe = $state<{ enabled: boolean; gentle: number; concerned: number; eme
 });
 // Pulse defaults mirror the Orchestrator class fields
 // (pulseEnabled = false, pulseFrequency = 15) so the panel reflects
-// reality if the initial /pulse fetch fails.
-let pulse = $state<{ enabled: boolean; frequency: number }>({
-  enabled: false, frequency: 15,
+// reality if the initial /pulse fetch fails. Model defaults to the
+// resonant.yaml DEFAULTS value (claude-haiku-4-5) so the dropdown has
+// something sensible to render before the first fetch lands.
+let pulse = $state<{ enabled: boolean; frequency: number; model: string }>({
+  enabled: false, frequency: 15, model: 'claude-haiku-4-5',
 });
 // Runtime health — populated lazily on Settings → System mount via
 // loadRuntimeHealth(). Null until first fetch.
@@ -77,7 +79,11 @@ export async function loadSettings(): Promise<void> {
 
     if (pulseRes.ok) {
       const data = await pulseRes.json();
-      pulse = { enabled: data.enabled, frequency: data.frequency };
+      pulse = {
+        enabled: data.enabled,
+        frequency: data.frequency,
+        model: data.model || 'claude-haiku-4-5',
+      };
     }
 
     if (triggersRes.ok) {
@@ -182,7 +188,7 @@ export async function updateFailsafe(update: { enabled?: boolean; gentle?: numbe
 }
 
 // Update pulse config
-export async function updatePulse(update: { enabled?: boolean; frequency?: number }): Promise<boolean> {
+export async function updatePulse(update: { enabled?: boolean; frequency?: number; model?: string }): Promise<boolean> {
   try {
     const res = await apiFetch('/api/orchestrator/pulse', {
       method: 'PATCH',
@@ -191,7 +197,11 @@ export async function updatePulse(update: { enabled?: boolean; frequency?: numbe
     });
     if (res.ok) {
       const data = await res.json();
-      pulse = { enabled: data.enabled, frequency: data.frequency };
+      pulse = {
+        enabled: data.enabled,
+        frequency: data.frequency,
+        model: data.model || 'claude-haiku-4-5',
+      };
       return true;
     }
     return false;

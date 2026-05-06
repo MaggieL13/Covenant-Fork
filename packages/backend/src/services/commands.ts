@@ -329,12 +329,18 @@ async function handleStatus(services: CommandServices): Promise<ServerMessage> {
   const connected = mcpServers.filter(s => s.status === 'connected').length;
   const usage = services.agent.getContextUsage();
 
+  const tokenSummary = usage.tokensUsed > 0
+    ? usage.contextWindow > 0
+      ? `${usage.tokensUsed.toLocaleString()}/${usage.contextWindow.toLocaleString()}`
+      : `${usage.tokensUsed.toLocaleString()}/unknown`
+    : 'no session';
+
   const message = [
     `Uptime: ${uptimeH}h ${uptimeM}m`,
     `Mem: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`,
     `Presence: ${services.agent.getPresenceStatus()}`,
     `MCP: ${connected}/${mcpServers.length}`,
-    `Tokens: ${usage.tokensUsed > 0 ? `${usage.tokensUsed.toLocaleString()}/${usage.contextWindow.toLocaleString()}` : 'no session'}`,
+    `Tokens: ${tokenSummary}`,
     `Queue: ${services.agent.getQueueDepth()}`,
     `Tasks: ${orchestratorTasks.length}`,
   ].join(' | ');
@@ -350,6 +356,16 @@ async function handleStatus(services: CommandServices): Promise<ServerMessage> {
 
 function handleCost(services: CommandServices): ServerMessage {
   const usage = services.agent.getContextUsage();
+
+  if (usage.tokensUsed > 0 && usage.contextWindow <= 0) {
+    return {
+      type: 'command_result',
+      name: 'cost',
+      success: true,
+      data: { message: `Tokens: ${usage.tokensUsed.toLocaleString()} used; context window not reported by Claude Code` },
+      display: 'toast',
+    };
+  }
 
   const message = usage.tokensUsed > 0
     ? `Tokens: ${usage.tokensUsed.toLocaleString()} / ${usage.contextWindow.toLocaleString()} (${Math.round((usage.tokensUsed / usage.contextWindow) * 100)}%)`

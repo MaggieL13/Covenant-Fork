@@ -32,6 +32,10 @@ export interface ResonantConfig {
     model_autonomous: string;
     model_pulse: string;
     thinking_effort: ThinkingEffort | string;
+    /** Optional override for autonomous tier (wakes / watchers / scribe / impulses).
+     *  When unset, autonomous tier falls back to the global `thinking_effort` value.
+     *  Pulse never uses thinking, so no pulse-tier counterpart exists. */
+    thinking_effort_autonomous?: ThinkingEffort | string;
     query_timeout_ms: number;
   };
   orchestrator: {

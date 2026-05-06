@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { OrchestratorTaskStatus, TriggerStatus } from '@resonant/shared';
+  import { MODELS } from '$lib/models';
   import {
     toggleTask,
     rescheduleTask,
@@ -80,6 +81,15 @@
     if (Number.isInteger(num) && num >= 5) {
       await updatePulse({ frequency: num });
     }
+  }
+
+  // PR #10: pulse model dropdown change handler. Sends to /api/orchestrator/pulse,
+  // which writes via setConfig('agent.model_pulse', ...) — same DB path the
+  // existing enabled/frequency fields use. Pulse never uses thinking, so
+  // there's no effort knob alongside this.
+  async function handlePulseModel(value: string) {
+    if (!value) return;
+    await updatePulse({ model: value });
   }
 
   // Triggers
@@ -328,7 +338,19 @@
       Lightweight awareness check. Wakes only when idle; stays silent unless something concrete needs attention.
     </p>
     {#if pulse.enabled}
-      <div class="threshold-grid">
+      <div class="threshold-grid pulse-grid">
+        <label class="threshold-label">
+          <span>Model</span>
+          <select
+            class="threshold-input pulse-model-select"
+            value={pulse.model}
+            onchange={(e) => handlePulseModel((e.target as HTMLSelectElement).value)}
+          >
+            {#each MODELS as m}
+              <option value={m.id}>{m.label}</option>
+            {/each}
+          </select>
+        </label>
         <label class="threshold-label">
           <span>Frequency</span>
           <div class="threshold-input-row">
@@ -345,6 +367,11 @@
           </div>
         </label>
       </div>
+      <p class="pulse-hint">
+        Pulse heartbeats don't use thinking. If something needs attention, the
+        model gets a fresh full-context wake handled by the Autonomous tier
+        (configured in Preferences).
+      </p>
     {/if}
   </div>
 
@@ -589,6 +616,22 @@
     width: 5rem;
     font-size: 0.875rem;
     padding: 0.25rem 0.5rem;
+  }
+
+  /* Pulse subgrid: model dropdown needs more horizontal room than the
+     numeric frequency input. Two-column override of the generic
+     threshold-grid for this specific panel section. */
+  .pulse-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .pulse-model-select {
+    width: 100%;
+    min-width: 12rem;
+  }
+  .pulse-hint {
+    margin-top: 0.625rem;
+    color: var(--text-muted);
+    font-size: 0.75rem;
   }
 
   .threshold-unit {

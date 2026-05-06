@@ -129,7 +129,7 @@ router.patch('/pulse', (req, res) => {
       return;
     }
 
-    const { enabled, frequency } = req.body;
+    const { enabled, frequency, model } = req.body;
 
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       res.status(400).json({ error: 'enabled must be a boolean' });
@@ -145,7 +145,17 @@ router.patch('/pulse', (req, res) => {
       return;
     }
 
-    orchestrator.setPulseConfig({ enabled, frequency });
+    // PR #10: pulse model. String only; empty string clears the DB
+    // override and returns to YAML/default. We don't validate against
+    // the model manifest here — the SDK errors on bad model IDs at
+    // query time, and the UI uses the manifest dropdown so users can't
+    // type freeform values through the standard surface.
+    if (model !== undefined && typeof model !== 'string') {
+      res.status(400).json({ error: 'model must be a string' });
+      return;
+    }
+
+    orchestrator.setPulseConfig({ enabled, frequency, model });
     res.json({ success: true, ...orchestrator.getPulseConfig() });
   } catch (error) {
     console.error('Error updating pulse config:', error);
