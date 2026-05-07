@@ -725,6 +725,15 @@ export class AgentService {
     const MAX_RESPONSE_LENGTH = 200_000; // ~50k tokens
     let fullResponse = '';
     let responseTruncated = false;
+    // PR #11 / chip #38: track compaction in-flight from the moment the
+    // PreCompact hook fires (banner-show signal) through the
+    // `compact_boundary` message (banner-hide signal). The flag lives at
+    // this scope (rather than inside the stream-loop block lower down)
+    // so the hookContext below can capture it via the onCompactionStart
+    // callback. Bot review on PR #11 caught the race window: PreCompact
+    // fires earlier than the SDK's `system: compacting` message, so
+    // setting the flag only on the latter could miss aborts in between.
+    let isCompactionInProgress = false;
     const toolInsertions: ToolInsertion[] = [];
     const thinkingBlocks: ThinkingInsertion[] = [];
     let currentThinkingAccum = '';
@@ -743,6 +752,11 @@ export class AgentService {
       platformContext: platformOpts?.platformContext,
       toolInsertions,
       getTextLength: () => fullResponse.length,
+      // PR #11 / chip #38: PreCompact hook calls this the moment it
+      // broadcasts the in-progress banner. Closes the race window where
+      // an abort could fire between the hook and the SDK's first
+      // `system: compacting` message and miss the cleanup.
+      onCompactionStart: () => { isCompactionInProgress = true; },
     };
 
     // First message of this session — include static orientation content (tools, skills, vault)
@@ -954,15 +968,8 @@ export class AgentService {
       // context_usage WS event read from. The last successful fetch
       // before the SDK closes the stream wins.
       let pendingContextRefresh = false;
-      // Per-query flag for chip #38 / PR #11 — track whether a compaction
-      // is currently in flight so the AbortError catch below can broadcast
-      // a synthetic completion notice if the abort fires mid-compaction.
-      // Without this, a turn that aborts during compaction never sees the
-      // SDK's compact_boundary message, and the frontend's "Context
-      // compacting" banner stays pinned because the isComplete: true
-      // signal never arrives. Per-query (not module-level) because each
-      // turn runs its own _processQuery scope.
-      let isCompactionInProgress = false;
+      // (isCompactionInProgress moved earlier in scope so hookContext can
+      // capture it via onCompactionStart — see PR #11 review fix.)
       const fireContextUsageRefresh = () => {
         if (pendingContextRefresh) return;
         pendingContextRefresh = true;
