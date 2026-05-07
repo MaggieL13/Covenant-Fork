@@ -970,6 +970,16 @@ export class AgentService {
       let pendingContextRefresh = false;
       // (isCompactionInProgress moved earlier in scope so hookContext can
       // capture it via onCompactionStart — see PR #11 review fix.)
+      //
+      // PR #12: dedupe by value. Each assistant tick fires a refresh, but
+      // between subagent ticks the prompt context often hasn't grown, so
+      // getContextUsage() returns the same totalTokens repeatedly. Without
+      // dedupe we logged AND broadcast each duplicate, flooding both the
+      // backend terminal and the WS stream. Tracking the last reported
+      // value and skipping unchanged refreshes makes the gauge emit only
+      // when something actually changed — real progress (numbers climbing)
+      // still emits, identical-value redundant ticks stay silent.
+      let lastReportedTokens = -1;
       const fireContextUsageRefresh = () => {
         if (pendingContextRefresh) return;
         pendingContextRefresh = true;
@@ -980,6 +990,10 @@ export class AgentService {
             && typeof usage.maxTokens === 'number'
             && usage.maxTokens > 0
           ) {
+            // Dedupe: skip both log and broadcast when totalTokens hasn't
+            // changed since the last successful refresh.
+            if (usage.totalTokens === lastReportedTokens) return;
+            lastReportedTokens = usage.totalTokens;
             contextTokensUsed = usage.totalTokens;
             contextWindowSize = usage.maxTokens;
             const percentage = typeof usage.percentage === 'number'
@@ -998,10 +1012,17 @@ export class AgentService {
           // between our request and the response. Don't blow up; PR #9's
           // /cost "unknown" fallback covers the user-facing surface when
           // state stays at 0.
-          console.warn(
-            '[Agent] getContextUsage failed:',
-            err instanceof Error ? err.message : String(err),
-          );
+          //
+          // PR #12: the LAST refresh tick on any turn races the SDK's
+          // stream-close — that's not actually a failure, it's the
+          // expected end-of-stream condition. Suppress that specific
+          // message at the log level so the terminal isn't noisy with
+          // a "failure" line on every successful turn. Other failure
+          // reasons (e.g. mid-stream errors) still surface.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/Query closed before response received/i.test(msg)) {
+            console.warn('[Agent] getContextUsage failed:', msg);
+          }
         }).finally(() => {
           pendingContextRefresh = false;
         });
