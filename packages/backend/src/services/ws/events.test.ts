@@ -190,12 +190,14 @@ describe('attachMessageHandler', () => {
     const { deps } = makeDeps();
     attachMessageHandler(ws, deps as any);
 
-    const largeText = JSON.stringify({ type: 'message', content: 'a'.repeat(11 * 1024) });
+    // PR #11 / chip #38: text cap raised 10KB → 100KB. Use 101KB so we
+    // still exceed the cap. Voice cap unchanged at 512KB.
+    const largeText = JSON.stringify({ type: 'message', content: 'a'.repeat(101 * 1024) });
     await ws.trigger(largeText);
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({
       type: 'error',
       code: 'message_too_large',
-      message: 'Message exceeds 10KB limit',
+      message: 'Message exceeds 100KB limit',
     }));
     expect(handleMessageSend).not.toHaveBeenCalled();
 

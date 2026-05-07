@@ -119,7 +119,13 @@ const DEFAULTS: ResonantConfig = {
     // Default 'auto' picks per-model: high on Opus/Sonnet, medium on Haiku.
     // Existing user configs with explicit values are respected verbatim.
     thinking_effort: 'auto' satisfies ThinkingEffort,
-    query_timeout_ms: 300000,
+    // Hard cap for a single agent turn. Bumped 5min → 20min in PR #11
+    // because pre-Opus-4.7-era 5min was getting eaten entirely by
+    // compaction on 1M-context sessions, leaving zero budget for the
+    // model to actually run. 20min lets thorough multi-tool turns
+    // complete while still bounding genuinely runaway sessions. User
+    // can always abort manually with stop_generation.
+    query_timeout_ms: 1200000,
   },
   orchestrator: {
     enabled: true,

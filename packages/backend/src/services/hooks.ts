@@ -96,6 +96,13 @@ export interface HookContext {
   platformContext?: string;
   toolInsertions: ToolInsertion[];
   getTextLength: () => number;
+  /** Called by PreCompact hook the moment compaction is announced to the
+   *  frontend (banner-show signal). Lets agent.ts track the in-flight
+   *  compaction state from the same instant the banner appears, so an
+   *  abort during compaction can broadcast the banner-clear signal even
+   *  if the abort fires before the SDK's `system: compacting` message
+   *  has been processed. PR #11 / chip #38. */
+  onCompactionStart?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -794,6 +801,12 @@ function buildPreCompact(ctx: HookContext): HookCallback {
       message: `Context compacting (trigger: ${hook.trigger})`,
       isComplete: false,
     });
+
+    // PR #11 / chip #38: signal agent.ts that compaction is in flight from
+    // THIS instant — the banner is showing now. The SDK's `system: compacting`
+    // message arrives later; if an abort fires in the gap between this hook
+    // and that message, we'd miss the in-progress window without this hook.
+    ctx.onCompactionStart?.();
 
     const emotionalContext = buildEmotionalContext(ctx.threadId);
     const now = new Date();

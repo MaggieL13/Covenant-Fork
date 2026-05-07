@@ -21,8 +21,12 @@ import { handlePinThread, handleUnpinThread } from './handlers/threads.js';
 import { handleWsCommand } from './handlers/commands.js';
 import { handleMcpReconnect, handleMcpToggle } from './handlers/mcp.js';
 
-const MAX_TEXT_MESSAGE_SIZE = 10 * 1024; // 10KB for text messages
-const MAX_VOICE_MESSAGE_SIZE = 512 * 1024; // 512KB for voice audio chunks
+// 100KB for text messages — bumped from 10KB in PR #11 / chip #38.
+// 10KB clipped long thoughtful messages around the 2,500 word mark; the
+// new cap is ~25,000 words. Voice frames (audio chunks) stay at the
+// existing 512KB — different kind of payload, no reason to bump.
+const MAX_TEXT_MESSAGE_SIZE = 100 * 1024;
+const MAX_VOICE_MESSAGE_SIZE = 512 * 1024;
 
 export interface WsEventDependencies {
   agent: AgentService;
