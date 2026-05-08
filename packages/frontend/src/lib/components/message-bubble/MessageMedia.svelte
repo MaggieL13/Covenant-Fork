@@ -96,14 +96,25 @@
       }
       // Exact-boundary edge case: if a chunk landed precisely on
       // PREVIEW_MAX_BYTES, the loop exited via the while condition
-      // (collected === MAX) without hitting the truncation branch — but
-      // the file might still have more bytes the server is waiting to
-      // send. If the stream didn't end naturally and we hit the cap,
-      // mark truncated and cancel so a non-Range-respecting server
-      // doesn't keep streaming in the background.
+      // (collected === MAX) without hitting the truncation branch and
+      // without observing a `done` read. We don't yet know whether
+      // more data is waiting — could be a file that's *exactly* 1MB
+      // (fully previewed, no truncation note needed) or a much bigger
+      // file whose chunks just happened to align with our cap.
+      //
+      // One extra read distinguishes the two:
+      // - `done: true` → file was exactly at cap, complete preview
+      // - `done: false` → there's more data; mark truncated and cancel
+      //   so a non-Range-respecting server doesn't keep streaming in
+      //   the background.
       if (!reachedEnd && collected >= PREVIEW_MAX_BYTES) {
-        truncated = true;
-        await reader.cancel();
+        const peek = await reader.read();
+        if (peek.done) {
+          reachedEnd = true;
+        } else {
+          truncated = true;
+          await reader.cancel();
+        }
       }
       // Flush the decoder's internal buffer (handles partial multibyte
       // sequences from the last chunk).
