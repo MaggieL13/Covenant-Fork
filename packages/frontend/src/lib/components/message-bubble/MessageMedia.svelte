@@ -77,19 +77,33 @@
       const chunks: string[] = [];
       let collected = 0;
       let truncated = false;
+      let reachedEnd = false;
       while (collected < PREVIEW_MAX_BYTES) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          reachedEnd = true;
+          break;
+        }
         if (collected + value.length > PREVIEW_MAX_BYTES) {
           const remaining = PREVIEW_MAX_BYTES - collected;
           chunks.push(decoder.decode(value.subarray(0, remaining), { stream: false }));
           truncated = true;
-          // Stop fetching more — the rest of the bytes are wasted work.
           await reader.cancel();
           break;
         }
         chunks.push(decoder.decode(value, { stream: true }));
         collected += value.length;
+      }
+      // Exact-boundary edge case: if a chunk landed precisely on
+      // PREVIEW_MAX_BYTES, the loop exited via the while condition
+      // (collected === MAX) without hitting the truncation branch — but
+      // the file might still have more bytes the server is waiting to
+      // send. If the stream didn't end naturally and we hit the cap,
+      // mark truncated and cancel so a non-Range-respecting server
+      // doesn't keep streaming in the background.
+      if (!reachedEnd && collected >= PREVIEW_MAX_BYTES) {
+        truncated = true;
+        await reader.cancel();
       }
       // Flush the decoder's internal buffer (handles partial multibyte
       // sequences from the last chunk).
