@@ -45,15 +45,58 @@
     previewLoading = true;
     previewError = null;
     try {
-      const res = await fetch(content, { credentials: 'include' });
-      if (!res.ok) {
+      // Two-layer cap so a multi-megabyte log file never gets fully
+      // materialized in browser memory just to be sliced and discarded:
+      //
+      // 1. HTTP Range header asks the server for only the first 1MB.
+      //    Express's res.sendFile() honors Range natively (returns 206
+      //    Partial Content for the byte range, or 200 with full body if
+      //    the route happens to not support Range — we don't get stuck
+      //    either way).
+      // 2. Streaming reader caps client-side at 1MB regardless of how
+      //    much the server actually sent. If a server didn't honor Range
+      //    and returned a huge body, we cancel the read after 1MB and
+      //    let the rest of the bytes go to the network garbage collector
+      //    instead of decoding them into a JS string.
+      const res = await fetch(content, {
+        credentials: 'include',
+        headers: { Range: `bytes=0-${PREVIEW_MAX_BYTES - 1}` },
+      });
+      // 206 Partial Content (Range honored) and 200 OK both fine; only
+      // bail on real failures.
+      if (!res.ok && res.status !== 206) {
         previewError = `Couldn't load preview (${res.status})`;
         return;
       }
-      const text = await res.text();
-      previewText = text.length > PREVIEW_MAX_BYTES
-        ? text.slice(0, PREVIEW_MAX_BYTES) + '\n\n… (preview truncated — download for full file)'
-        : text;
+      if (!res.body) {
+        previewError = 'Preview unavailable (no response body)';
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      const chunks: string[] = [];
+      let collected = 0;
+      let truncated = false;
+      while (collected < PREVIEW_MAX_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (collected + value.length > PREVIEW_MAX_BYTES) {
+          const remaining = PREVIEW_MAX_BYTES - collected;
+          chunks.push(decoder.decode(value.subarray(0, remaining), { stream: false }));
+          truncated = true;
+          // Stop fetching more — the rest of the bytes are wasted work.
+          await reader.cancel();
+          break;
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+        collected += value.length;
+      }
+      // Flush the decoder's internal buffer (handles partial multibyte
+      // sequences from the last chunk).
+      chunks.push(decoder.decode());
+      previewText = chunks.join('') + (truncated
+        ? '\n\n… (preview truncated — download for full file)'
+        : '');
     } catch (err) {
       previewError = err instanceof Error ? err.message : 'Failed to load preview';
     } finally {
