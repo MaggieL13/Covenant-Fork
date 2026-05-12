@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import crypto from 'crypto';
-import type { CommandRegistryEntry, ServerMessage } from '@resonant/shared';
+import { MODELS, type CommandRegistryEntry, type ServerMessage } from '@resonant/shared';
 import { scanSkills } from './skills.js';
 import {
   getThread,
@@ -39,6 +39,7 @@ const UI_COMMANDS: CommandRegistryEntry[] = [
   { name: 'cost', description: 'Token usage for the current session', category: 'builtin' },
   { name: 'mcp', description: 'MCP server connection status', category: 'builtin' },
   { name: 'triggers', description: 'List active triggers and watchers', category: 'builtin' },
+  { name: 'subagents', description: 'List helper subagent models and saved presets', category: 'builtin' },
   { name: 'retry', description: 'Retry the last message', category: 'builtin' },
   { name: 'wake', description: 'Trigger a manual wake cycle', category: 'builtin', args: '[type]' },
   { name: 'stop', description: 'Stop the current generation', category: 'builtin', clientOnly: true },
@@ -81,7 +82,9 @@ function scanCustomCommands(): { name: string; description: string }[] {
 
     for (const filename of entries) {
       const content = readFileSync(join(commandsDir, filename), 'utf-8');
-      const fm = content.match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+      // CRLF-tolerant — Windows .md files often have \r\n endings; strict
+      // ^---\n would silently miss the frontmatter block and return ''.
+      const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] || '';
       const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim() || filename.replace('.md', '');
       const desc = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() || '';
       commands.push({ name, description: desc });
@@ -142,6 +145,12 @@ export async function handleCommand(
   threadId: string | undefined,
   services: CommandServices,
 ): Promise<ServerMessage> {
+  // Alias normalization: /agents matches Claude Code muscle memory but the
+  // honest name in Resonant is /subagents (those .md files define helper
+  // agents the companion can spawn). Accept both; canonicalize
+  // to /subagents for dispatch and command_result reporting.
+  if (name === 'agents') name = 'subagents';
+
   try {
     if (UI_COMMAND_NAMES.has(name)) {
       switch (name) {
@@ -153,6 +162,7 @@ export async function handleCommand(
         case 'cost': return handleCost(services);
         case 'mcp': return handleMcp(services);
         case 'triggers': return handleTriggers();
+        case 'subagents': return handleSubagents();
         case 'retry': return await handleRetry(threadId, services);
         case 'wake': return await handleWake(args, services);
       }
@@ -409,6 +419,98 @@ function handleTriggers(): ServerMessage {
     success: true,
     data: { message },
     display: 'toast',
+  };
+}
+
+// Lists the helper-agent surface from a user's point of view: available model
+// choices for spawned workers plus named presets discovered in
+// <AGENT_CWD>/.claude/agents/. Read-only; no Agent SDK invocation, no token
+// spend.
+function handleSubagents(): ServerMessage {
+  const config = getResonantConfig();
+  const agentsDir = join(config.agent.cwd, '.claude', 'agents');
+  const lines: string[] = [];
+  const entries: { name: string; description: string; model: string }[] = [];
+  const subagentModels = MODELS.filter((model) => model.id.startsWith('claude-'));
+
+  // CRLF-tolerant frontmatter regex — Windows .md files often have CRLF
+  // endings, and a strict ^---\n match would silently fail to extract any
+  // fields, producing entries with empty everything. Same pattern reused
+  // by scanCustomCommands below.
+  const fmBlock = /^---\r?\n([\s\S]*?)\r?\n---/;
+
+  lines.push('Subagent Models');
+  lines.push('Pinned model IDs are safest for helper agents:');
+  for (const model of subagentModels) {
+    const min = model.minClaudeCodeVersion ? ` (needs Claude Code ${model.minClaudeCodeVersion}+)` : '';
+    lines.push(`  ${model.label.padEnd(10)} ${model.id}${min}`);
+  }
+  lines.push('');
+
+  if (!existsSync(agentsDir)) {
+    lines.push('Named Presets');
+    lines.push('  Saved helper workflows you can reuse by name.');
+    lines.push('  None yet. Ask: "Save this workflow as a subagent preset called plan-reviewer."');
+  } else {
+    let files: string[] = [];
+    try {
+      files = readdirSync(agentsDir).filter(f => f.endsWith('.md'));
+    } catch (err) {
+      return {
+        type: 'command_result',
+        name: 'subagents',
+        success: false,
+        error: `Failed to read agents directory: ${err instanceof Error ? err.message : String(err)}`,
+        display: 'toast',
+      };
+    }
+
+    if (files.length === 0) {
+      lines.push('Named Presets');
+      lines.push('  Saved helper workflows you can reuse by name.');
+      lines.push('  None yet. Ask: "Save this workflow as a subagent preset called plan-reviewer."');
+    } else {
+      for (const filename of files) {
+        try {
+          const content = readFileSync(join(agentsDir, filename), 'utf-8');
+          const fm = content.match(fmBlock)?.[1] || '';
+          const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim() || filename.replace(/\.md$/, '');
+          const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim() || '';
+          const model = fm.match(/^model:\s*(.+)$/m)?.[1]?.trim() || '(inherits parent)';
+          entries.push({ name, description, model });
+        } catch {
+          // Skip unreadable / malformed files
+        }
+      }
+
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+
+      const noun = entries.length === 1 ? 'preset' : 'presets';
+      lines.push(`Named Presets (${entries.length} ${noun})`);
+      lines.push('  Saved helper workflows you can reuse by name.');
+      for (const e of entries) {
+        lines.push(`  ${e.name} -> ${e.model}`);
+        if (e.description) lines.push(`    ${e.description}`);
+      }
+    }
+  }
+
+  lines.push('');
+  lines.push('How To Ask');
+  lines.push('  "Send a Sonnet scout to inspect this bug."');
+  lines.push('  "Use an Opus subagent to review this plan."');
+  lines.push('  "Spawn a code worker for the backend part."');
+  lines.push('  "Save this workflow as a subagent preset called plan-reviewer."');
+
+  const message = lines.join('\n');
+  const summary = `${subagentModels.length} pinned model choices, ${entries.length} named preset${entries.length === 1 ? '' : 's'}`;
+
+  return {
+    type: 'command_result',
+    name: 'subagents',
+    success: true,
+    data: { message, summary, models: subagentModels, subagents: entries },
+    display: 'panel',
   };
 }
 

@@ -12,7 +12,7 @@ import type {
   NotificationHookInput,
   HookInput,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { Reaction } from '@resonant/shared';
+import { MODELS, type Reaction } from '@resonant/shared';
 import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas, getAllStickersWithPacks } from './db.js';
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
@@ -235,6 +235,18 @@ export function summarizeInput(name: string, input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const obj = input as Record<string, unknown>;
 
+  if (name === 'Agent') {
+    const model = typeof obj.model === 'string' && obj.model.trim()
+      ? formatSubagentModelLabel(obj.model)
+      : 'inherits parent';
+    const task = typeof obj.description === 'string' && obj.description.trim()
+      ? obj.description
+      : typeof obj.prompt === 'string'
+        ? obj.prompt
+        : '';
+    return `[${model}] ${task}`.trim().substring(0, 160);
+  }
+
   if (obj.command) {
     const cmd = String(obj.command);
     const scMatch = cmd.match(/sc\.mjs\s+\w+\s+(.*)/);
@@ -251,6 +263,104 @@ export function summarizeInput(name: string, input: unknown): string {
     if (typeof val === 'string' && val.length > 0) return val.substring(0, 100);
   }
   return '';
+}
+
+function latestPinnedModelForAlias(alias: string): string | null {
+  const pinned = MODELS.find((model) => model.id.startsWith(`claude-${alias}-`));
+  return pinned?.id ?? null;
+}
+
+function formatSubagentModelLabel(modelId: string): string {
+  if (modelId.startsWith('claude-')) return modelId;
+  const latestPinned = latestPinnedModelForAlias(modelId);
+  return latestPinned ? `${modelId} alias -> ${latestPinned}` : `${modelId} alias`;
+}
+
+function formatAgentToolOutputForDisplay(response: unknown): string {
+  try {
+    const parsed = (typeof response === 'string'
+      ? JSON.parse(response)
+      : response) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return String(response ?? '');
+
+    const lines: string[] = [];
+    if (typeof parsed.status === 'string') {
+      lines.push(`Status: ${parsed.status}`);
+    }
+
+    if (typeof parsed.prompt === 'string' && parsed.prompt.trim()) {
+      if (lines.length > 0) lines.push('');
+      lines.push('Prompt:');
+      lines.push(parsed.prompt.trim());
+    }
+
+    const content = Array.isArray(parsed.content) ? parsed.content : [];
+    const textBlocks = content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const obj = block as Record<string, unknown>;
+        return obj.type === 'text' && typeof obj.text === 'string' ? obj.text.trim() : '';
+      })
+      .filter(Boolean);
+
+    if (textBlocks.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push('Response:');
+      lines.push(textBlocks.join('\n\n'));
+    }
+
+    const metrics: string[] = [];
+    if (typeof parsed.totalDurationMs === 'number') metrics.push(`${Math.round(parsed.totalDurationMs / 1000)}s`);
+    if (typeof parsed.totalTokens === 'number') metrics.push(`${parsed.totalTokens.toLocaleString()} tokens`);
+    if (metrics.length > 0) {
+      lines.push('');
+      lines.push(`Run: ${metrics.join(' · ')}`);
+    }
+
+    return lines.length > 0
+      ? lines.join('\n')
+      : typeof response === 'string'
+        ? response
+        : extractToolOutput(response, 50000);
+  } catch {
+    return typeof response === 'string' ? response : extractToolOutput(response, 50000);
+  }
+}
+
+function formatAgentFailureForDisplay(error: string, input: unknown): string {
+  if (!input || typeof input !== 'object') return error;
+  const obj = input as Record<string, unknown>;
+  const lines: string[] = [];
+
+  const model = typeof obj.model === 'string' && obj.model.trim()
+    ? formatSubagentModelLabel(obj.model)
+    : 'inherits parent';
+  lines.push(`Model: ${model}`);
+
+  if (typeof obj.agentType === 'string' && obj.agentType.trim()) {
+    lines.push(`Agent type: ${obj.agentType.trim()}`);
+  }
+
+  if (typeof obj.description === 'string' && obj.description.trim()) {
+    lines.push(`Task: ${obj.description.trim()}`);
+  }
+
+  if (typeof obj.prompt === 'string' && obj.prompt.trim()) {
+    lines.push('');
+    lines.push('Prompt:');
+    lines.push(obj.prompt.trim());
+  }
+
+  lines.push('');
+  lines.push('Error:');
+  lines.push(error);
+
+  return lines.join('\n');
+}
+
+function truncateForChatDisplay(output: string, maxChars: number, label: string): string {
+  if (output.length <= maxChars) return output;
+  return `${output.slice(0, maxChars).trimEnd()}\n\n[${label} truncated for chat display. Ask the companion to summarize or retrieve the full result if needed.]`;
 }
 
 const SC_COMMAND_NAMES: Record<string, string> = {
@@ -519,11 +629,11 @@ function buildEmotionalContext(threadId: string): string {
   return summary;
 }
 
-function extractToolOutput(response: unknown): string {
+function extractToolOutput(response: unknown, maxChars = 2000): string {
   if (typeof response === 'string') return response;
   if (!response) return '';
   try {
-    return JSON.stringify(response).substring(0, 2000);
+    return JSON.stringify(response).substring(0, maxChars);
   } catch {
     return String(response);
   }
@@ -622,6 +732,16 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
     const inputSummary = summarizeInput(rawToolName, toolInput);
     const displayName = resolveToolName(rawToolName, toolInput);
 
+    if (rawToolName === 'Agent') {
+      const model = typeof toolInput?.model === 'string' && toolInput.model.trim()
+        ? formatSubagentModelLabel(toolInput.model)
+        : 'inherits parent';
+      const description = typeof toolInput?.description === 'string'
+        ? toolInput.description
+        : inputSummary;
+      console.log(`[Subagent] ${model} - ${String(description).substring(0, 160)}`);
+    }
+
     // Track tool insertion with text offset for interleaved rendering
     const textOffset = ctx.getTextLength();
     ctx.toolInsertions.push({
@@ -695,7 +815,8 @@ function buildPostToolUse(ctx: HookContext): HookCallback {
     const toolName = hook.tool_name;
     const toolInput = hook.tool_input;
     const toolResponse = hook.tool_response;
-    const output = extractToolOutput(toolResponse);
+    const output = extractToolOutput(toolResponse, toolName === 'Agent' ? 50000 : 2000);
+    const displayOutput = toolName === 'Agent' ? formatAgentToolOutputForDisplay(toolResponse) : output;
 
     // Structured audit logging with both input AND output
     logToolUse({
@@ -709,8 +830,14 @@ function buildPostToolUse(ctx: HookContext): HookCallback {
 
     // Update tool insertion with output
     const insertion = ctx.toolInsertions.find(t => t.toolId === hook.tool_use_id);
+    const maxDisplayChars = toolName === 'Agent' ? 50000 : 2000;
+    const chatDisplayOutput = truncateForChatDisplay(
+      displayOutput,
+      maxDisplayChars,
+      toolName === 'Agent' ? 'Subagent output' : 'Tool output',
+    );
     if (insertion) {
-      insertion.output = output.substring(0, 500);
+      insertion.output = chatDisplayOutput;
       insertion.isError = false;
     }
 
@@ -718,7 +845,7 @@ function buildPostToolUse(ctx: HookContext): HookCallback {
     ctx.registry.broadcast({
       type: 'tool_result',
       toolId: hook.tool_use_id,
-      output: output.substring(0, 2000),
+      output: chatDisplayOutput,
       isError: false,
     });
 
@@ -765,9 +892,12 @@ function buildPostToolUseFailure(ctx: HookContext): HookCallback {
     });
 
     // Update tool insertion with error
+    const displayError = hook.tool_name === 'Agent'
+      ? formatAgentFailureForDisplay(hook.error, hook.tool_input)
+      : hook.error;
     const insertion = ctx.toolInsertions.find(t => t.toolId === hook.tool_use_id);
     if (insertion) {
-      insertion.output = hook.error;
+      insertion.output = displayError;
       insertion.isError = true;
     }
 
@@ -775,7 +905,7 @@ function buildPostToolUseFailure(ctx: HookContext): HookCallback {
     ctx.registry.broadcast({
       type: 'tool_result',
       toolId: hook.tool_use_id,
-      output: hook.error,
+      output: displayError,
       isError: true,
     });
 

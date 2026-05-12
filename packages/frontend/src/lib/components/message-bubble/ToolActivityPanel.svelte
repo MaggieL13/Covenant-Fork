@@ -23,10 +23,34 @@
     showTools?: boolean;
     expandedToolIds: Set<string>;
     expandedThinking: Set<number>;
-    formatToolOutput: (raw: string) => string;
+    formatToolOutput: (raw: string, toolName?: string) => string;
     ontoggletooloutput?: (toolId: string) => void;
     ontogglethinking?: (index: number) => void;
   }>();
+
+  let detailView = $state<{ title: string; content: string } | null>(null);
+
+  function openDetail(title: string, content: string | undefined) {
+    if (!content) return;
+    detailView = { title, content };
+  }
+
+  function closeDetail() {
+    detailView = null;
+  }
+
+  function agentInlineDetails(formatted: string): string {
+    const marker = '\nResponse:\n';
+    const idx = formatted.indexOf(marker);
+    return (idx >= 0 ? formatted.slice(0, idx) : formatted).trim();
+  }
+
+  function agentFullResponse(formatted: string): string {
+    const marker = '\nResponse:\n';
+    const idx = formatted.indexOf(marker);
+    if (idx < 0) return formatted;
+    return formatted.slice(idx + marker.length).trim();
+  }
 </script>
 
 {#if segments !== null && segments.length > 0 && !hideInlineTools}
@@ -46,11 +70,19 @@
             <span class="thinking-chevron">{expandedThinking.has(i) ? '▾' : '▸'}</span>
           </button>
           {#if expandedThinking.has(i)}
-            <div class="thinking-content">{seg.content}</div>
+            <div
+              class="thinking-content"
+              role="button"
+              tabindex="0"
+              onclick={(e) => { e.stopPropagation(); openDetail('Thinking', seg.content); }}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail('Thinking', seg.content); } }}
+            >{seg.content}</div>
           {/if}
         </div>
       {:else}
-        <div class="inline-tool" class:error={seg.isError}>
+        {@const isAgentTool = seg.toolName.startsWith('Agent')}
+        {@const formatted = seg.output ? formatToolOutput(seg.output, seg.toolName) : ''}
+        <div class="inline-tool" class:error={seg.isError} class:agent-tool={isAgentTool}>
           <button
             class="inline-tool-header"
             onclick={(e) => { e.stopPropagation(); ontoggletooloutput?.(seg.toolId); }}
@@ -68,8 +100,21 @@
               <span class="tool-spinner"></span>
             {/if}
           </button>
-          {#if expandedToolIds.has(seg.toolId) && seg.output}
-            <pre class="tool-output">{formatToolOutput(seg.output)}</pre>
+          {#if isAgentTool && seg.output}
+            <button class="agent-open-btn" onclick={(e) => { e.stopPropagation(); openDetail(seg.toolName, agentFullResponse(formatted)); }}>
+              Open full
+            </button>
+            {#if expandedToolIds.has(seg.toolId)}
+              <pre class="agent-inline-details">{agentInlineDetails(formatted)}</pre>
+            {/if}
+          {:else if expandedToolIds.has(seg.toolId) && seg.output}
+            <div class="tool-output-wrap">
+              <button class="tool-output-open" onclick={(e) => { e.stopPropagation(); openDetail(seg.toolName, formatted); }}>Open full</button>
+              <pre
+                class="tool-output"
+                class:agent-output={seg.toolName.startsWith('Agent')}
+              >{formatted}</pre>
+            </div>
           {/if}
         </div>
       {/if}
@@ -83,7 +128,9 @@
 {#if showTools && toolEvents.length > 0}
   <div class="tools-panel">
     {#each toolEvents as tool (tool.toolId)}
-      <div class="tool-entry" class:error={tool.isError}>
+      {@const isAgentTool = tool.toolName.startsWith('Agent')}
+      {@const formatted = tool.output ? formatToolOutput(tool.output, tool.toolName) : ''}
+      <div class="tool-entry" class:error={tool.isError} class:agent-tool={isAgentTool}>
         <button
           class="tool-header"
           onclick={(e) => { e.stopPropagation(); ontoggletooloutput?.(tool.toolId); }}
@@ -98,11 +145,44 @@
             <span class="tool-error-badge">error</span>
           {/if}
         </button>
-        {#if expandedToolIds.has(tool.toolId) && tool.output}
-          <pre class="tool-output">{formatToolOutput(tool.output)}</pre>
+        {#if isAgentTool && tool.output}
+          <button class="agent-open-btn" onclick={(e) => { e.stopPropagation(); openDetail(tool.toolName, agentFullResponse(formatted)); }}>
+            Open full
+          </button>
+          {#if expandedToolIds.has(tool.toolId)}
+            <pre class="agent-inline-details">{agentInlineDetails(formatted)}</pre>
+          {/if}
+        {:else if expandedToolIds.has(tool.toolId) && tool.output}
+          <div class="tool-output-wrap">
+            <button class="tool-output-open" onclick={(e) => { e.stopPropagation(); openDetail(tool.toolName, formatted); }}>Open full</button>
+            <pre
+              class="tool-output"
+              class:agent-output={tool.toolName.startsWith('Agent')}
+            >{formatted}</pre>
+          </div>
         {/if}
       </div>
     {/each}
+  </div>
+{/if}
+
+{#if detailView}
+  <div
+    class="detail-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label={detailView.title}
+    onclick={(e) => { if (e.target === e.currentTarget) closeDetail(); }}
+    onkeydown={(e) => { if (e.key === 'Escape') closeDetail(); }}
+    tabindex="-1"
+  >
+    <div class="detail-modal">
+      <header class="detail-header">
+        <h3>{detailView.title}</h3>
+        <button class="detail-close" onclick={closeDetail} aria-label="Close full output">Close</button>
+      </header>
+      <pre class="detail-content">{detailView.content}</pre>
+    </div>
   </div>
 {/if}
 
@@ -125,6 +205,14 @@
     flex-direction: column;
   }
 
+  .tool-entry.agent-tool,
+  .inline-tool.agent-tool {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .tool-entry.error .tool-name {
     color: var(--error, #ef4444);
   }
@@ -142,6 +230,11 @@
     text-align: left;
     border-radius: 0.25rem;
     transition: background 0.15s;
+  }
+
+  .tool-entry.agent-tool .tool-header,
+  .inline-tool.agent-tool .inline-tool-header {
+    min-width: 0;
   }
 
   .tool-header:hover {
@@ -195,6 +288,69 @@
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .tool-output-wrap {
+    position: relative;
+  }
+
+  .tool-output-open {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    z-index: 1;
+    padding: 0.18rem 0.45rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-primary) 82%, var(--accent) 10%);
+    color: var(--accent);
+    font-family: var(--font-body);
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .tool-output-open:hover {
+    background: color-mix(in srgb, var(--bg-primary) 70%, var(--accent) 18%);
+  }
+
+  .agent-open-btn {
+    margin-left: auto;
+    padding: 0.18rem 0.55rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-primary) 80%, var(--accent) 12%);
+    color: var(--accent);
+    font-family: var(--font-body);
+    font-size: 0.68rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .agent-open-btn:hover {
+    background: color-mix(in srgb, var(--bg-primary) 68%, var(--accent) 22%);
+  }
+
+  .agent-inline-details {
+    grid-column: 1 / -1;
+    margin: 0.25rem 0 0;
+    padding: 0.65rem 0.75rem;
+    background: color-mix(in srgb, var(--bg-primary) 88%, var(--accent) 5%);
+    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border-radius: 0.45rem;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .tool-output.agent-output {
+    max-height: 520px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-primary) 82%, var(--accent) 6%);
+    line-height: 1.55;
   }
 
   .interleaved-content {
@@ -300,6 +456,71 @@
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
+    cursor: zoom-in;
+  }
+
+  .detail-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background: rgba(0, 0, 0, 0.65);
+  }
+
+  .detail-modal {
+    width: min(960px, 96vw);
+    max-height: min(760px, 88vh);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+    border-radius: 0.875rem;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .detail-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+  }
+
+  .detail-close {
+    padding: 0.3rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .detail-close:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+
+  .detail-content {
+    margin: 0;
+    padding: 1rem;
+    overflow: auto;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .tool-spinner {
@@ -341,6 +562,10 @@
     .interleaved-content {
       max-width: calc(100vw - 4rem);
       overflow: hidden;
+    }
+
+    .detail-backdrop {
+      padding: 0.75rem;
     }
   }
 </style>
