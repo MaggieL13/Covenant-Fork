@@ -72,7 +72,8 @@ let rewindResult = $state<{ canRewind: boolean; filesChanged?: string[]; inserti
 
 // Command state
 let commandRegistry = $state<CommandRegistryEntry[]>([]);
-let lastCommandResult = $state<{ name: string; success: boolean; data?: Record<string, unknown>; error?: string; display?: string } | null>(null);
+type CommandResultState = Extract<ServerMessage, { type: 'command_result' }>;
+let lastCommandResult = $state<CommandResultState | null>(null);
 let commandResultTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Canvas state
@@ -97,6 +98,23 @@ function showLocalNotification(title: string, body: string): void {
     icon: '/icons/icon-192.png',
     tag: 'resonant-local',
   });
+}
+
+function commandResultText(msg: Extract<ServerMessage, { type: 'command_result' }>): string {
+  if (msg.error) return `/${msg.name}: ${msg.error}`;
+  const data = msg.data as Record<string, unknown> | undefined;
+  return typeof data?.message === 'string' ? data.message : `/${msg.name}: done`;
+}
+
+function commandResultSummary(msg: Extract<ServerMessage, { type: 'command_result' }>): string {
+  if (msg.error) return msg.error;
+  const data = msg.data as Record<string, unknown> | undefined;
+  if (typeof data?.summary === 'string') return data.summary;
+  if (typeof data?.message === 'string') {
+    const oneLine = data.message.replace(/\s+/g, ' ').trim();
+    return oneLine.length > 120 ? `${oneLine.slice(0, 117)}...` : oneLine;
+  }
+  return 'Command complete';
 }
 
 export function getNotificationPermission(): NotificationPermission {
@@ -616,12 +634,15 @@ function handleMessage(event: MessageEvent) {
         break;
 
       case 'command_result':
-        lastCommandResult = { name: msg.name, success: msg.success, data: msg.data, error: msg.error, display: msg.display };
+        lastCommandResult = msg;
+        if (commandResultTimeout) clearTimeout(commandResultTimeout);
+        commandResultTimeout = setTimeout(() => {
+          lastCommandResult = null;
+          commandResultTimeout = null;
+        }, 8000);
         // Inject as a system message in chat
         if (msg.display !== 'silent' && activeThreadId) {
-          const text = msg.error
-            ? `/${msg.name}: ${msg.error}`
-            : (msg.data as Record<string, unknown>)?.message as string || `/${msg.name}: done`;
+          const text = commandResultText(msg);
           const sysMsg: Message = {
             id: `cmd-${Date.now()}`,
             thread_id: activeThreadId,
@@ -630,7 +651,12 @@ function handleMessage(event: MessageEvent) {
             content: text,
             content_type: 'text',
             platform: 'web',
-            metadata: null,
+            metadata: {
+              kind: 'command_result',
+              commandName: msg.name,
+              success: msg.success,
+              data: msg.data ?? null,
+            },
             reply_to_id: null,
             reply_to_preview: null,
             original_content: null,
@@ -1003,7 +1029,17 @@ export function getRewindResult() { return rewindResult; }
 // Command system
 export function getCommandRegistry() { return commandRegistry; }
 export function getLastCommandResult() { return lastCommandResult; }
-export function clearCommandResult() { lastCommandResult = null; }
+export function getCommandResultSummary(result: CommandResultState | null) {
+  if (!result) return '';
+  return commandResultSummary(result);
+}
+export function clearCommandResult() {
+  if (commandResultTimeout) {
+    clearTimeout(commandResultTimeout);
+    commandResultTimeout = null;
+  }
+  lastCommandResult = null;
+}
 export function sendCommand(name: string, args?: string, threadId?: string) {
   send({ type: 'command', name, args, threadId });
 }

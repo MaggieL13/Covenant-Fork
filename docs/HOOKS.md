@@ -112,7 +112,7 @@ The relevant helpers are exported from `services/orchestrator.ts` as `getLastCon
 
 ### System Prompt Prefix (Tool Behavior Rules)
 
-In addition to the per-message orientation context this file describes, the agent's **system prompt** also carries a small static `TOOL_BEHAVIOR_RULES` block prepended ahead of the repo's `CLAUDE.md` persona file. The block lives inline in `services/agent.ts` and currently covers two rules: default Write target (`shared/`) and Voice fallback (chat reply when synthesis is unavailable). See `docs/TOOLS.md` § "Tool-behavior rules" for the canonical documentation; HOOKS.md mentions it here only because contributors editing context-injection logic should know the system prompt has additional behavioral guidance separate from this orientation pipeline.
+In addition to the per-message orientation context this file describes, the agent's **system prompt** also carries a small static `TOOL_BEHAVIOR_RULES` block prepended ahead of the repo's `CLAUDE.md` persona file. The block lives inline in `services/agent.ts` and currently covers default Write target (`shared/`), Voice fallback (chat reply when synthesis is unavailable), and subagent preset behavior. See `docs/TOOLS.md` § "Tool-behavior rules" for the canonical documentation; HOOKS.md mentions it here only because contributors editing context-injection logic should know the system prompt has additional behavioral guidance separate from this orientation pipeline.
 
 ### Platform Metadata Normalization (Telegram)
 

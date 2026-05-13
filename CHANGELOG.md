@@ -2,6 +2,34 @@
 
 All notable changes to Resonant will be documented in this file.
 
+## [3.1.0] — 2026-05-12 (Covenant-Fork)
+
+Subagents as a first-class surface: a `/subagents` command, structured rendering of `Agent` tool activity, and companion-side etiquette for saving reusable preset workflows.
+
+### Added
+- **`/subagents` command** — lists pinned `claude-*` model IDs (with min Claude Code version) and scans `<agent.cwd>/.claude/agents/*.md` for named presets, returning a structured `{ models, subagents }` payload. Read-only, no Agent SDK invocation, no token spend
+- **`/agents` alias** — dispatches to `/subagents` so Claude Code muscle memory works
+- **Named preset workflow** — companion drafts new presets (name, description, pinned model, instructions) and asks before writing `.claude/agents/<name>.md`, per the new `TOOL_BEHAVIOR_RULES` rule
+- **Subagents card in chat** — when a `/subagents` `command_result` system message arrives, `MessageBubble` renders a Models / Named presets / How-to-ask card instead of plain text
+- **Agent tool activity rendering** — `ToolActivityPanel` formats `Agent` outputs as `Status / Prompt / Response / Run: …s · … tokens`, with an "Open full" button that pops a modal viewer
+- **Generic "Open full" modal** — any tool output and any thinking block can now be opened in a full-screen viewer
+- **Auto-clearing command toasts** — `lastCommandResult` clears after 8 s; `getCommandResultSummary()` derives one-line toast text from `data.summary` / `data.message`
+
+### Changed
+- **`TOOL_BEHAVIOR_RULES` extended** — rule #3 (subagent presets) added; the rule string dynamically lists pinned `claude-*` IDs from `MODELS`, so it stays current as model entries change
+- **`docs/TOOLS.md` "Subagents" section** — rewritten with natural-language invocation examples, preset etiquette, and a recommendation to prefer pinned `claude-*` IDs over family aliases for saved helpers
+- **`extractToolOutput()` takes `maxChars`** — `Agent` outputs use a 50 KB cap (vs the 2 KB default) so long subagent responses survive intact through hooks and websocket broadcast
+- **`command_result` system messages carry structured metadata** — `{ kind: 'command_result', commandName, success, data }` so the frontend can pick out the subagents shape (and future commands can do the same)
+- **PreToolUse hook logs subagent spawns** — `[Subagent] <model> - <description>` line for every `Agent` tool call; aliases are resolved to their pinned equivalents in the log label
+
+### Fixed
+- **CRLF-tolerant frontmatter parsing** — `scanCustomCommands` and the new subagents scanner now match `^---\r?\n` instead of `^---\n`. Windows `.md` files with CRLF endings were silently producing entries with empty `name` / `description`
+
+### Security / Privacy
+- **Presets are per-machine** — `.claude/agents/*.md` lives under the already-gitignored `.claude/` directory (alongside `settings.local.json`, `memory/`, and `worktrees/`); presets are never tracked or pushed. To share a preset, hand the file over directly
+
+---
+
 ## [3.0.1] — 2026-04-11 (Covenant-Fork)
 
 Full codebase audit with bug fixes, error handling improvements, and consistency cleanup.

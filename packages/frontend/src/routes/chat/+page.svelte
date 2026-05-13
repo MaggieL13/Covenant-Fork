@@ -42,6 +42,7 @@
     isAgentBusy,
     getRateLimitInfo,
     getLastCommandResult,
+    getCommandResultSummary,
     clearCommandResult,
   } from '$lib/stores/websocket.svelte';
   import { loadSettings, getCompanionName, isCommandCenterEnabled } from '$lib/stores/settings.svelte';
@@ -480,7 +481,7 @@
     {#if commandResult}
       <div class="command-toast" class:error={!commandResult.success}>
         <span class="command-toast-name">/{commandResult.name}</span>
-        <span class="command-toast-msg">{commandResult.error || commandResult.display || 'Command complete'}</span>
+        <span class="command-toast-msg">{getCommandResultSummary(commandResult)}</span>
         <button class="command-toast-close" onclick={clearCommandResult} aria-label="Dismiss command message">Dismiss</button>
       </div>
     {/if}

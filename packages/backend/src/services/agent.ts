@@ -1,6 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { resolveEffortForModel } from '@resonant/shared';
+import { MODELS, resolveEffortForModel } from '@resonant/shared';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -792,6 +792,13 @@ export class AgentService {
     // rather than in CLAUDE.md so the personal persona file stays
     // untouched. Keep this short — long tool rules pull focus from the
     // companion's voice.
+    const subagentModelChoices = MODELS
+      .filter((model) => model.id.startsWith('claude-'))
+      .map((model) => model.minClaudeCodeVersion
+        ? `${model.id} (${model.label}, CC ${model.minClaudeCodeVersion}+)`
+        : `${model.id} (${model.label})`)
+      .join(', ');
+
     const TOOL_BEHAVIOR_RULES = [
       '## Tool behavior',
       '',
@@ -800,6 +807,8 @@ export class AgentService {
       'Repo-root writes are appropriate only for files that genuinely belong at the root (package.json, README, config, test artifacts explicitly requested). When unsure, prefer `shared/`.',
       '',
       'If the Voice tool returns an error indicating it is unavailable / not configured, send your intended message as a normal chat reply instead. Do NOT improvise by creating a canvas, writing a markdown file, or any other persistence-based workaround for what was meant to be a voice note — a regular chat message is the correct fallback.',
+      '',
+      `Subagent presets are reusable helper workflows stored in \`.claude/agents/*.md\`. If the user asks to save a workflow as a subagent preset, usually draft the preset first (name, description, pinned model, helper instructions), suggest workflow-specific improvements, and ask for approval before writing the file. If the user explicitly says to create/save/update it now, create or update the Markdown file there. Prefer these pinned model IDs over aliases: ${subagentModelChoices}. When the user names a specific model version such as Sonnet 4.6 or Opus 4.7, use the matching pinned \`claude-*\` ID rather than the family alias. The \`/subagents\` command lists available pinned model choices and saved presets.`,
     ].join('\n');
 
     const appendText = claudeMdContent

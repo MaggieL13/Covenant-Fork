@@ -23,6 +23,35 @@
   const contentType = $derived(message.content_type || 'text');
   const metadata = $derived(message.metadata as Record<string, unknown> | null);
 
+  type SubagentModel = { id: string; label: string; minClaudeCodeVersion?: string };
+  type SubagentPreset = { name: string; description?: string; model: string };
+  type CommandMetadata = {
+    kind?: string;
+    commandName?: string;
+    success?: boolean;
+    data?: {
+      models?: SubagentModel[];
+      subagents?: SubagentPreset[];
+    } | null;
+  };
+
+  const commandMetadata = $derived(metadata as CommandMetadata | null);
+  // Gate the structured card on success === true. Error results
+  // (e.g. .claude/agents exists but readdirSync throws) still go through
+  // the command_result envelope with the same kind/commandName, but with
+  // success: false and no data — falling into the card branch would
+  // render an empty "Helper agents" panel and hide the actual error
+  // text in message.content. Bail out on failure so the plain-text
+  // fallback (which shows "/subagents: <error>") stays visible.
+  const isSubagentsCommand = $derived(
+    commandMetadata?.kind === 'command_result'
+    && commandMetadata.commandName === 'subagents'
+    && commandMetadata.success === true
+    && Array.isArray(commandMetadata.data?.models)
+  );
+  const subagentModels = $derived(Array.isArray(commandMetadata?.data?.models) ? commandMetadata.data.models : []);
+  const subagentPresets = $derived(Array.isArray(commandMetadata?.data?.subagents) ? commandMetadata.data.subagents : []);
+
   function renderCanvasRefs(text: string): string {
     return text.replace(/<<canvas:([^:]+):(.+?)>>/g, (_match, id, title) => {
       return `<span class="canvas-ref-inline" data-canvas-id="${id}" title="Canvas: ${title}">📄 ${title}</span>`;
@@ -37,12 +66,72 @@
     return renderMarkdown(withRefs);
   });
 
-  function formatToolOutput(raw: string): string {
+  function formatAgentOutput(parsed: unknown): string | null {
+    if (!parsed || typeof parsed !== 'object') return null;
+    const data = parsed as Record<string, unknown>;
+    const lines: string[] = [];
+
+    if (typeof data.status === 'string') {
+      lines.push(`Status: ${data.status}`);
+    }
+
+    if (typeof data.prompt === 'string' && data.prompt.trim()) {
+      if (lines.length > 0) lines.push('');
+      lines.push('Prompt:');
+      lines.push(data.prompt.trim());
+    }
+
+    const content = Array.isArray(data.content) ? data.content : [];
+    const textBlocks = content
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const obj = block as Record<string, unknown>;
+        return obj.type === 'text' && typeof obj.text === 'string' ? obj.text.trim() : '';
+      })
+      .filter(Boolean);
+
+    if (textBlocks.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push('Response:');
+      lines.push(textBlocks.join('\n\n'));
+    }
+
+    const metrics: string[] = [];
+    if (typeof data.totalDurationMs === 'number') metrics.push(`${Math.round(data.totalDurationMs / 1000)}s`);
+    if (typeof data.totalTokens === 'number') metrics.push(`${data.totalTokens.toLocaleString()} tokens`);
+    if (metrics.length > 0) {
+      lines.push('');
+      lines.push(`Run: ${metrics.join(' · ')}`);
+    }
+
+    return lines.length > 0 ? lines.join('\n') : null;
+  }
+
+  function formatToolOutput(raw: string, toolName?: string): string {
     if (!raw) return '';
-    let cleaned = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    const trimmedRaw = raw.trim();
+    if ((trimmedRaw.startsWith('{') || trimmedRaw.startsWith('[')) && trimmedRaw.length > 2) {
+      try {
+        const parsed = JSON.parse(trimmedRaw);
+        if (toolName?.startsWith('Agent')) {
+          const agentOutput = formatAgentOutput(parsed);
+          if (agentOutput) return agentOutput;
+        }
+        return JSON.stringify(parsed, null, 2);
+      } catch {}
+    }
+
+    const cleaned = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     const trimmed = cleaned.trim();
     if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length > 2) {
-      try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch {}
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (toolName?.startsWith('Agent')) {
+          const agentOutput = formatAgentOutput(parsed);
+          if (agentOutput) return agentOutput;
+        }
+        return JSON.stringify(parsed, null, 2);
+      } catch {}
     }
     return cleaned;
   }
@@ -197,7 +286,70 @@
 
 {#if message.role === 'system'}
   <div class="message-system">
-    <span class="system-text">{message.content}</span>
+    {#if isSubagentsCommand}
+      <div class="system-command-card" aria-label="Subagent help">
+        <header class="command-card-header">
+          <div>
+            <span class="command-label">/subagents</span>
+            <h3>Helper agents</h3>
+          </div>
+          <span class="command-count">{subagentModels.length} models</span>
+        </header>
+
+        <section class="command-section">
+          <div class="section-heading">
+            <span>Models</span>
+            <small>Pinned IDs, safest for helper work</small>
+          </div>
+          <div class="model-list">
+            {#each subagentModels as model (model.id)}
+              <div class="model-row">
+                <span class="model-label">{model.label}</span>
+                <code>{model.id}</code>
+                {#if model.minClaudeCodeVersion}
+                  <span class="model-badge">CC {model.minClaudeCodeVersion}+</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </section>
+
+        <section class="command-section">
+          <div class="section-heading">
+            <span>Named presets</span>
+            <small>Saved workflows you can reuse by name</small>
+          </div>
+          {#if subagentPresets.length > 0}
+            <div class="preset-list">
+              {#each subagentPresets as preset (preset.name)}
+                <div class="preset-row">
+                  <strong>{preset.name}</strong>
+                  <code>{preset.model}</code>
+                  {#if preset.description}
+                    <span>{preset.description}</span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="empty-presets">None yet. Ask: “Save this workflow as a subagent preset called plan-reviewer.”</p>
+          {/if}
+        </section>
+
+        <section class="command-section examples-section">
+          <div class="section-heading">
+            <span>How to ask</span>
+          </div>
+          <div class="example-list">
+            <span>“Send a Sonnet scout to inspect this bug.”</span>
+            <span>“Use an Opus subagent to review this plan.”</span>
+            <span>“Save this workflow as a subagent preset called plan-reviewer.”</span>
+          </div>
+        </section>
+      </div>
+    {:else}
+      <span class="system-text">{message.content}</span>
+    {/if}
   </div>
 {:else}
   <article
@@ -323,6 +475,158 @@
     margin: 1rem 0;
   }
 
+  .system-command-card {
+    width: min(720px, calc(100vw - 3rem));
+    padding: 1rem;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, var(--accent) 8%), var(--bg-surface));
+    color: var(--text-secondary);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .command-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  }
+
+  .command-label {
+    display: block;
+    margin-bottom: 0.2rem;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .command-card-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 650;
+  }
+
+  .command-count,
+  .model-badge {
+    flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 999px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 0.32rem 0.5rem;
+  }
+
+  .command-section {
+    padding-top: 0.9rem;
+  }
+
+  .section-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .section-heading span {
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 650;
+  }
+
+  .section-heading small {
+    color: var(--text-muted);
+    font-size: 0.74rem;
+  }
+
+  .model-list,
+  .preset-list,
+  .example-list {
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .model-row,
+  .preset-row {
+    display: grid;
+    grid-template-columns: 5.4rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.65rem;
+    min-height: 2rem;
+    padding: 0.35rem 0;
+    border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+
+  .model-row:first-child,
+  .preset-row:first-child {
+    border-top: none;
+  }
+
+  .model-label,
+  .preset-row strong {
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+
+  .model-row code,
+  .preset-row code {
+    min-width: 0;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-tertiary) 85%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    border-radius: 0.35rem;
+    padding: 0.18rem 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.77rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .preset-row {
+    grid-template-columns: minmax(7rem, auto) minmax(0, 1fr);
+  }
+
+  .preset-row span {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+
+  .empty-presets {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+
+  .examples-section {
+    margin-top: 0.15rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  }
+
+  .example-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .example-list span {
+    border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+    border-radius: 0.5rem;
+    padding: 0.55rem 0.6rem;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-tertiary) 45%, transparent);
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
   .message.sticker-only {
     background: none !important;
     border: none !important;
@@ -354,11 +658,17 @@
   }
 
   .system-text {
+    display: block;
     font-size: 0.875rem;
     color: var(--text-muted);
-    background: var(--bg-surface);
-    padding: 0.5rem 1rem;
+    background: color-mix(in srgb, var(--bg-surface) 88%, var(--accent) 12%);
+    border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+    padding: 0.85rem 1rem;
     border-radius: var(--radius-sm);
+    max-width: min(860px, calc(100vw - 3rem));
+    white-space: pre-wrap;
+    line-height: 1.6;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   }
 
   .message {
@@ -489,6 +799,23 @@
   }
 
   @media (max-width: 768px) {
+    .command-card-header,
+    .section-heading {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .model-row,
+    .preset-row,
+    .example-list {
+      grid-template-columns: 1fr;
+    }
+
+    .model-badge {
+      justify-self: flex-start;
+    }
+
     .message.user {
       max-width: 85%;
     }

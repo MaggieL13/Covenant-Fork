@@ -288,21 +288,60 @@ Each digest block extracts:
 
 ---
 
-## Spawning Agents — Model Selection
+## Subagents
 
-When the companion spawns subagents via the `Agent` tool, a `model` parameter controls which Claude model handles the work. The parameter accepts either a **family alias** (server-side resolves to "latest in that family") or a **pinned model ID** (locks to a specific version). Pinned IDs are useful when you want the new generation explicitly — family aliases lag the latest pinned by a week or so.
+Subagents are focused helper agents the companion can spawn with the `Agent` tool for bounded side work: research, code scouting, plan review, verification, or implementation in a narrow area. The user does not need a special command to use them; they can ask naturally:
 
-### Available values
+- "Send a Sonnet scout to inspect this bug."
+- "Use an Opus subagent to review this plan."
+- "Spawn a code worker for the backend part."
 
-**Family aliases** (auto-track latest of each family):
+Use subagents when parallel focused work materially helps. Keep the parent agent responsible for deciding what to delegate, integrating the result, and explaining the outcome to the user.
 
-| Alias | Currently resolves to | Min CC | Best for |
-|-------|----------------------|--------|----------|
-| `"sonnet"` | Sonnet 4.6 | — | Research agents, quick scans, parallel scouts — faster, newer |
-| `"opus"` | Opus 4.7 | 2.1.111 | Deep dives, synthesis, complex reasoning — matches main brain |
-| `"haiku"` | Haiku 4.5 | — | Lightweight tasks, summaries (what the Scribe runs on) |
+### Named Presets
 
-**Pinned model IDs** (stable until you change them):
+Named presets are reusable helper workflows stored as Markdown files in `.claude/agents/*.md`. Treat them as saved delegation recipes: a name, description, model, and persistent instructions for that helper role.
+
+When the user asks to save a workflow as a preset, create or update a file in `.claude/agents/`:
+
+```md
+---
+name: plan-reviewer
+description: Use when Maggie pastes a technical plan and wants a grounded sanity check against the actual codebase.
+model: claude-sonnet-4-6
+---
+
+Review the plan from a practical implementation standpoint.
+Check the repo before judging when possible.
+Give a clear verdict first: ship it, fix this first, or risky, here's why.
+Explain real-world behavior in plain English before code-level detail.
+Keep the answer concise unless Maggie asks for depth.
+```
+
+Preset creation etiquette:
+
+- If the user says "save this as a preset" but has not explicitly said to create the file immediately, first draft the proposed preset for review: name, description, model, and helper instructions.
+- Suggest practical improvements based on the workflow type before writing it. Examples: current-source requirements for research, repo-check/verdict format for plan review, file ownership and test expectations for coding workers, viewport/accessibility checks for UI review, audience/tone rules for docs.
+- Ask for confirmation before creating or overwriting `.claude/agents/<name>.md`.
+- If the user explicitly says "create it now", "go ahead", "save it", or asks to update an existing preset, make the edit and summarize what changed.
+- Keep presets focused. A good preset describes when to use the helper, what sources or files to check, what output format the user expects, and what risks to avoid.
+
+Natural-language preset loop:
+
+1. User teaches or describes a workflow.
+2. Companion drafts a preset and suggests useful workflow-specific refinements.
+3. User approves or edits the draft.
+4. Companion writes `.claude/agents/<name>.md` with useful frontmatter and instructions.
+5. User later asks to "use the plan reviewer" or "run the usual plan review."
+6. Companion uses the preset when delegating, or edits the preset if the user asks to refine it.
+
+The `/subagents` slash command shows pinned model choices, discovered named presets, and examples of how to ask.
+
+### Model Selection
+
+When spawning subagents or writing `model:` frontmatter, prefer **pinned model IDs**. Family aliases like `opus`, `sonnet`, and `haiku` may resolve differently across main-agent and subagent contexts, so they are convenient for interactive model selection but a footgun for saved presets.
+
+Pinned model IDs:
 
 | ID | Min CC | Notes |
 |----|--------|-------|
@@ -315,17 +354,11 @@ When the companion spawns subagents via the `Agent` tool, a `model` parameter co
 
 The "Min CC" column shows the minimum bundled Claude Code runtime required. Settings → System → Claude Runtime Health surfaces the current bundled version and warns if a configured model needs a higher floor than what's loaded.
 
-### Usage
+### Agent Tool Usage
 
 ```
 Agent({
-  model: "sonnet",                 // family alias — auto-tracks latest Sonnet
-  description: "...",
-  prompt: "..."
-})
-
-Agent({
-  model: "claude-opus-4-7",        // pinned — locks to Opus 4.7 explicitly
+  model: "claude-sonnet-4-6",      // pinned model ID
   description: "...",
   prompt: "..."
 })
@@ -335,8 +368,9 @@ If `model` is omitted, the spawned agent inherits from the parent — see `agent
 
 ### Practical guidance
 
-- **Use `"sonnet"` for research and discovery agents** — faster output, current generation, good for parallel spawns
-- **Use `"opus"` (or `"claude-opus-4-7"` pinned) when you need top reasoning** — slower but the best at synthesis and architecture work
+- **Use `claude-sonnet-4-6` for research and discovery agents** — fast, capable, good for parallel scans.
+- **Use `claude-opus-4-7` when you need top reasoning** — slower but stronger for synthesis, architecture, and deep review.
+- **Use `claude-haiku-4-5` for lightweight summaries and cleanup**.
 - **Pin a specific ID when behavior matters** — family aliases auto-migrate when Anthropic ships a new generation, which can shift the feel of an agent's output unexpectedly
 - **Model versions change over time.** The tables above reflect what was live when this was written. Test with a self-report prompt to confirm what a model resolves to.
 
@@ -361,6 +395,7 @@ Current rules:
 
 1. **Default Write target.** When using the Write tool to save user-facing content (scripts, stories, notes, markdown, ElevenLabs scripts, personal writing), default to the `shared/` folder relative to the project root. Repo-root writes are appropriate only for files that genuinely belong at the root (`package.json`, `README.md`, config, explicitly-requested test artifacts).
 2. **Voice fallback.** When the Voice tool returns an unavailable / not-configured error, send the intended message as a normal chat reply. Do NOT improvise via canvas, file write, or any other persistence-based workaround for what was meant to be a voice note.
+3. **Subagent presets.** The companion knows `.claude/agents/*.md` files are reusable helper workflows, should usually draft new presets for approval before writing, and should prefer pinned `claude-*` model IDs over aliases when spawning or saving helpers.
 
 The rules block is short and additive — adding a new rule is a one-line edit in `services/agent.ts::TOOL_BEHAVIOR_RULES`.
 
