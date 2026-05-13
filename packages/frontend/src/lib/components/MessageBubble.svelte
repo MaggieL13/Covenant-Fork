@@ -28,6 +28,7 @@
   type CommandMetadata = {
     kind?: string;
     commandName?: string;
+    success?: boolean;
     data?: {
       models?: SubagentModel[];
       subagents?: SubagentPreset[];
@@ -35,7 +36,19 @@
   };
 
   const commandMetadata = $derived(metadata as CommandMetadata | null);
-  const isSubagentsCommand = $derived(commandMetadata?.kind === 'command_result' && commandMetadata.commandName === 'subagents');
+  // Gate the structured card on success === true. Error results
+  // (e.g. .claude/agents exists but readdirSync throws) still go through
+  // the command_result envelope with the same kind/commandName, but with
+  // success: false and no data — falling into the card branch would
+  // render an empty "Helper agents" panel and hide the actual error
+  // text in message.content. Bail out on failure so the plain-text
+  // fallback (which shows "/subagents: <error>") stays visible.
+  const isSubagentsCommand = $derived(
+    commandMetadata?.kind === 'command_result'
+    && commandMetadata.commandName === 'subagents'
+    && commandMetadata.success === true
+    && Array.isArray(commandMetadata.data?.models)
+  );
   const subagentModels = $derived(Array.isArray(commandMetadata?.data?.models) ? commandMetadata.data.models : []);
   const subagentPresets = $derived(Array.isArray(commandMetadata?.data?.subagents) ? commandMetadata.data.subagents : []);
 
