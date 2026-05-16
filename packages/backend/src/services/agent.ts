@@ -1,6 +1,6 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { MODELS, resolveEffortForModel } from '@resonant/shared';
+import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, type ModelRef } from '@resonant/shared';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -180,17 +180,20 @@ function buildMcpServersForQuery(
 export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse';
 
 /**
- * Resolve the configured model ID for a given tier. Honors the cascade
- * DB config > YAML config > env var > default. Exported so other modules
- * (services/runtime-health.ts, settings UI surfaces) can ask the same
- * question without duplicating the cascade logic.
+ * Resolve the configured raw model string for a given tier. Honors the
+ * cascade DB config > YAML config > env var > default. Returns whatever
+ * the user has configured verbatim — could be a legacy bare id
+ * (`claude-sonnet-4-6`), a canonical ref (`claude/claude-sonnet-4-6`), or
+ * a future non-Claude ref. Normalization happens in
+ * `resolveConfiguredModelRef`; SDK-boundary unwrap happens in
+ * `resolveConfiguredAgentModel`.
  *
  * Tier semantics:
  * - interactive: chat turns initiated by the user
  * - autonomous: wakes / timers / watchers / impulses (full-mode autonomous)
  * - pulse: lightweight heartbeat checks (separate cheap-model tier)
  */
-export function resolveConfiguredAgentModel(tier: AgentModelTier): string {
+function resolveConfiguredRawModel(tier: AgentModelTier): string {
   if (tier === 'pulse') {
     const dbValue = getDbConfig('agent.model_pulse');
     if (dbValue) return dbValue;
@@ -210,6 +213,40 @@ export function resolveConfiguredAgentModel(tier: AgentModelTier): string {
   if (process.env.AGENT_MODEL) return process.env.AGENT_MODEL;
 
   return 'claude-sonnet-4-6';
+}
+
+/**
+ * Resolve the configured model for a given tier as a structured
+ * `ModelRef` (provider, runtime, raw native id, canonical form).
+ *
+ * Accepts both legacy bare ids (`claude-sonnet-4-6`) and canonical
+ * provider-qualified refs (`claude/claude-sonnet-4-6`) from config.
+ * Used by call sites that need to know which runtime to dispatch to
+ * (later PRs in the multi-provider arc).
+ */
+export function resolveConfiguredModelRef(tier: AgentModelTier): ModelRef {
+  return normalizeModelRef(resolveConfiguredRawModel(tier));
+}
+
+/**
+ * Resolve the configured model ID for a given tier and return the **raw
+ * provider-native string** suitable for handing directly to the Claude
+ * Agent SDK (`claude-sonnet-4-6`, `sonnet`, etc.). Existing call sites
+ * keep their string-typed signature; the manifest's canonical refs do
+ * not leak into the SDK boundary.
+ *
+ * Until non-Claude runtimes ship, this throws a friendly error if the
+ * configured tier points at a non-Claude runtime — protects the SDK
+ * from being handed something it can't execute, and surfaces the issue
+ * to the user as "switch back to a Claude model in Settings" rather
+ * than as an opaque SDK failure.
+ *
+ * Exported so other modules (services/runtime-health.ts, settings UI
+ * surfaces) can ask the same question without duplicating the cascade
+ * logic.
+ */
+export function resolveConfiguredAgentModel(tier: AgentModelTier): string {
+  return unwrapModelRefForClaudeSdk(resolveConfiguredModelRef(tier), tier);
 }
 
 // Thin wrappers for existing call sites — delegate to the unified resolver.
