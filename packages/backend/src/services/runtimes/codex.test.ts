@@ -70,7 +70,7 @@ vi.mock('@earendil-works/pi-ai', async () => {
   return {
     ...actual,
     getModel: (provider: string, modelId: string) => {
-      if (provider === 'openai-codex' && (modelId === 'gpt-5.1' || modelId === 'test-model')) {
+      if (provider === 'openai-codex' && (modelId === 'gpt-5.5' || modelId === 'test-model')) {
         return {
           id: modelId,
           name: modelId,
@@ -104,7 +104,7 @@ function fakeAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assist
     content: [{ type: 'text', text: 'hi' }],
     api: 'openai-codex-responses',
     provider: 'openai-codex',
-    model: 'gpt-5.1',
+    model: 'gpt-5.5',
     usage: {
       input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -122,7 +122,7 @@ async function collectEvents(iter: AsyncIterable<AgentRuntimeEvent>): Promise<Ag
 }
 
 function fakeTurnInput(overrides: Partial<AgentTurnInput> = {}): AgentTurnInput {
-  const modelRef = normalizeModelRef('openai-codex/gpt-5.1');
+  const modelRef = normalizeModelRef('openai-codex/gpt-5.5');
   return {
     thread: { id: 'thread-1', name: 't', type: 'daily', current_session_id: null },
     tier: 'interactive',
@@ -260,7 +260,7 @@ describe('CodexRuntime.runTurn — auth + model-resolution gating', () => {
     const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
 
     expect(events).toEqual([
-      { type: 'start', runtimeId: 'codex', modelRef: expect.objectContaining({ canonical: 'openai-codex/gpt-5.1' }) },
+      { type: 'start', runtimeId: 'codex', modelRef: expect.objectContaining({ canonical: 'openai-codex/gpt-5.5' }) },
       { type: 'auth_required', provider: 'openai-codex', message: expect.stringMatching(/not logged in/i) },
       { type: 'done', finishReason: 'error' },
     ]);
@@ -332,7 +332,7 @@ describe('CodexRuntime.runTurn — successful stream end-to-end', () => {
     expect(events[0]).toEqual({
       type: 'start',
       runtimeId: 'codex',
-      modelRef: expect.objectContaining({ canonical: 'openai-codex/gpt-5.1' }),
+      modelRef: expect.objectContaining({ canonical: 'openai-codex/gpt-5.5' }),
     });
 
     // Text deltas pass through as true deltas (no cumulative subtraction).
@@ -366,7 +366,7 @@ describe('CodexRuntime.runTurn — successful stream end-to-end', () => {
       threadId: 'thread-1',
       runtimeId: 'codex',
       provider: 'openai-codex',
-      modelRef: 'openai-codex/gpt-5.1',
+      modelRef: 'openai-codex/gpt-5.5',
       sessionId: 'resp_abc123',
     });
   });

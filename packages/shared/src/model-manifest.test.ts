@@ -197,14 +197,14 @@ describe('normalizeModelRef — accepts both legacy and canonical', () => {
     // when no manifest entry matches (preserves the typo path above).
 
     // Codex bare id should resolve to the codex provider, NOT Claude
-    const gpt5 = normalizeModelRef('gpt-5.1');
-    expect(gpt5.provider).toBe('openai-codex');
-    expect(gpt5.runtime).toBe('codex');
-    expect(gpt5.canonical).toBe('openai-codex/gpt-5.1');
+    const gpt55 = normalizeModelRef('gpt-5.5');
+    expect(gpt55.provider).toBe('openai-codex');
+    expect(gpt55.runtime).toBe('codex');
+    expect(gpt55.canonical).toBe('openai-codex/gpt-5.5');
 
-    const gpt5Mini = normalizeModelRef('gpt-5.1-codex-mini');
-    expect(gpt5Mini.provider).toBe('openai-codex');
-    expect(gpt5Mini.runtime).toBe('codex');
+    const gpt54Mini = normalizeModelRef('gpt-5.4-mini');
+    expect(gpt54Mini.provider).toBe('openai-codex');
+    expect(gpt54Mini.runtime).toBe('codex');
 
     const gpt52 = normalizeModelRef('gpt-5.2');
     expect(gpt52.provider).toBe('openai-codex');
@@ -230,9 +230,9 @@ describe('normalizeModelRef — accepts both legacy and canonical', () => {
     // The end-to-end regression: bare Codex id → normalizeModelRef →
     // unwrap should throw the friendly "codex runtime not wired up yet"
     // error, surfacing as the inline chat error users see. Before the
-    // fix this silently went to the Claude SDK with `gpt-5.1` as the
+    // fix this silently went to the Claude SDK with `gpt-5.5` as the
     // model name.
-    const gpt5 = normalizeModelRef('gpt-5.1');
+    const gpt5 = normalizeModelRef('gpt-5.5');
     expect(() => unwrapModelRefForClaudeSdk(gpt5, 'interactive')).toThrow(
       /requires the codex runtime/,
     );
@@ -241,29 +241,33 @@ describe('normalizeModelRef — accepts both legacy and canonical', () => {
     );
   });
 
-  it('maps legacy E0 preview bare ids to current Codex equivalents (PR E2 migration)', () => {
-    // PR E0 shipped placeholder ids (gpt-5, gpt-5-mini, o3) that PR E2
-    // replaced with real pi-ai-registered ids (gpt-5.1, gpt-5.1-codex-mini).
-    // Anyone whose config still names the old ids would otherwise fall
-    // through to the Claude fallback (claude/gpt-5), silently mis-routing
-    // a Codex-shaped id at the SDK boundary. Verify the alias map catches
-    // each old id and re-routes it as openai-codex.
+  it('maps legacy Codex bare ids to current equivalents (E0 preview + brief-window E2 ids)', () => {
+    // PR E0 shipped placeholder ids (gpt-5, gpt-5-mini, o3). PR E2's
+    // initial commit moved to gpt-5.1 / gpt-5.1-codex-mini. The post-
+    // review fix bumped again to match the current Codex UI
+    // (gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex / 5.2). Anyone whose
+    // config still names ANY of those older ids would otherwise fall
+    // through to the Claude fallback. Verify the alias map catches
+    // each one and re-routes to a current Codex equivalent.
 
     const oldGpt5 = normalizeModelRef('gpt-5');
     expect(oldGpt5.provider).toBe('openai-codex');
-    expect(oldGpt5.runtime).toBe('codex');
-    expect(oldGpt5.canonical).toBe('openai-codex/gpt-5.1');
+    expect(oldGpt5.canonical).toBe('openai-codex/gpt-5.5');
 
     const oldGpt5Mini = normalizeModelRef('gpt-5-mini');
     expect(oldGpt5Mini.provider).toBe('openai-codex');
-    expect(oldGpt5Mini.runtime).toBe('codex');
-    expect(oldGpt5Mini.canonical).toBe('openai-codex/gpt-5.1-codex-mini');
+    expect(oldGpt5Mini.canonical).toBe('openai-codex/gpt-5.4-mini');
 
     const oldO3 = normalizeModelRef('o3');
     expect(oldO3.provider).toBe('openai-codex');
-    expect(oldO3.runtime).toBe('codex');
-    // o3 routes to gpt-5.1 (reasoning-capable Codex; pi-ai has no o3)
-    expect(oldO3.canonical).toBe('openai-codex/gpt-5.1');
+    expect(oldO3.canonical).toBe('openai-codex/gpt-5.5');
+
+    // Brief-window E2 ids (initial commit, before the post-review bump).
+    const oldGpt51 = normalizeModelRef('gpt-5.1');
+    expect(oldGpt51.canonical).toBe('openai-codex/gpt-5.5');
+
+    const oldGpt51Mini = normalizeModelRef('gpt-5.1-codex-mini');
+    expect(oldGpt51Mini.canonical).toBe('openai-codex/gpt-5.4-mini');
   });
 
   it('throws a friendly error for empty input', () => {
@@ -349,13 +353,26 @@ describe('Codex (openai-codex) entries (PR E2: runtime wired)', () => {
   // the auth/runtime/provider fields out of alignment with pi-ai's
   // openai-codex registry.
 
-  it('exposes the gpt-5.1 + gpt-5.1-codex-mini + gpt-5.2 entries (matched to pi-ai registry)', () => {
+  it('exposes the current Codex tier (gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex / 5.2)', () => {
     const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
-    expect(codexModels.length).toBeGreaterThanOrEqual(3);
+    expect(codexModels.length).toBeGreaterThanOrEqual(5);
     const ids = codexModels.map((m) => m.id);
-    expect(ids).toContain('gpt-5.1');
-    expect(ids).toContain('gpt-5.1-codex-mini');
+    expect(ids).toContain('gpt-5.5');
+    expect(ids).toContain('gpt-5.4');
+    expect(ids).toContain('gpt-5.4-mini');
+    expect(ids).toContain('gpt-5.3-codex');
     expect(ids).toContain('gpt-5.2');
+  });
+
+  it('does NOT expose stale Codex ids (5.1) — they are migration-only aliases', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    const ids = codexModels.map((m) => m.id);
+    // gpt-5.1 + gpt-5.1-codex-mini were the initial PR E2 picks; the
+    // post-review update bumped to 5.5/5.4/... to match the current
+    // Codex UI. Stale ids stay reachable via LEGACY_BARE_ID_ALIASES
+    // but must not clutter the visible picker.
+    expect(ids).not.toContain('gpt-5.1');
+    expect(ids).not.toContain('gpt-5.1-codex-mini');
   });
 
   it('every Codex entry uses provider=openai-codex + runtime=codex + auth=codex-oauth', () => {
@@ -392,10 +409,15 @@ describe('Codex (openai-codex) entries (PR E2: runtime wired)', () => {
     }
   });
 
-  it('Codex labels include "Codex" so the UI signals which provider they belong to', () => {
+  it('Codex labels look like GPT-x.y model names (concise, no provider suffix clutter)', () => {
+    // Post-review: labels match the actual model name as Codex/ChatGPT
+    // shows them — "GPT-5.5", not "GPT-5.5 (Codex)". The dropdown
+    // groups them under the Codex section, so the label doesn't need
+    // to repeat the provider. Pin the GPT-x.y shape so a future
+    // regression can't slip in lowercase / wrong-version labels.
     const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
     for (const m of codexModels) {
-      expect(m.label).toMatch(/Codex/i);
+      expect(m.label).toMatch(/^GPT-\d+(\.\d+)?/i);
     }
   });
 });

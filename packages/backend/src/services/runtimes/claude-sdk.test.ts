@@ -115,11 +115,11 @@ describe('resolveConfiguredRuntime — runtime dispatch packet (PR B1)', () => {
     // resolves cleanly to a runtime with id='codex'. Auth gating
     // happens INSIDE the runtime's runTurn (emits auth_required event
     // when not logged in), not at resolve time.
-    setConfig('agent.model', 'openai-codex/gpt-5.1');
+    setConfig('agent.model', 'openai-codex/gpt-5.5');
     const resolved = resolveConfiguredRuntime('interactive');
     expect(resolved.runtime.id).toBe('codex');
     expect(resolved.runtime.providerId).toBe('openai-codex');
-    expect(resolved.modelRef.canonical).toBe('openai-codex/gpt-5.1');
+    expect(resolved.modelRef.canonical).toBe('openai-codex/gpt-5.5');
   });
 
   it('throws friendly error for an OpenRouter ref', () => {
