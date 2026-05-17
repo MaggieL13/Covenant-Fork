@@ -61,6 +61,15 @@ export {
   deleteExpiredSessions,
   deleteWebSession,
 } from './sessions.js';
+export type { ProviderSession, ProviderSessionKey } from './provider-sessions.js';
+export {
+  getProviderSession,
+  setProviderSession,
+  hasProviderSessionsForThread,
+  listProviderSessionsForThread,
+  clearProviderSessionsForThread,
+  clearAllProviderSessions,
+} from './provider-sessions.js';
 export {
   getConfig,
   setConfig,

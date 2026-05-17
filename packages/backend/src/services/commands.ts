@@ -20,6 +20,7 @@ import {
   renameThread,
   updateThreadSession,
   endSessionRecord,
+  clearProviderSessionsForThread,
 } from './db.js';
 import { AgentService } from './agent.js';
 import { Orchestrator } from './orchestrator.js';
@@ -288,6 +289,11 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
     });
   }
   updateThreadSession(threadId, null);
+  // PR C: also clear every per-provider session row for this thread so
+  // the "next reply will start fresh" promise applies to every runtime/
+  // provider/model combo the thread has talked to, not just the Claude
+  // fast-path. Returns count for the audit log line.
+  const clearedProviderRows = clearProviderSessionsForThread(threadId);
   // Mark the thread as having a pending /clear. Autonomous turns
   // (watchers, impulses, scheduled wakes, timer prompts, manual wakes)
   // that complete on this thread before the next user-initiated message
@@ -295,7 +301,7 @@ function handleClear(threadId: string | undefined, services: CommandServices): S
   // fresh-session slot the user reserved with this command. The next
   // interactive turn drains the flag.
   services.agent.markThreadSessionClearPending(threadId);
-  console.log(`[Session] cleared (manual) thread "${thread.name}" — previous session: ${previousSessionId ?? '(none)'}`);
+  console.log(`[Session] cleared (manual) thread "${thread.name}" — previous session: ${previousSessionId ?? '(none)'}, provider sidecar rows cleared: ${clearedProviderRows}`);
 
   return {
     type: 'command_result',

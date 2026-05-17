@@ -1,6 +1,7 @@
 // The Scribe — periodic thread digest agent
-// Runs on Haiku via Agent SDK, extracts structured daily records from conversation
-import { query } from '@anthropic-ai/claude-agent-sdk';
+// Runs on Haiku via the Claude SDK (routed through runOneShotQuery in
+// agent.ts so the SDK touchpoint stays consolidated). Extracts structured
+// daily records from conversation.
 import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { getDb, getConfig, setConfig, getTodayThread, saveDigestEmbedding } from './db.js';
@@ -8,7 +9,7 @@ import { getResonantConfig } from '../config.js';
 import { embed, vectorToBuffer } from './embeddings.js';
 import { cacheDigestEmbedding } from './vector-cache.js';
 import { todayLocal, localTimeStr, localFullStr } from './time.js';
-import type { AgentService } from './agent.js';
+import { runOneShotQuery, type AgentService } from './agent.js';
 
 function today(): string {
   return todayLocal(getResonantConfig().identity.timezone);
@@ -161,33 +162,11 @@ ${conversationBlock}
 Write the digest block for this conversation. Remember: output ONLY the markdown, starting with ## ${nowTime()} — topic summary`;
 
   try {
-    let digestContent = '';
-
-    for await (const message of query({
+    const digestContent = await runOneShotQuery({
       prompt,
-      options: {
-        model: 'haiku',
-        systemPrompt: buildScribePrompt(),
-        maxTurns: 1,
-        permissionMode: 'plan' as any, // Read-only, no tool use
-        tools: [], // No tools — just generate text
-        persistSession: false,
-      },
-    })) {
-      if (!message || typeof message !== 'object' || !('type' in message)) continue;
-      const msg = message as any;
-      if (msg.type === 'assistant' && msg.message?.content) {
-        for (const block of msg.message.content) {
-          if (block.type === 'text' && block.text) {
-            digestContent += block.text;
-          }
-        }
-      }
-      // Also capture from result message
-      if (msg.type === 'result' && msg.result) {
-        if (!digestContent) digestContent = msg.result;
-      }
-    }
+      model: 'haiku',
+      systemPrompt: buildScribePrompt(),
+    });
 
     if (!digestContent.trim()) {
       dlog('Skipped — Haiku returned empty content');

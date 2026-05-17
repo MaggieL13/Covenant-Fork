@@ -629,6 +629,66 @@ describe('predicates — behavioral probes', () => {
     expect(predicates[9](db)).toBe(false);
   });
 
+  it('predicate 10 checks thread_provider_sessions table + both indexes', () => {
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE thread_provider_sessions (
+        thread_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model_ref TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY (thread_id, runtime_id, provider, model_ref),
+        FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_thread_provider_sessions_thread ON thread_provider_sessions (thread_id);
+      CREATE INDEX idx_thread_provider_sessions_runtime ON thread_provider_sessions (runtime_id, provider);
+    `);
+    expect(predicates[10](db)).toBe(true);
+  });
+
+  it('predicate 10 returns false when the table is missing', () => {
+    expect(predicates[10](db)).toBe(false);
+  });
+
+  it('predicate 10 returns false when only the table is present (indexes missing)', () => {
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE thread_provider_sessions (
+        thread_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model_ref TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY (thread_id, runtime_id, provider, model_ref)
+      );
+    `);
+    expect(predicates[10](db)).toBe(false);
+  });
+
+  it('predicate 10 returns false when one index is missing', () => {
+    db.exec(`
+      CREATE TABLE threads (id TEXT PRIMARY KEY);
+      CREATE TABLE thread_provider_sessions (
+        thread_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model_ref TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY (thread_id, runtime_id, provider, model_ref)
+      );
+      CREATE INDEX idx_thread_provider_sessions_thread ON thread_provider_sessions (thread_id);
+      -- runtime index intentionally omitted
+    `);
+    expect(predicates[10](db)).toBe(false);
+  });
+
   it('messagesAllowsStickerContentType works correctly with FK enforcement ON', () => {
     // This is the regression test for the FK-masking bug: without FK handling,
     // the probe would fail on FK violation even when sticker is actually allowed.
