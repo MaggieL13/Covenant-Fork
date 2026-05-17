@@ -169,6 +169,10 @@ export type AgentRuntimeEvent =
   /** Tool invocation completed. `isError` distinguishes recoverable
    *  tool failures from successful results. */
   | { type: 'tool_result'; id: string; name: string; output: unknown; isError?: boolean }
+  /** Periodic "tool still running" tick from the provider (Claude SDK
+   *  emits `tool_progress` mid-tool-call). Drives the tool-running
+   *  indicator with elapsed time. */
+  | { type: 'tool_progress'; toolId: string; toolName: string; elapsedSeconds: number }
   /** Context-window gauge update (used / max). Surfaces in the
    *  context-usage indicator. */
   | { type: 'context_usage'; used: number; max: number }
@@ -176,10 +180,16 @@ export type AgentRuntimeEvent =
    *  cost/quota, not gauge. `cost` is provider-reported when available. */
   | { type: 'usage'; input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: number }
   /** Context compaction lifecycle (Claude SDK only). Drives the
-   *  in-flight compaction banner. */
-  | { type: 'compaction_notice'; phase: 'starting' | 'complete' }
-  /** Provider signaled a rate limit. Optional retry hint in ms. */
-  | { type: 'rate_limit'; retryAfterMs?: number }
+   *  in-flight compaction banner. `preTokens` is the pre-compaction
+   *  context-window usage at the moment of the `complete` event
+   *  (omitted on `starting` because the SDK doesn't expose it yet). */
+  | { type: 'compaction_notice'; phase: 'starting' | 'complete'; preTokens?: number }
+  /** Provider signaled a rate limit. `retryAfterMs` is a hint when
+   *  available; `status` / `resetsAt` / `rateLimitType` / `utilization`
+   *  are passthrough fields from Claude SDK's `rate_limit_info` (kept
+   *  so the existing WS broadcast can be reconstructed without
+   *  losing fidelity). */
+  | { type: 'rate_limit'; retryAfterMs?: number; status?: string; resetsAt?: string; rateLimitType?: string; utilization?: number }
   /** Provider-specific diagnostic (Codex WS fallback, OpenRouter
    *  routing notes, Ollama local server reachability). Surfaced to
    *  logs and optionally to UI. */

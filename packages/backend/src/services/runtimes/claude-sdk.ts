@@ -52,10 +52,32 @@
  * runtime-agnostic. Hook consumers rewire to the normalized stream.
  */
 
-import { query, listSessions, type Options, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import { query, listSessions, AbortError, type Options, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import { join } from 'path';
-import type { ProviderId, RuntimeId } from '@resonant/shared';
+import type { ModelRef, ProviderId, RuntimeId } from '@resonant/shared';
 import type { AgentRuntime, AgentRuntimeEvent, AgentTurnInput, CapabilityKey } from './types.js';
+
+/**
+ * Extract a short summary from thinking text (first sentence, capped
+ * at ~120 chars). Used by `runClaudeTurn` when finalizing a thinking
+ * block — the surfaced summary goes on the `thinking_delta` event.
+ *
+ * Was a private helper in `agent.ts` before B3; duplicated here
+ * deliberately rather than creating a runtime → agent.ts back-import
+ * (circular dependency risk on TypeScript module evaluation order).
+ * Small, pure, no shared state — duplication cost is negligible.
+ */
+function extractThinkingSummary(text: string): string {
+  const trimmed = text.replace(/^\s+/, '');
+  const match = trimmed.match(/^(.+?(?:\.\s|!\s|\?\s|\n))/);
+  if (match) {
+    const sentence = match[1].trim();
+    if (sentence.length <= 120) return sentence;
+    return sentence.slice(0, 117) + '...';
+  }
+  if (trimmed.length <= 120) return trimmed;
+  return trimmed.slice(0, 117) + '...';
+}
 
 /**
  * Input to `dispatchClaudeQuery`. Mirrors the inputs that
@@ -399,19 +421,187 @@ export class ClaudeAgentRuntime implements AgentRuntime {
   }
 
   /**
-   * Not implemented in PR B1/B2a. Callers continue to use
-   * `dispatchClaudeQuery` (B2a) + the existing `_processQuery` stream
-   * consumption path. PR B3 lands the normalized-event implementation
-   * that replaces both.
+   * Not implemented in PR B3 — `runTurn` takes the future-normalized
+   * `AgentTurnInput` shape (provider-agnostic) which AgentService
+   * doesn't construct yet. AgentService calls `runClaudeTurn` (below)
+   * with the Claude-specific `ClaudeRuntimeDispatchInput` instead.
+   * The full `runTurn` becomes real when the AgentTurnInput migration
+   * happens (later PR, likely folded into PR C session work).
    */
   // eslint-disable-next-line require-yield
   async *runTurn(_input: AgentTurnInput): AsyncIterable<AgentRuntimeEvent> {
     throw new Error(
-      'ClaudeAgentRuntime.runTurn is not wired up yet — PR B3 will land the ' +
-      'normalized event implementation. Until then, AgentService._processQuery ' +
-      'calls dispatchClaudeQuery() directly and iterates the SDK Query result ' +
-      'with the existing stream-consumption code.',
+      'ClaudeAgentRuntime.runTurn is not wired up yet — it accepts the ' +
+      'provider-agnostic AgentTurnInput shape that AgentService does not ' +
+      'construct yet. Use ClaudeAgentRuntime.runClaudeTurn(ClaudeRuntimeDispatchInput) ' +
+      'for the normalized event stream until the AgentTurnInput migration lands.',
     );
+  }
+
+  /**
+   * Normalized event stream for one Claude SDK turn. Calls
+   * `dispatchClaudeQuery` to start the SDK query, iterates the
+   * resulting `Query`, and translates each SDK message into one or
+   * more `AgentRuntimeEvent`s. Yields events in the order the SDK
+   * emits them, plus a final `{type: 'done'}` (or `{type: 'error'}`)
+   * when the stream completes / aborts / errors.
+   *
+   * AgentService is the only consumer for now (called from
+   * `_processQuery`'s stream loop). Once `runTurn` becomes real, this
+   * method moves to being a private implementation detail invoked by
+   * `runTurn` after translating `AgentTurnInput` → `ClaudeRuntimeDispatchInput`.
+   *
+   * **Event contract:**
+   * - `{type: 'start'}` first (lets consumers distinguish "queued"
+   *   from "stream began").
+   * - `{type: 'session'}` once when a session id is observed (Claude
+   *   may change it mid-turn if it auto-renews; we re-emit on change
+   *   so AgentService can keep `thread_provider_sessions` in sync
+   *   once PR C lands).
+   * - `{type: 'text_delta'}` per text content block in an assistant
+   *   message. Consumer accumulates.
+   * - `{type: 'thinking_delta'}` per complete thinking block (at
+   *   `content_block_stop`), with `text` = full block content and
+   *   `summary` = first sentence. Consumer records and broadcasts.
+   * - `{type: 'compaction_notice'}` with `phase: 'starting'` on
+   *   `system.status === 'compacting'` and `phase: 'complete'`
+   *   with `preTokens` on `system.subtype === 'compact_boundary'`.
+   * - `{type: 'rate_limit'}` on `rate_limit_event` (rejected /
+   *   allowed_warning only — informational warnings filtered out).
+   * - `{type: 'tool_progress'}` on `tool_progress` SDK message.
+   * - `{type: 'done', finishReason: 'stop'}` after the stream
+   *   completes successfully, OR `'aborted'` on AbortError
+   *   (`stopGeneration`), OR `{type: 'error'}` on SDK throw / non-success
+   *   result subtype.
+   *
+   * **Error handling:** AbortError is caught and translated to
+   * `{type: 'done', finishReason: 'aborted'}` — abort is a normal
+   * end-of-stream, not an error. Other thrown errors during for-await
+   * are caught and emitted as `{type: 'error', recoverable: false}`,
+   * then the stream ends (no further events). AgentService's outer
+   * try/catch remains as a safety net for genuinely unexpected
+   * exceptions but the runtime aims to never throw out of `runClaudeTurn`.
+   */
+  async *runClaudeTurn(
+    input: ClaudeRuntimeDispatchInput,
+    modelRef: ModelRef,
+  ): AsyncIterable<AgentRuntimeEvent> {
+    // **Order matters:** dispatch BEFORE yielding `start`. AgentService's
+    // `start` handler runs the post-dispatch MCP enforce/refresh, which
+    // calls `mcpServerStatusLive()` → reads `this.activeQuery`. If
+    // `start` yielded before dispatch, `activeQuery` would still be null
+    // when the handler ran, the capability methods would short-circuit
+    // to `null`, and the MCP refresh would silently no-op (Codex bot
+    // caught this as the "B3 start ordering bug").
+    const result = this.dispatchClaudeQuery(input);
+    yield { type: 'start', runtimeId: this.id, modelRef };
+
+    let lastSessionId: string | null = null;
+    let currentThinkingAccum = '';
+
+    try {
+      for await (const msg of result) {
+        // Session-id capture — surface a `session` event when it
+        // changes so AgentService can track the per-runtime pointer.
+        if (msg && typeof msg === 'object' && 'session_id' in msg) {
+          const newSessionId = (msg as { session_id?: unknown }).session_id;
+          if (typeof newSessionId === 'string' && newSessionId && newSessionId !== lastSessionId) {
+            lastSessionId = newSessionId;
+            yield { type: 'session', sessionId: newSessionId };
+          }
+        }
+
+        if (!msg || typeof msg !== 'object' || !('type' in msg)) continue;
+        const msgType = (msg as { type: string }).type;
+
+        if (msgType === 'stream_event') {
+          // Thinking blocks live on stream_event content_block_delta
+          // (SDK strips them from the assistant message itself).
+          // We accumulate per block and emit a single `thinking_delta`
+          // with `text` + `summary` at content_block_stop, matching
+          // the pre-B3 broadcast cadence (one `thinking` WS event per
+          // complete block, not per token).
+          const streamEvent = (msg as { event?: any }).event;
+          if (streamEvent?.type === 'content_block_start' && streamEvent?.content_block?.type === 'thinking') {
+            currentThinkingAccum = '';
+          } else if (streamEvent?.type === 'content_block_delta' && streamEvent?.delta?.type === 'thinking_delta') {
+            const thinkingText = streamEvent.delta.thinking || '';
+            if (thinkingText) currentThinkingAccum += thinkingText;
+          } else if (streamEvent?.type === 'content_block_stop' && currentThinkingAccum) {
+            const summary = extractThinkingSummary(currentThinkingAccum);
+            yield { type: 'thinking_delta', text: currentThinkingAccum, summary };
+            currentThinkingAccum = '';
+          }
+        } else if (msgType === 'assistant') {
+          const assistantMsg = msg as { message?: { content?: any[] } };
+          if (assistantMsg.message?.content) {
+            for (const block of assistantMsg.message.content) {
+              if (block.type === 'text' && block.text) {
+                yield { type: 'text_delta', text: block.text };
+              }
+              // Thinking is captured from stream_event above (avoids
+              // duplicate emission — the SDK sometimes carries the
+              // thinking content on both the assistant message and the
+              // stream_event ticks).
+            }
+          }
+        } else if (msgType === 'result') {
+          // Result-message error subtypes (non-'success'). Currently
+          // the pre-B3 path just logged these and continued. Mirror
+          // that: emit an `error` event but mark recoverable so
+          // AgentService's existing pattern of treating the result
+          // message as informational (not a hard failure) is preserved.
+          const resultMsg = msg as { subtype?: string; errors?: unknown };
+          if (resultMsg.subtype && resultMsg.subtype !== 'success') {
+            yield {
+              type: 'error',
+              message: `${resultMsg.subtype}${resultMsg.errors ? ': ' + JSON.stringify(resultMsg.errors) : ''}`,
+              recoverable: true,
+            };
+          }
+        } else if (msgType === 'system') {
+          const systemMsg = msg as { subtype?: string; status?: string; compact_metadata?: { pre_tokens?: number } };
+          if (systemMsg.subtype === 'compact_boundary' && systemMsg.compact_metadata) {
+            yield {
+              type: 'compaction_notice',
+              phase: 'complete',
+              preTokens: systemMsg.compact_metadata.pre_tokens,
+            };
+          } else if (systemMsg.status === 'compacting') {
+            yield { type: 'compaction_notice', phase: 'starting' };
+          }
+        } else if (msgType === 'rate_limit_event') {
+          const rle = msg as { rate_limit_info?: { status?: string; resetsAt?: string; rateLimitType?: string; utilization?: number } };
+          const info = rle.rate_limit_info;
+          if (info && (info.status === 'rejected' || info.status === 'allowed_warning')) {
+            yield {
+              type: 'rate_limit',
+              status: info.status,
+              resetsAt: info.resetsAt,
+              rateLimitType: info.rateLimitType,
+              utilization: info.utilization,
+            };
+          }
+        } else if (msgType === 'tool_progress') {
+          const tp = msg as { tool_use_id?: string; tool_name?: string; elapsed_time_seconds?: number };
+          yield {
+            type: 'tool_progress',
+            toolId: tp.tool_use_id ?? '',
+            toolName: tp.tool_name ?? '',
+            elapsedSeconds: tp.elapsed_time_seconds ?? 0,
+          };
+        }
+      }
+
+      yield { type: 'done', finishReason: 'stop' };
+    } catch (err) {
+      if (err instanceof AbortError || (err instanceof Error && err.name === 'AbortError')) {
+        yield { type: 'done', finishReason: 'aborted' };
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        yield { type: 'error', message, recoverable: false };
+      }
+    }
   }
 
   /**
