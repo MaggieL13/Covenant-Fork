@@ -80,6 +80,10 @@ export function readPreferences() {
       model: config.agent.model,
       model_autonomous: config.agent.model_autonomous,
       model_pulse: config.agent.model_pulse,
+      // PR D: memory tier (used by the handoff packet summary call).
+      // Defaults to Haiku per ResonantConfig DEFAULTS; users can pick
+      // a different model in Settings if they want richer summaries.
+      model_memory: config.agent.model_memory,
       thinking_effort: config.agent.thinking_effort || 'auto',
       // Optional autonomous-tier override (PR #10). Returned as undefined
       // when unset so the frontend can distinguish "match chat" from an
@@ -126,6 +130,8 @@ export function savePreferences(updates: Record<string, any>): void {
     if (updates.agent.model !== undefined) parsed.agent.model = updates.agent.model;
     if (updates.agent.model_autonomous !== undefined) parsed.agent.model_autonomous = updates.agent.model_autonomous;
     if (updates.agent.model_pulse !== undefined) parsed.agent.model_pulse = updates.agent.model_pulse;
+    // PR D: memory tier — used by services/handoff.ts summary call.
+    if (updates.agent.model_memory !== undefined) parsed.agent.model_memory = updates.agent.model_memory;
     if (updates.agent.thinking_effort !== undefined) parsed.agent.thinking_effort = updates.agent.thinking_effort;
     // PR #10: optional autonomous-tier override. Sending null/empty
     // string clears the field (returns to "match chat" fallback);

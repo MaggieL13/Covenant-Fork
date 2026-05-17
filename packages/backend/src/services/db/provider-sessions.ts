@@ -98,6 +98,30 @@ export function setProviderSession(params: {
 }
 
 /**
+ * Cheap existence check — true iff the thread has at least one sidecar
+ * row, regardless of which runtime/provider/model it points at.
+ *
+ * Gates the legacy `threads.current_session_id` fallback in
+ * `AgentService._processQuery`: once a thread has ANY sidecar row, the
+ * sidecar is authoritative — a missing exact-key lookup means "this
+ * particular combo has no session yet" (so the turn starts fresh),
+ * NOT "fall back to whatever the old single pointer said" (which would
+ * incorrectly resume e.g. a Sonnet session under Opus). The legacy
+ * fallback only applies to pre-PR-C threads that have never been
+ * touched after the migration ran.
+ *
+ * Uses `SELECT 1 ... LIMIT 1` so the query is index-only and stops at
+ * the first match — this gate runs on every turn, no point loading
+ * actual row data.
+ */
+export function hasProviderSessionsForThread(threadId: string): boolean {
+  const row = getDb()
+    .prepare('SELECT 1 FROM thread_provider_sessions WHERE thread_id = ? LIMIT 1')
+    .get(threadId);
+  return !!row;
+}
+
+/**
  * List every session row for a thread, most-recently-used first.
  * Used by `/clear` for the audit log line ("cleared N provider sessions")
  * and by future debug surfaces that want to enumerate "which providers

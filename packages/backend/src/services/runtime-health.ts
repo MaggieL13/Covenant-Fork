@@ -152,7 +152,11 @@ export interface MinRequirement {
  * the highest-requirement tier so the user sees the actual blocker.
  */
 export function computeMinRequirement(): MinRequirement | null {
-  const tiers: AgentModelTier[] = ['interactive', 'autonomous', 'pulse'];
+  // PR D: 'memory' joined the tier list — the handoff packet's summary
+  // call runs through it. Including it here means the panel surfaces
+  // min-CC bumps if the user picks a memory-tier model with version
+  // requirements (e.g. setting memory to Opus 4.7 for richer summaries).
+  const tiers: AgentModelTier[] = ['interactive', 'autonomous', 'pulse', 'memory'];
   let highest: MinRequirement | null = null;
 
   for (const tier of tiers) {

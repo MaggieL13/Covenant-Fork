@@ -23,6 +23,7 @@ import { initDb, createThread } from './index.js';
 import {
   getProviderSession,
   setProviderSession,
+  hasProviderSessionsForThread,
   listProviderSessionsForThread,
   clearProviderSessionsForThread,
   clearAllProviderSessions,
@@ -328,6 +329,116 @@ describe('thread_provider_sessions — per-(thread, runtime, provider, model) se
       expect(clearAllProviderSessions()).toBe(2);
       expect(listProviderSessionsForThread('thread-1')).toHaveLength(0);
       expect(listProviderSessionsForThread('thread-2')).toHaveLength(0);
+    });
+  });
+
+  describe('hasProviderSessionsForThread — gates the legacy current_session_id fallback', () => {
+    // Regression suite for the Codex bot catch on PR #16. The original
+    // AgentService._processQuery fallback was gated on
+    // `runtime === 'claude-sdk' && thread.current_session_id` alone,
+    // which fired whenever the exact (runtime, provider, model_ref)
+    // lookup missed — including normal model switches. A thread
+    // mid-Sonnet-session that switched to Opus would have NO Opus
+    // sidecar row, fall through to `thread.current_session_id`, and
+    // resume the Sonnet session under Opus — defeating per-model
+    // isolation. The fix added a `!hasProviderSessionsForThread()`
+    // gate so the fallback only fires for truly pre-PR-C threads.
+
+    it('returns false when the thread has no sidecar rows (pre-PR-C state)', () => {
+      expect(hasProviderSessionsForThread('thread-1')).toBe(false);
+    });
+
+    it('returns true after a single sidecar row is written', () => {
+      setProviderSession({
+        threadId: 'thread-1',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-sonnet-4-6',
+        sessionId: 'session-sonnet',
+      });
+      expect(hasProviderSessionsForThread('thread-1')).toBe(true);
+    });
+
+    it('scopes to the requested thread only', () => {
+      setProviderSession({
+        threadId: 'thread-2',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-sonnet-4-6',
+        sessionId: 'session-elsewhere',
+      });
+      expect(hasProviderSessionsForThread('thread-1')).toBe(false);
+      expect(hasProviderSessionsForThread('thread-2')).toBe(true);
+    });
+
+    it('returns false again after all rows for the thread are cleared', () => {
+      setProviderSession({
+        threadId: 'thread-1',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-sonnet-4-6',
+        sessionId: 'session-sonnet',
+      });
+      expect(hasProviderSessionsForThread('thread-1')).toBe(true);
+      clearProviderSessionsForThread('thread-1');
+      expect(hasProviderSessionsForThread('thread-1')).toBe(false);
+    });
+
+    // The headline scenario the Codex bot called out. This documents
+    // the bug the gate prevents — pinning the exact conditions that
+    // would have produced an incorrect cross-model resume before the
+    // fix. Not testing the AgentService resolver directly (lives
+    // inside `_processQuery`, would need heavy mocking), but verifies
+    // the gate predicate this case turns on.
+    it('Sonnet sidecar row exists + Opus lookup → gate engaged → legacy fallback MUST NOT fire', () => {
+      // Setup: thread has a Sonnet sidecar row (after one prior turn).
+      setProviderSession({
+        threadId: 'thread-1',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-sonnet-4-6',
+        sessionId: 'session-sonnet',
+      });
+
+      // Resolver step-by-step (mirrors `_processQuery` logic):
+      // 1. Exact-key lookup for Opus → null
+      const opusLookup = getProviderSession({
+        threadId: 'thread-1',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-opus-4-7',
+      });
+      expect(opusLookup).toBeNull();
+
+      // 2. Gate check — thread HAS sidecar rows → fallback blocked.
+      expect(hasProviderSessionsForThread('thread-1')).toBe(true);
+
+      // 3. Resolver returns undefined → Opus starts fresh. The Sonnet
+      //    session row remains intact for when the user switches back.
+    });
+
+    it('legacy thread (zero sidecar rows) → gate disengaged → fallback DOES fire', () => {
+      // Setup: pre-PR-C thread. Never touched after the migration ran.
+      // Its `threads.current_session_id` is the only resume pointer.
+      // (No sidecar setup — this thread is genuinely empty in the table.)
+
+      // Resolver step-by-step:
+      // 1. Exact-key lookup → null
+      const claudeLookup = getProviderSession({
+        threadId: 'thread-1',
+        runtimeId: 'claude-sdk',
+        provider: 'claude',
+        modelRef: 'claude/claude-sonnet-4-6',
+      });
+      expect(claudeLookup).toBeNull();
+
+      // 2. Gate check — thread has NO sidecar rows → fallback allowed.
+      expect(hasProviderSessionsForThread('thread-1')).toBe(false);
+
+      // 3. Resolver returns thread.current_session_id (the legacy pointer).
+      //    Pre-PR-C session resumes cleanly. The finally block then
+      //    writes the first sidecar row, and subsequent turns on this
+      //    thread hit the sidecar path directly (gate flips to true).
     });
   });
 
