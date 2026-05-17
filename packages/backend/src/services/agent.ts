@@ -3,7 +3,7 @@ import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import type { AgentRuntime } from './runtimes/types.js';
-import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession } from './db.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -828,11 +828,16 @@ export class AgentService {
       }
 
       // Re-enabling requires a fresh session to fully reconnect SDK-managed servers.
-      // Clear all active sessions so the next message starts clean.
+      // Clear all active sessions so the next message starts clean. PR C: also
+      // wipe the per-provider sidecar — `resumeSessionId` prefers sidecar rows
+      // over `threads.current_session_id`, so leaving them in place would let
+      // the next turn immediately re-resume the very session this path is
+      // trying to clear (defeats the "force MCP reconnect" intent).
       if (enabled) {
         try {
           clearAllThreadSessions();
-          console.log(`[MCP] Cleared sessions to force MCP reconnect on next message`);
+          const sidecarCleared = clearAllProviderSessions();
+          console.log(`[MCP] Cleared sessions to force MCP reconnect on next message (legacy pointers + ${sidecarCleared} sidecar rows)`);
         } catch { /* best-effort */ }
       }
 

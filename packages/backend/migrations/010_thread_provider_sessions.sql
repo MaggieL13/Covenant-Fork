@@ -36,7 +36,11 @@
 -- design including the cross-provider ProviderHandoff packet that PR D adds
 -- on top of this table.
 
-CREATE TABLE IF NOT EXISTS thread_provider_sessions (
+-- Plain DDL per migrations/README.md §"Use plain DDL" — no IF NOT EXISTS.
+-- Idempotency comes from the `_migrations` ledger; the runner either applies
+-- the whole transaction or rolls it back, leaving no partial state.
+
+CREATE TABLE thread_provider_sessions (
   thread_id     TEXT NOT NULL,
   runtime_id    TEXT NOT NULL,
   provider      TEXT NOT NULL,
@@ -52,12 +56,12 @@ CREATE TABLE IF NOT EXISTS thread_provider_sessions (
 -- secondary index covers the "clear all rows for one thread" path used by
 -- `/clear` (otherwise SQLite would still walk the PK btree; this is faster
 -- and self-documenting).
-CREATE INDEX IF NOT EXISTS idx_thread_provider_sessions_thread
+CREATE INDEX idx_thread_provider_sessions_thread
   ON thread_provider_sessions (thread_id);
 
 -- For future runtime-health / debug surfaces that want "all sessions across
 -- threads for a given (runtime, provider)" — e.g. "how many threads are
 -- currently sitting on a Codex session". Not used yet; added now so PR E's
 -- diagnostics don't need a follow-up migration.
-CREATE INDEX IF NOT EXISTS idx_thread_provider_sessions_runtime
+CREATE INDEX idx_thread_provider_sessions_runtime
   ON thread_provider_sessions (runtime_id, provider);

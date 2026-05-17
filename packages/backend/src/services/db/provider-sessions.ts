@@ -52,8 +52,12 @@ export function getProviderSession(key: ProviderSessionKey): ProviderSession | n
 
 /**
  * Upsert a session pointer for the given compatibility key. `last_used_at`
- * is always overwritten with `now`; metadata is overwritten when provided
- * (pass `undefined` to leave the column unchanged on update).
+ * is always overwritten with `now`; `metadata_json` is **always
+ * overwritten** to reflect the current call — `params.metadata` is
+ * serialized when provided, set to `NULL` when omitted. (If metadata
+ * preservation across upserts becomes a need later, add a separate
+ * `setProviderSessionMetadata` helper rather than special-casing the
+ * upsert path.)
  *
  * Uses `INSERT ... ON CONFLICT(...) DO UPDATE` so callers don't have to
  * branch on existence — both fresh-session capture and same-combo
