@@ -185,8 +185,8 @@ export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse';
  * the user has configured verbatim — could be a legacy bare id
  * (`claude-sonnet-4-6`), a canonical ref (`claude/claude-sonnet-4-6`), or
  * a future non-Claude ref. Normalization happens in
- * `resolveConfiguredModelRef`; SDK-boundary unwrap happens in
- * `resolveConfiguredAgentModel`.
+ * `resolveConfiguredModelRef`; SDK-boundary unwrap (which throws on
+ * non-Claude refs) happens in `resolveConfiguredClaudeSdkModel`.
  *
  * Tier semantics:
  * - interactive: chat turns initiated by the user
@@ -235,23 +235,26 @@ export function resolveConfiguredModelRef(tier: AgentModelTier): ModelRef {
  * keep their string-typed signature; the manifest's canonical refs do
  * not leak into the SDK boundary.
  *
- * Until non-Claude runtimes ship, this throws a friendly error if the
- * configured tier points at a non-Claude runtime — protects the SDK
- * from being handed something it can't execute, and surfaces the issue
- * to the user as "switch back to a Claude model in Settings" rather
- * than as an opaque SDK failure.
- *
- * Exported so other modules (services/runtime-health.ts, settings UI
- * surfaces) can ask the same question without duplicating the cascade
- * logic.
+ * **CALL THIS ONLY AT THE CLAUDE SDK BOUNDARY.** Until non-Claude
+ * runtimes ship, this throws a friendly error if the configured tier
+ * points at a non-Claude runtime — protects the SDK from being handed
+ * something it can't execute. For call sites that aren't dispatching
+ * directly to `query()` (runtime-health computing minimums, orchestrator
+ * showing pulse config, settings UI), use `resolveConfiguredModelRef`
+ * instead and handle non-Claude runtimes explicitly. Using this function
+ * outside the SDK dispatch path turns a "switch tier in Settings"
+ * recoverable state into a 500 / crashed turn.
  */
-export function resolveConfiguredAgentModel(tier: AgentModelTier): string {
+export function resolveConfiguredClaudeSdkModel(tier: AgentModelTier): string {
   return unwrapModelRefForClaudeSdk(resolveConfiguredModelRef(tier), tier);
 }
 
-// Thin wrappers for existing call sites — delegate to the unified resolver.
+// Thin wrappers for the SDK-boundary call sites in this file — delegate
+// to the throwing resolver. Both wrappers run right before query() so
+// the throw is contained to the dispatch path (and caught by the
+// model-resolution try/catch in _processQuery for friendly fallback).
 function getConfiguredModel(isAutonomous: boolean): string {
-  return resolveConfiguredAgentModel(isAutonomous ? 'autonomous' : 'interactive');
+  return resolveConfiguredClaudeSdkModel(isAutonomous ? 'autonomous' : 'interactive');
 }
 
 // Pulse runs on its own model tier — heartbeat decisions are extremely
@@ -260,7 +263,7 @@ function getConfiguredModel(isAutonomous: boolean): string {
 // wakes / impulses / watchers / timers) can stay on Sonnet while pulse drops
 // to Haiku without tier-flag gymnastics.
 function getConfiguredPulseModel(): string {
-  return resolveConfiguredAgentModel('pulse');
+  return resolveConfiguredClaudeSdkModel('pulse');
 }
 
 /**
@@ -805,10 +808,60 @@ export class AgentService {
     // Interactive + autonomous resolve via DB > YAML > env var > default.
     // Pulse resolves via DB > YAML > default (no env var; pulse is narrow
     // enough that operator config doesn't need a third override path).
-    const model = isPulseOrientation
-      ? getConfiguredPulseModel()
-      : getConfiguredModel(isAutonomous);
+    //
+    // Wrapped: getConfigured*Model() reach `resolveConfiguredClaudeSdkModel`,
+    // which throws when the configured tier points at a non-Claude runtime
+    // (which has no implementation yet). Catching here so a misconfigured
+    // tier surfaces as a friendly inline error instead of crashing the
+    // turn / being swallowed by the outer generic handler.
+    //
+    // On failure: pulse returns the literal `PULSE_OK` (which
+    // `isSuppressiblePulseResponse` already matches, so pulse stays
+    // silent AND skips the orchestrator's post-pulse activity bump).
+    // Interactive/autonomous emit the friendly message through the same
+    // persist+broadcast machinery the normal inner SDK-error catch
+    // (line 1271 region) uses — without this, the early return would
+    // skip stream_start / createMessage / stream_end and the user would
+    // just see... nothing.
     const tier = isPulseOrientation ? 'pulse' : (isAutonomous ? 'autonomous' : 'interactive');
+    let model: string;
+    try {
+      model = isPulseOrientation
+        ? getConfiguredPulseModel()
+        : getConfiguredModel(isAutonomous);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const friendly = `⚠️ Model configuration error (${tier} tier): ${message}`;
+      console.warn(`[Agent] Model resolution failed for ${tier} tier: ${message}`);
+
+      // Pulse: silent + suppress activity bump via the existing pulse
+      // suppression path (orchestrator.checkPulse checks the response
+      // through isSuppressiblePulseResponse before bumping activity).
+      if (isPulseOrientation) return 'PULSE_OK';
+
+      // Non-pulse: persist as a real companion message + broadcast through
+      // the normal chat/Discord/Telegram surfaces so the user can see and
+      // act on it. Mirrors the shape of the SDK-error catch + persist
+      // sequence further down in this function.
+      if (autonomousOpts.streamToClient !== false) {
+        registry.broadcast({ type: 'stream_start', messageId: streamMsgId, threadId });
+      }
+      const companionMessage = createMessage({
+        id: streamMsgId,
+        threadId,
+        role: 'companion',
+        content: friendly,
+        contentType: 'text',
+        platform,
+        createdAt: new Date().toISOString(),
+      });
+      if (autonomousOpts.streamToClient !== false) {
+        registry.broadcast({ type: 'stream_end', messageId: streamMsgId, final: companionMessage });
+      }
+      presenceStatus = 'dormant';
+      registry.broadcast({ type: 'presence', status: 'dormant' });
+      return friendly;
+    }
     // Effort resolves AFTER model selection so `auto` can pick the right
     // value per model class (high for Opus/Sonnet, medium for Haiku).
     // Pulse short-circuits to 'low' because it doesn't actually use

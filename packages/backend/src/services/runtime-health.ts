@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { MODEL_MIN_CC } from '@resonant/shared';
 import { PROJECT_ROOT } from '../config.js';
-import { resolveConfiguredAgentModel, type AgentModelTier } from './agent.js';
+import { resolveConfiguredModelRef, type AgentModelTier } from './agent.js';
 
 /**
  * Runtime health: surfaces the Claude Code version that the bundled SDK
@@ -156,11 +156,24 @@ export function computeMinRequirement(): MinRequirement | null {
   let highest: MinRequirement | null = null;
 
   for (const tier of tiers) {
-    const model = resolveConfiguredAgentModel(tier);
-    const min = MODEL_MIN_CC.get(model);
+    // Use the safe (non-throwing) resolver. A tier configured for a
+    // non-Claude runtime has no Claude Code minimum to enforce — skip
+    // it rather than letting the SDK-boundary unwrap throw and crash
+    // the /runtime/health endpoint.
+    let ref;
+    try {
+      ref = resolveConfiguredModelRef(tier);
+    } catch {
+      // Genuinely malformed ref (empty / unknown provider prefix). Skip
+      // for health computation; the SDK boundary will surface the real
+      // error when the tier actually runs.
+      continue;
+    }
+    if (ref.runtime !== 'claude-sdk') continue;
+    const min = MODEL_MIN_CC.get(ref.model);
     if (!min) continue;
     if (!highest || compareVersions(min, highest.version) > 0) {
-      highest = { version: min, reason: `${model} (${tier})` };
+      highest = { version: min, reason: `${ref.model} (${tier})` };
     }
   }
 
