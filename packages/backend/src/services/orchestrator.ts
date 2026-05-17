@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { appendFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { AgentService, resolveConfiguredAgentModel } from './agent.js';
+import { AgentService, resolveConfiguredModelRef } from './agent.js';
 import type { PushService } from './push.js';
 import { registry } from './registry.js';
 import {
@@ -763,10 +763,28 @@ export class Orchestrator {
     // Pulse model surfaces the same DB > YAML > default cascade as
     // agent.ts uses at query time, so the Orchestrator panel's pulse
     // dropdown shows the value that's actually in effect.
+    //
+    // Use the safe (non-throwing) resolver: a non-Claude runtime ref
+    // here is operator-misconfiguration territory, but the settings
+    // panel still needs to *display* what's configured so the user can
+    // fix it. Falls back to the configured raw string when normalization
+    // itself fails (e.g. unknown provider prefix), since we want to show
+    // what's actually persisted rather than swallow it.
+    let modelDisplay: string;
+    try {
+      const ref = resolveConfiguredModelRef('pulse');
+      // Claude refs: surface the raw native id (`claude-haiku-4-5`) to
+      // match the existing UI expectation. Non-Claude refs: surface the
+      // canonical form (`openai-codex/gpt-5-1`) so the user can see why
+      // the tier isn't running.
+      modelDisplay = ref.runtime === 'claude-sdk' ? ref.model : ref.canonical;
+    } catch (err) {
+      modelDisplay = err instanceof Error ? `(invalid: ${err.message})` : '(invalid)';
+    }
     return {
       enabled: this.pulseEnabled,
       frequency: this.pulseFrequency,
-      model: resolveConfiguredAgentModel('pulse'),
+      model: modelDisplay,
     };
   }
 
@@ -796,7 +814,7 @@ export class Orchestrator {
     }
 
     // PR #10: pulse model selector. Writes to DB so the agent.ts
-    // resolveConfiguredAgentModel('pulse') cascade picks it up on the
+    // resolveConfiguredClaudeSdkModel('pulse') cascade picks it up on the
     // next pulse turn. Empty string clears the override (returns to
     // YAML/default fallback). Validation happens at the route layer.
     if (config.model !== undefined) {
@@ -808,7 +826,7 @@ export class Orchestrator {
       }
     }
 
-    olog(`Pulse config updated: enabled=${this.pulseEnabled}, frequency=${this.pulseFrequency}m, model=${resolveConfiguredAgentModel('pulse')}`);
+    olog(`Pulse config updated: enabled=${this.pulseEnabled}, frequency=${this.pulseFrequency}m, model=${this.getPulseConfig().model}`);
   }
 
   // --- Pulse: lightweight awareness check ---
