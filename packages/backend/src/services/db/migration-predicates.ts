@@ -91,6 +91,15 @@ export const predicates: Record<number, (db: Db) => boolean> = {
 
   // 009 — idx_session_history_thread_id
   9: (db) => indexExists(db, 'idx_session_history_thread_id'),
+
+  // 010 — thread_provider_sessions + both supporting indexes. All three
+  // must be present for the predicate to match; a partial state would
+  // not satisfy the migration's effect (which is the table AND the two
+  // indexes the helpers in services/db/provider-sessions.ts depend on).
+  10: (db) =>
+    tableExists(db, 'thread_provider_sessions') &&
+    indexExists(db, 'idx_thread_provider_sessions_thread') &&
+    indexExists(db, 'idx_thread_provider_sessions_runtime'),
 };
 
 /**
