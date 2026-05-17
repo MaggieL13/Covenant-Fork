@@ -3,7 +3,8 @@ import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import type { AgentRuntime } from './runtimes/types.js';
-import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, clearAllProviderSessions } from './db.js';
+import { buildProviderHandoff, renderProviderHandoffAsPrompt } from './handoff.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -178,8 +179,8 @@ function buildMcpServersForQuery(
 // Model resolution — checks DB config, YAML config, env, then defaults
 // ---------------------------------------------------------------------------
 
-/** Three independent model-resolution tiers. */
-export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse';
+/** Four independent model-resolution tiers. */
+export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse' | 'memory';
 
 /**
  * Resolve the configured raw model string for a given tier. Honors the
@@ -194,6 +195,10 @@ export type AgentModelTier = 'interactive' | 'autonomous' | 'pulse';
  * - interactive: chat turns initiated by the user
  * - autonomous: wakes / timers / watchers / impulses (full-mode autonomous)
  * - pulse: lightweight heartbeat checks (separate cheap-model tier)
+ * - memory: handoff-summary calls (PR D — used by services/handoff.ts to
+ *   summarize prior conversation when a turn lands on a (runtime, provider,
+ *   model_ref) combo with no prior session. Cheap + JSON-reliable model;
+ *   defaults to Haiku.)
  */
 function resolveConfiguredRawModel(tier: AgentModelTier): string {
   if (tier === 'pulse') {
@@ -201,6 +206,14 @@ function resolveConfiguredRawModel(tier: AgentModelTier): string {
     if (dbValue) return dbValue;
     const cfg = getResonantConfig();
     if (cfg.agent.model_pulse) return cfg.agent.model_pulse;
+    return 'claude-haiku-4-5';
+  }
+
+  if (tier === 'memory') {
+    const dbValue = getDbConfig('agent.model_memory');
+    if (dbValue) return dbValue;
+    const cfg = getResonantConfig();
+    if (cfg.agent.model_memory) return cfg.agent.model_memory;
     return 'claude-haiku-4-5';
   }
 
@@ -381,12 +394,28 @@ export async function runOneShotQuery(opts: {
 }): Promise<string> {
   let collected = '';
 
+  // Log the one-shot model BEFORE the SDK call so callers (handoff /
+  // scribe digest) can verify which model their tier resolved to.
+  // Pre-PR-D this was invisible — there was no per-call log line, so
+  // a misconfigured tier (e.g. Memory set to Sonnet but quietly resolving
+  // to Haiku) was unfalsifiable from logs alone.
+  console.log(`[Agent] OneShot: ${opts.model} (maxTurns: ${opts.maxTurns ?? 2})`);
+
   for await (const message of query({
     prompt: opts.prompt,
     options: {
       model: opts.model,
       systemPrompt: opts.systemPrompt,
-      maxTurns: opts.maxTurns ?? 1,
+      // PR D smoke caught: maxTurns: 1 makes the SDK throw "Reached
+      // maximum number of turns (1)" even when the model responds in
+      // a single turn — the SDK seems to count "produced response +
+      // checking if more iterations needed" as having used the turn.
+      // Bumping default to 2 gives it slack to terminate gracefully
+      // without erroring; the model still responds in 1 turn (no
+      // additional cost), there's just room for the SDK to exit
+      // cleanly. Caller can still override with `maxTurns: 1` if they
+      // explicitly want the strict cap.
+      maxTurns: opts.maxTurns ?? 2,
       permissionMode: 'plan' as any, // read-only, no tool use
       tools: [],
       persistSession: false,
@@ -1109,65 +1138,15 @@ export class AgentService {
         } catch {}
       }
 
-      // Build orientation context (thread, time, gap, status, vault)
-      // Prepended to prompt because SessionStart hooks don't fire in V1 query()
-      // Static content (CHAT TOOLS, skills, vault path) only on first message of session
-      const orientation = isPulseOrientation
-        ? buildPulseOrientationContext(hookContext)
-        : await buildOrientationContext(hookContext, isFirstMessage, content);
-
-      // On fresh sessions (e.g. after model swap), inject recent message history
-      // so the new model has conversational context instead of starting blind
-      let historyBlock = '';
-      if (!isPulseOrientation && isFirstMessage) {
-        const recentMessages = getMessages({ threadId, limit: 10 });
-        if (recentMessages.length > 0) {
-          const historyLines = recentMessages.map((m, i) => {
-            const role = m.role === 'user' ? cfg.identity.user_name : cfg.identity.companion_name;
-            // Last 3 messages get full content (most likely to be referenced after model swap)
-            // Older messages get truncated to save tokens
-            const isRecent = i >= recentMessages.length - 3;
-            const maxLen = isRecent ? 5000 : 500;
-            const preview = m.content.length > maxLen ? m.content.slice(0, maxLen) + '...' : m.content;
-            return `${role}: ${preview}`;
-          });
-          historyBlock = `\n[Recent Conversation]\n${historyLines.join('\n')}\n[/Recent Conversation]\n`;
-        }
-      }
-
-      const enrichedPrompt = `[Context]\n${orientation}\n[/Context]${historyBlock}\n\n${content}`;
-
-      // Abort controller for stop_generation support + safety timeout.
-      // Passed into `dispatchClaudeQuery` (which wires it onto the SDK
-      // Options) rather than set directly here — the runtime owns
-      // option assembly as of PR B2a.
-      activeAbortController = new AbortController();
-      // Fallback matches the config default — see PR #11 / chip #38
-      // for why this bumped from 300s to 1200s (compaction + Opus 4.7
-      // tool-loop turns ran past the old cap).
-      const timeoutMs = getResonantConfig().agent.query_timeout_ms || 1200000;
-      safetyTimeout = setTimeout(() => {
-        console.warn(`[Agent] Query timed out after ${timeoutMs / 1000}s, aborting`);
-        activeAbortController?.abort();
-      }, timeoutMs);
-
-      // PR B3: SDK call site + stream consumption both live on the
-      // runtime now. `claudeRuntime.runClaudeTurn` internally calls
-      // `dispatchClaudeQuery` (still does the Options assembly) and
-      // iterates the resulting Query, yielding normalized
-      // `AgentRuntimeEvent`s instead of raw SDK message shapes.
-      // AgentService consumes those events below; the post-dispatch
-      // MCP enforce/refresh dance hangs off the `start` event handler
-      // (fires once the runtime's activeQuery is populated).
+      // PR C: resolve the resume session id from the per-provider sidecar
+      // table first; fall back to `threads.current_session_id` ONLY for
+      // genuinely pre-PR-C threads (no sidecar rows yet). Pulse never
+      // resumes (`persistSession: false`).
       //
-      // `modelRef` is hoisted to the outer scope (declared right after
-      // model resolution) so the finally block can use it for sidecar
-      // writes.
-
-      // PR C: resolve the resume session id from the per-provider
-      // sidecar table first; fall back to `threads.current_session_id`
-      // ONLY for genuinely pre-PR-C threads (no sidecar rows yet).
-      // Pulse never resumes (`persistSession: false`).
+      // Hoisted above the handoff/orientation block (PR D) because the
+      // handoff builder uses `resumeSessionId` as a skip condition — if
+      // a session resumed cleanly, the new combo has native continuity
+      // and a handoff packet would just duplicate context.
       //
       // Codex bot catch on PR #16: the legacy fallback was originally
       // gated on `runtime === 'claude-sdk' && thread.current_session_id`
@@ -1205,6 +1184,155 @@ export class AgentService {
             }
             return undefined;
           })();
+
+      // Build orientation context (thread, time, gap, status, vault)
+      // Prepended to prompt because SessionStart hooks don't fire in V1 query()
+      // Static content (CHAT TOOLS, skills, vault path) only on first message of session
+      const orientation = isPulseOrientation
+        ? buildPulseOrientationContext(hookContext)
+        : await buildOrientationContext(hookContext, isFirstMessage, content);
+
+      // On fresh sessions (e.g. after model swap), inject recent message history
+      // so the new model has conversational context instead of starting blind
+      let historyBlock = '';
+      if (!isPulseOrientation && isFirstMessage) {
+        const recentMessages = getMessages({ threadId, limit: 10 });
+        if (recentMessages.length > 0) {
+          const historyLines = recentMessages.map((m, i) => {
+            const role = m.role === 'user' ? cfg.identity.user_name : cfg.identity.companion_name;
+            // Last 3 messages get full content (most likely to be referenced after model swap)
+            // Older messages get truncated to save tokens
+            const isRecent = i >= recentMessages.length - 3;
+            const maxLen = isRecent ? 5000 : 500;
+            const preview = m.content.length > maxLen ? m.content.slice(0, maxLen) + '...' : m.content;
+            return `${role}: ${preview}`;
+          });
+          historyBlock = `\n[Recent Conversation]\n${historyLines.join('\n')}\n[/Recent Conversation]\n`;
+        }
+      }
+
+      // PR D: ProviderHandoff — when a turn lands on a (runtime, provider,
+      // model_ref) combo with no prior session AND the thread has prior
+      // assistant messages, bridge the gap with a memory-tier summary +
+      // last-N messages packet. Without this, switching from Sonnet to
+      // Opus mid-thread leaves Opus starting blind on its first turn.
+      //
+      // Skip conditions:
+      //  - Pulse turns (no continuity needed; pulse is one-shot).
+      //  - A session was successfully resumed (`resumeSessionId` truthy —
+      //    the native session is the source of continuity, prepending
+      //    handoff text would just duplicate context the model already
+      //    has).
+      //  - `/clear` was just used for this thread (`clearPendingForThread`
+      //    holds the marker) — user explicitly asked for a fresh start;
+      //    handoff would fight that intent.
+      //  - Internal: `buildProviderHandoff` itself returns null when the
+      //    thread has no prior assistant messages (fresh thread).
+      let handoffBlock = '';
+      const clearPendingForHandoff = this.clearPendingForThread.has(threadId);
+      if (!isPulseOrientation && !resumeSessionId && !clearPendingForHandoff) {
+        try {
+          // Memory tier is its own resolver tier — defaults to Haiku, can
+          // be overridden in Settings → Model picker for users who want
+          // richer summaries. Uses `resolveConfiguredClaudeSdkModel` so
+          // canonical/legacy refs both work, and the SDK-boundary guard
+          // catches misconfigured non-Claude tiers cleanly (handoff just
+          // falls back to extractive in that case via the cascade in
+          // `services/handoff.ts`).
+          let memoryTierModel: string;
+          try {
+            memoryTierModel = resolveConfiguredClaudeSdkModel('memory');
+          } catch {
+            // Non-Claude memory tier configured but runtime not wired
+            // yet → use Haiku default for the summary call rather than
+            // failing the whole turn. The extractive fallback will fire
+            // if the SDK call itself errors.
+            memoryTierModel = 'claude-haiku-4-5';
+          }
+
+          // PR D Codex nit: pass fromModelRef so the rendered handoff
+          // can name the previous combo ("handoff from claude/claude-sonnet-4-6
+          // to claude/claude-opus-4-7"). Read the most-recent sidecar row
+          // for this thread; if there isn't one, the field stays undefined
+          // and `renderProviderHandoffAsPrompt` omits the hint cleanly.
+          const priorSessions = listProviderSessionsForThread(thread.id);
+          const fromModelRef = priorSessions[0]?.model_ref;
+
+          const handoff = await buildProviderHandoff({
+            thread,
+            targetRuntime: modelRef.runtime,
+            targetProvider: modelRef.provider,
+            targetModelRef: modelRef.canonical,
+            fromModelRef,
+            memoryTierModel,
+            // Dependency-inject the summarizer so handoff.ts doesn't
+            // import agent.ts (avoids a circular import). The shape
+            // matches `runOneShotQuery` directly; the wrap is so the
+            // contract documented in SummarizeFn ("never throws") can
+            // be enforced — wrap any SDK throw as empty string so the
+            // cascade falls through to extractive cleanly.
+            summarize: async (sumOpts) => {
+              try {
+                return await runOneShotQuery(sumOpts);
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.warn(`[Handoff] memory-tier SDK call threw: ${errMsg}`);
+                return '';
+              }
+            },
+            identityCompanionName: cfg.identity.companion_name,
+            identityUserName: cfg.identity.user_name,
+          });
+
+          if (handoff) {
+            handoffBlock = '\n' + renderProviderHandoffAsPrompt(handoff) + '\n';
+            console.log(
+              `[Handoff] ${handoff.summarySource} summary (${handoff.summary.length} chars), ` +
+              `${handoff.recentMessages.length} recent messages, ` +
+              `~${handoff.totalTokensApprox} tokens, target=${handoff.toModelRef}`,
+            );
+          }
+        } catch (err) {
+          // Defensive: handoff failures must never block a turn. Log and
+          // proceed without a packet — the new combo will start blind on
+          // its first turn (same as pre-PR-D behavior).
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[Handoff] build failed, proceeding without packet: ${errMsg}`);
+        }
+      }
+
+      const enrichedPrompt = `[Context]\n${orientation}\n[/Context]${handoffBlock}${historyBlock}\n\n${content}`;
+
+      // Abort controller for stop_generation support + safety timeout.
+      // Passed into `dispatchClaudeQuery` (which wires it onto the SDK
+      // Options) rather than set directly here — the runtime owns
+      // option assembly as of PR B2a.
+      activeAbortController = new AbortController();
+      // Fallback matches the config default — see PR #11 / chip #38
+      // for why this bumped from 300s to 1200s (compaction + Opus 4.7
+      // tool-loop turns ran past the old cap).
+      const timeoutMs = getResonantConfig().agent.query_timeout_ms || 1200000;
+      safetyTimeout = setTimeout(() => {
+        console.warn(`[Agent] Query timed out after ${timeoutMs / 1000}s, aborting`);
+        activeAbortController?.abort();
+      }, timeoutMs);
+
+      // PR B3: SDK call site + stream consumption both live on the
+      // runtime now. `claudeRuntime.runClaudeTurn` internally calls
+      // `dispatchClaudeQuery` (still does the Options assembly) and
+      // iterates the resulting Query, yielding normalized
+      // `AgentRuntimeEvent`s instead of raw SDK message shapes.
+      // AgentService consumes those events below; the post-dispatch
+      // MCP enforce/refresh dance hangs off the `start` event handler
+      // (fires once the runtime's activeQuery is populated).
+      //
+      // `modelRef` is hoisted to the outer scope (declared right after
+      // model resolution) so the finally block can use it for sidecar
+      // writes.
+
+      // PR D: `resumeSessionId` is now resolved earlier in the try block
+      // (right after the thread-file write) so the handoff packet's
+      // skip-condition can read it. See the hoisted block above.
 
       // PR B2b-2: `fireContextUsageRefresh` closure + dedup state
       // (`pendingContextRefresh`, `lastReportedTokens`) + the

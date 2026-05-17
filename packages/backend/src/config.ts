@@ -31,6 +31,11 @@ export interface ResonantConfig {
     model: string;
     model_autonomous: string;
     model_pulse: string;
+    /** Memory tier — used by services/handoff.ts to summarize prior conversation
+     *  when a turn lands on a (runtime, provider, model_ref) combo with no
+     *  prior session. Cheap + JSON-reliable summarization (Haiku by default).
+     *  Override here or via the `agent.model_memory` DB config. */
+    model_memory: string;
     thinking_effort: ThinkingEffort | string;
     /** Optional override for autonomous tier (wakes / watchers / scribe / impulses).
      *  When unset, autonomous tier falls back to the global `thinking_effort` value.
@@ -116,6 +121,12 @@ const DEFAULTS: ResonantConfig = {
     // strengths. Override here or via the `agent.model_pulse` DB config
     // if you want a different model for the pulse path specifically.
     model_pulse: 'claude-haiku-4-5',
+    // Memory tier — used by the ProviderHandoff packet to summarize prior
+    // conversation when switching providers/models mid-thread. Haiku is
+    // cheap and produces reliable short summaries; the call is one-shot
+    // and read-only. Extractive fallback runs if this model is unavailable
+    // (e.g. user is switching AWAY from Claude because Claude is broken).
+    model_memory: 'claude-haiku-4-5',
     // Default 'auto' picks per-model: high on Opus/Sonnet, medium on Haiku.
     // Existing user configs with explicit values are respected verbatim.
     thinking_effort: 'auto' satisfies ThinkingEffort,
