@@ -337,6 +337,78 @@ export function resolveConfiguredRuntime(tier: AgentModelTier): ResolvedRuntime 
   return { runtime, modelRef, capabilities };
 }
 
+// ---------------------------------------------------------------------------
+// One-shot SDK helper (B1.5 — consolidates the rogue digest.ts import)
+// ---------------------------------------------------------------------------
+
+/**
+ * One-shot Claude SDK query — for read-only, single-turn, no-tools,
+ * no-session-resume callers (currently: the Scribe digest worker).
+ *
+ * Wraps `@anthropic-ai/claude-agent-sdk.query()` with sensible one-shot
+ * defaults (`permissionMode: 'plan'`, `tools: []`, `persistSession: false`,
+ * `maxTurns: 1`) and collects assistant text deltas plus a fallback to
+ * the result-message string. Returns the full assembled text.
+ *
+ * **Why this helper exists:** before B1.5, `digest.ts` imported `query`
+ * directly from `@anthropic-ai/claude-agent-sdk`. That made it a second
+ * SDK touchpoint outside of `agent.ts`, which would have made the
+ * upcoming runtime extraction (PR B2) harder — every site that imports
+ * the SDK has to be considered when the abstraction lands. Consolidating
+ * the SDK surface into `agent.ts` now means PR B2 only has one place to
+ * change.
+ *
+ * **Why not `ClaudeAgentRuntime.runTurn` instead:** the runtime stub
+ * landed in PR B1 throws on `runTurn` and won't have a real
+ * implementation until PR B2. Once B2 lands, `runOneShotQuery` can
+ * become a thin wrapper that constructs an `AgentTurnInput` and
+ * dispatches through the runtime — without touching `digest.ts` at all.
+ *
+ * `model` is the raw provider-native id (`'haiku'`, `'claude-sonnet-4-6'`).
+ * Caller is responsible for unwrapping `ModelRef` → raw id before passing
+ * (`unwrapModelRefForClaudeSdk` is the helper) since this function calls
+ * the Claude SDK directly.
+ */
+export async function runOneShotQuery(opts: {
+  prompt: string;
+  model: string;
+  systemPrompt: string;
+  maxTurns?: number;
+}): Promise<string> {
+  let collected = '';
+
+  for await (const message of query({
+    prompt: opts.prompt,
+    options: {
+      model: opts.model,
+      systemPrompt: opts.systemPrompt,
+      maxTurns: opts.maxTurns ?? 1,
+      permissionMode: 'plan' as any, // read-only, no tool use
+      tools: [],
+      persistSession: false,
+    },
+  })) {
+    if (!message || typeof message !== 'object' || !('type' in message)) continue;
+    const msg = message as any;
+    // Streamed assistant content — preferred when present.
+    if (msg.type === 'assistant' && msg.message?.content) {
+      for (const block of msg.message.content) {
+        if (block.type === 'text' && block.text) {
+          collected += block.text;
+        }
+      }
+    }
+    // Fallback to the result message's final string when no assistant
+    // stream came through (some SDK paths don't emit assistant deltas
+    // on very short one-shots).
+    if (msg.type === 'result' && msg.result) {
+      if (!collected) collected = msg.result;
+    }
+  }
+
+  return collected;
+}
+
 // Thin wrappers for the SDK-boundary call sites in this file — delegate
 // to the throwing resolver. Both wrappers run right before query() so
 // the throw is contained to the dispatch path (and caught by the
