@@ -1,6 +1,8 @@
 import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, type ModelRef } from '@resonant/shared';
+import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
+import type { AgentRuntime } from './runtimes/types.js';
+import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -247,6 +249,92 @@ export function resolveConfiguredModelRef(tier: AgentModelTier): ModelRef {
  */
 export function resolveConfiguredClaudeSdkModel(tier: AgentModelTier): string {
   return unwrapModelRefForClaudeSdk(resolveConfiguredModelRef(tier), tier);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime resolver (PR B1 — scaffold)
+// ---------------------------------------------------------------------------
+
+/**
+ * Singleton runtime instances. Module-level so the runtime keeps any
+ * connection / auth state across resolver calls (matters for non-
+ * Claude runtimes in later PRs; for the Claude stub it's just here so
+ * `resolveConfiguredRuntime` returns the same object each call).
+ */
+const claudeRuntime: AgentRuntime = new ClaudeAgentRuntime();
+
+/**
+ * Resolved runtime dispatch packet — what `resolveConfiguredRuntime`
+ * returns. Bundles the runtime instance, the parsed model ref, and the
+ * model's declared capabilities so the dispatcher doesn't have to do
+ * three lookups in a row.
+ */
+export interface ResolvedRuntime {
+  runtime: AgentRuntime;
+  modelRef: ModelRef;
+  capabilities: ModelCapabilities;
+}
+
+/**
+ * Fallback capabilities for a model ref that isn't in the manifest
+ * (operator typed a custom ref in config without registering it).
+ * Conservative defaults: assume no special capabilities so UI hides
+ * tool/MCP/etc. controls rather than offering features the runtime
+ * can't deliver.
+ */
+const FALLBACK_CAPABILITIES: ModelCapabilities = {
+  tools: false,
+  vision: false,
+  reasoning: false,
+  mcp: false,
+  sessionResume: false,
+  fileCheckpointing: false,
+};
+
+/**
+ * Resolve the configured tier to a runtime dispatch packet.
+ *
+ * **PR B1 status:** the only runtime wired up is `claude-sdk` (via the
+ * scaffold `ClaudeAgentRuntime`). No caller in the codebase dispatches
+ * through this resolver yet — `AgentService.processMessage` /
+ * `processAutonomous` still call `_processQuery` which calls
+ * `@anthropic-ai/claude-agent-sdk.query()` directly. This function
+ * exists so the resolver shape is in place for PR B2/B3 wiring.
+ *
+ * For tiers configured with a non-Claude ref today, this throws — the
+ * runtime simply doesn't exist yet. PR E (Codex runtime) is the first
+ * non-Claude runtime; before then, users who want to test the
+ * scaffold should keep their tiers on Claude refs.
+ */
+export function resolveConfiguredRuntime(tier: AgentModelTier): ResolvedRuntime {
+  const modelRef = resolveConfiguredModelRef(tier);
+
+  let runtime: AgentRuntime;
+  switch (modelRef.runtime) {
+    case 'claude-sdk':
+      runtime = claudeRuntime;
+      break;
+    case 'codex':
+    case 'openai-compat':
+    case 'ollama-native':
+      throw new Error(
+        `Model "${modelRef.canonical}" requires the ${modelRef.runtime} runtime, ` +
+        `which is not wired up yet (planned for a later PR of the multi-provider arc). ` +
+        `Switch the ${tier} tier back to a Claude model in Settings.`,
+      );
+    default: {
+      // Exhaustiveness check — if a new RuntimeId is added to the
+      // shared manifest and not handled here, TypeScript will flag this
+      // assignment as an error at compile time.
+      const _exhaustive: never = modelRef.runtime;
+      throw new Error(`Unknown runtime "${_exhaustive}" for model "${modelRef.canonical}"`);
+    }
+  }
+
+  const entry = findModelByRef(modelRef.canonical);
+  const capabilities = entry?.capabilities ?? FALLBACK_CAPABILITIES;
+
+  return { runtime, modelRef, capabilities };
 }
 
 // Thin wrappers for the SDK-boundary call sites in this file — delegate
