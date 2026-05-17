@@ -254,8 +254,19 @@ export class CodexRuntime implements AgentRuntime {
       ? input.systemPrompt.value
       : (input.systemPrompt.append || '');
 
+    // Handoff packet — when a (runtime, provider, model_ref) combo has
+    // no prior session for this thread AND the thread has prior
+    // assistant turns, the dispatcher builds a memory-tier summary
+    // packet so the new combo gets cross-provider continuity instead
+    // of starting blind. `fromModelRef` is best-effort (from the
+    // most-recent sidecar row) and may be undefined on legacy threads.
     const handoffNote = input.handoff
-      ? `[Cross-provider handoff from ${input.handoff.fromModelRef}]\n${input.handoff.summary}\n[/Cross-provider handoff]\n\n`
+      ? (() => {
+          const from = input.handoff.fromModelRef
+            ? `from ${input.handoff.fromModelRef} `
+            : '';
+          return `[Cross-provider handoff ${from}— summary of prior conversation]\n${input.handoff.summary}\n[/Cross-provider handoff]\n\n`;
+        })()
       : '';
 
     const context = {

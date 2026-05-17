@@ -36,10 +36,58 @@ vi.mock('../auth/codex-oauth.js', async () => {
 });
 
 // Mock the sidecar so we don't need a real DB initialized.
+const setProviderSessionSpy = vi.fn();
 vi.mock('../db/provider-sessions.js', () => ({
   getProviderSession: vi.fn(() => null),
-  setProviderSession: vi.fn(),
+  setProviderSession: (...args: unknown[]) => setProviderSessionSpy(...args),
 }));
+
+// Mock pi-ai's stream + getModel so we can simulate a full success path
+// without a real OpenAI request. The stream factory returns a value that
+// behaves like pi-ai's AssistantMessageEventStream: an async-iterable
+// over events plus a `result()` promise that resolves with the final
+// AssistantMessage.
+type FakeStream = AsyncIterable<unknown> & {
+  result(): Promise<unknown>;
+};
+const streamFactory: { value: ((...args: unknown[]) => FakeStream) | null } = { value: null };
+vi.mock('@earendil-works/pi-ai/openai-codex-responses', () => ({
+  streamOpenAICodexResponses: (...args: unknown[]) => {
+    if (!streamFactory.value) {
+      throw new Error('streamOpenAICodexResponses called but no fake stream is set in test');
+    }
+    return streamFactory.value(...args);
+  },
+}));
+
+// Mock getModel to return a synthetic Model when the id is one of our
+// known test ids. Unknown ids return undefined (matching pi-ai behavior),
+// which exercises the "model not in registry" branch.
+vi.mock('@earendil-works/pi-ai', async () => {
+  const actual = await vi.importActual<typeof import('@earendil-works/pi-ai')>(
+    '@earendil-works/pi-ai',
+  );
+  return {
+    ...actual,
+    getModel: (provider: string, modelId: string) => {
+      if (provider === 'openai-codex' && (modelId === 'gpt-5.1' || modelId === 'test-model')) {
+        return {
+          id: modelId,
+          name: modelId,
+          api: 'openai-codex-responses',
+          provider: 'openai-codex',
+          baseUrl: 'https://chatgpt.com/backend-api',
+          reasoning: true,
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 100000,
+        };
+      }
+      return undefined;
+    },
+  };
+});
 
 import { translatePiEvent, CodexRuntime } from './codex.js';
 import type { AssistantMessageEvent, AssistantMessage } from '@earendil-works/pi-ai';
@@ -92,7 +140,25 @@ function fakeTurnInput(overrides: Partial<AgentTurnInput> = {}): AgentTurnInput 
 
 beforeEach(() => {
   codexAuthMock.loggedIn = false;
+  streamFactory.value = null;
+  setProviderSessionSpy.mockReset();
 });
+
+/**
+ * Build a fake pi-ai AssistantMessageEventStream that emits the given
+ * events in order, then resolves `result()` with `finalMessage`. Used
+ * by the successful-stream test to drive CodexRuntime end-to-end.
+ */
+function makeFakeStream(events: AssistantMessageEvent[], finalMessage: AssistantMessage): FakeStream {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const e of events) {
+        yield e;
+      }
+    },
+    result: async () => finalMessage,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // translatePiEvent — the pure event translation table
@@ -224,5 +290,109 @@ describe('CodexRuntime.runTurn — auth + model-resolution gating', () => {
     const runtime = new CodexRuntime();
     expect(runtime.id).toBe('codex');
     expect(runtime.providerId).toBe('openai-codex');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Successful stream — end-to-end with a mocked pi-ai stream.
+//
+// Per design review (Codex bot catch on PR E2): the auth/model-gating
+// tests don't exercise the most likely-to-regress code path: text_delta
+// accumulation, final message capture (responseId + usage), sidecar
+// persistence, and event ordering. This test stages a complete fake
+// stream and asserts the full event sequence + side effect.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('CodexRuntime.runTurn — successful stream end-to-end', () => {
+  it('emits start → text_delta(s) → session → usage → done(stop) and persists the session id', async () => {
+    codexAuthMock.loggedIn = true;
+
+    const fakeFinal = fakeAssistantMessage({
+      responseId: 'resp_abc123',
+      usage: {
+        input: 42, output: 17, cacheRead: 10, cacheWrite: 0, totalTokens: 59,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
+      },
+      stopReason: 'stop',
+    });
+
+    streamFactory.value = () => makeFakeStream(
+      [
+        { type: 'start', partial: fakeAssistantMessage() },
+        { type: 'text_delta', contentIndex: 0, delta: 'Hello ', partial: fakeAssistantMessage() },
+        { type: 'text_delta', contentIndex: 0, delta: 'world', partial: fakeAssistantMessage() },
+      ],
+      fakeFinal,
+    );
+
+    const runtime = new CodexRuntime();
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+    // First event must be `start` per the runtime contract.
+    expect(events[0]).toEqual({
+      type: 'start',
+      runtimeId: 'codex',
+      modelRef: expect.objectContaining({ canonical: 'openai-codex/gpt-5.1' }),
+    });
+
+    // Text deltas pass through as true deltas (no cumulative subtraction).
+    const textDeltas = events.filter((e) => e.type === 'text_delta');
+    expect(textDeltas).toEqual([
+      { type: 'text_delta', text: 'Hello ' },
+      { type: 'text_delta', text: 'world' },
+    ]);
+
+    // After the stream drains, `stream.result()` provides the final
+    // message — runtime emits session + usage + done from that.
+    const sessionEvt = events.find((e) => e.type === 'session');
+    expect(sessionEvt).toEqual({ type: 'session', sessionId: 'resp_abc123' });
+
+    const usageEvt = events.find((e) => e.type === 'usage');
+    expect(usageEvt).toEqual({
+      type: 'usage',
+      input: 42,
+      output: 17,
+      cacheRead: 10,
+      cacheWrite: 0,
+      cost: 0.001,
+    });
+
+    // Done must be the LAST event and must carry the stop finish reason.
+    expect(events[events.length - 1]).toEqual({ type: 'done', finishReason: 'stop' });
+
+    // Sidecar persistence — runtime calls persistSessionId which writes
+    // to thread_provider_sessions via setProviderSession.
+    expect(setProviderSessionSpy).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      runtimeId: 'codex',
+      provider: 'openai-codex',
+      modelRef: 'openai-codex/gpt-5.1',
+      sessionId: 'resp_abc123',
+    });
+  });
+
+  it('skips session/usage emit when the final message has no responseId (degraded provider)', async () => {
+    // Defensive case: pi-ai's contract has responseId as optional. If
+    // it's missing, we shouldn't pretend to capture a session id (would
+    // pollute the sidecar with an empty string).
+    codexAuthMock.loggedIn = true;
+
+    const fakeFinal = fakeAssistantMessage({
+      responseId: undefined,
+      stopReason: 'stop',
+    });
+    streamFactory.value = () => makeFakeStream(
+      [{ type: 'text_delta', contentIndex: 0, delta: 'ok', partial: fakeAssistantMessage() }],
+      fakeFinal,
+    );
+
+    const runtime = new CodexRuntime();
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+    expect(events.find((e) => e.type === 'session')).toBeUndefined();
+    expect(setProviderSessionSpy).not.toHaveBeenCalled();
+    // Still emits usage + done.
+    expect(events.find((e) => e.type === 'usage')).toBeDefined();
+    expect(events[events.length - 1]).toEqual({ type: 'done', finishReason: 'stop' });
   });
 });

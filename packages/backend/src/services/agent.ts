@@ -4,7 +4,7 @@ import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClau
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import { CodexRuntime } from './runtimes/codex.js';
 import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
-import { buildProviderHandoff, renderProviderHandoffAsPrompt } from './handoff.js';
+import { buildProviderHandoff, renderProviderHandoffAsPrompt, type ProviderHandoff } from './handoff.js';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -1256,6 +1256,15 @@ export class AgentService {
       //  - Internal: `buildProviderHandoff` itself returns null when the
       //    thread has no prior assistant messages (fresh thread).
       let handoffBlock = '';
+      // PR E2 fix: hoist the typed handoff packet itself so the Codex
+      // dispatch branch below can pass it through to CodexRuntime's
+      // `input.handoff` field. Pre-fix this PR set
+      // `codexHandoff = handoffBlock ? undefined : undefined` (a
+      // placeholder Codex bot caught) — Codex turns silently skipped
+      // the memory-tier summary bridge. With this hoist, Claude →
+      // Codex switches get the same handoff narrative Claude → Claude
+      // switches get.
+      let handoff: ProviderHandoff | null = null;
       const clearPendingForHandoff = this.clearPendingForThread.has(threadId);
       if (!isPulseOrientation && !resumeSessionId && !clearPendingForHandoff) {
         try {
@@ -1285,7 +1294,7 @@ export class AgentService {
           const priorSessions = listProviderSessionsForThread(thread.id);
           const fromModelRef = priorSessions[0]?.model_ref;
 
-          const handoff = await buildProviderHandoff({
+          handoff = await buildProviderHandoff({
             thread,
             targetRuntime: modelRef.runtime,
             targetProvider: modelRef.provider,
@@ -1415,12 +1424,17 @@ export class AgentService {
         // takes a single systemPrompt field.
         const systemPromptText = `${appendText}\n\n[Context]\n${orientation}\n[/Context]`;
 
-        // Handoff packet — built earlier in the dispatcher (handoffBlock
-        // variable, currently rendered as text for prepending to the
-        // Claude prompt). For Codex we pass the raw packet via the
-        // typed `handoff` field so the runtime can render it as a
-        // dedicated system note instead of bleeding into history.
-        const codexHandoff = handoffBlock ? undefined : undefined;  // PR E2: handoff packet plumbing deferred (handoffBlock already prepends text in Claude path; same prepend handled inside CodexRuntime via the systemPrompt at minimum)
+        // Handoff packet — built earlier in the dispatcher. Claude path
+        // consumes the rendered text via `handoffBlock` (prepended to
+        // the enriched prompt). Codex path gets the typed packet
+        // directly — CodexRuntime renders it as a system-note prefix
+        // (see `handoffNote` in runtimes/codex.ts). This is the bridge
+        // that lets a Claude → Codex switch carry the memory-tier
+        // summary cleanly. `handoff` is `null` when there's no prior
+        // assistant turn, when a session resumed cleanly, or when
+        // /clear was just used — all the same skip conditions the
+        // Claude path respects.
+        const codexHandoff = handoff ?? undefined;
 
         const codexInput: AgentTurnInput = {
           thread,
