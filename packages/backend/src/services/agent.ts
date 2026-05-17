@@ -1,8 +1,8 @@
-import { query, AbortError, listSessions, type Options, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
+import { query, AbortError, listSessions, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
-import type { AgentRuntime } from './runtimes/types.js';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
+import type { AgentRuntime } from './runtimes/types.js';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -261,7 +261,7 @@ export function resolveConfiguredClaudeSdkModel(tier: AgentModelTier): string {
  * Claude runtimes in later PRs; for the Claude stub it's just here so
  * `resolveConfiguredRuntime` returns the same object each call).
  */
-const claudeRuntime: AgentRuntime = new ClaudeAgentRuntime();
+const claudeRuntime = new ClaudeAgentRuntime();
 
 /**
  * Resolved runtime dispatch packet — what `resolveConfiguredRuntime`
@@ -1071,43 +1071,11 @@ export class AgentService {
       'Do not greet, narrate availability, acknowledge the check, or use tools. If you do reach out, be brief and name the concrete reason first.',
     ].join('\n');
 
-    const options: Options = {
-      model,
-      systemPrompt: isPulseOrientation
-        ? pulseSystemPrompt
-        : { type: 'preset', preset: 'claude_code', append: appendText },
-      cwd: AGENT_CWD,
-      permissionMode: isPulseOrientation ? 'plan' : 'bypassPermissions',
-      allowDangerouslySkipPermissions: !isPulseOrientation,
-      maxTurns: isPulseOrientation ? 1 : 30,
-
-      includePartialMessages: !isPulseOrientation,
-      // `display: 'summarized'` is required to actually see thinking on Opus
-      // 4.7+ — those models default `display` to `'omitted'`, which causes the
-      // API to return empty `thinking` blocks (only `signature` for continuity).
-      // On 4.6 / Sonnet 4.6 the default is already `'summarized'` so this is
-      // a no-op. Without it, the streaming capture path at the bottom of this
-      // file never sees `thinking_delta` events on 4.7 and the panel logs
-      // "0 thinking block(s)" even when the model thought hard.
-      // Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
-      thinking: isPulseOrientation ? { type: 'disabled' } : { type: 'adaptive', display: 'summarized' },
-      effort: effectiveEffort as any,
-      tools: isPulseOrientation ? [] : undefined,
-      persistSession: isPulseOrientation ? false : undefined,
-      hooks: isPulseOrientation ? undefined : createHooks(hookContext),
-      // Plugin: native skill discovery from .claude/skills/
-      plugins: isPulseOrientation ? undefined : [{ type: 'local' as const, path: join(AGENT_CWD, '.claude').replace(/\\/g, '/') }],
-      // Explicitly pass MCP servers — SDK isolation mode doesn't auto-discover .mcp.json
-      // Dynamic loading: CC and Mind MCP servers are keyword-gated to reduce token overhead
-      ...(!isPulseOrientation && Object.keys(mcpServersFromConfig).length > 0 && {
-        mcpServers: buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage),
-      }),
-    };
-
-    // Resume existing session if available
-    if (!isPulseOrientation && thread.current_session_id) {
-      options.resume = thread.current_session_id;
-    }
+    // SDK options assembly + the query() call moved into
+    // `ClaudeAgentRuntime.dispatchClaudeQuery` in PR B2a. Inputs to that
+    // method are constructed below (after orientation + history are
+    // built); the dispatch call itself happens inside the outer try
+    // block alongside the abort/timeout setup.
 
     if (autonomousOpts.streamToClient !== false) {
       registry.broadcast({
@@ -1161,9 +1129,11 @@ export class AgentService {
 
       const enrichedPrompt = `[Context]\n${orientation}\n[/Context]${historyBlock}\n\n${content}`;
 
-      // Abort controller for stop_generation support + safety timeout
+      // Abort controller for stop_generation support + safety timeout.
+      // Passed into `dispatchClaudeQuery` (which wires it onto the SDK
+      // Options) rather than set directly here — the runtime owns
+      // option assembly as of PR B2a.
       activeAbortController = new AbortController();
-      options.abortController = activeAbortController;
       // Fallback matches the config default — see PR #11 / chip #38
       // for why this bumped from 300s to 1200s (compaction + Opus 4.7
       // tool-loop turns ran past the old cap).
@@ -1173,13 +1143,29 @@ export class AgentService {
         activeAbortController?.abort();
       }, timeoutMs);
 
-      // File checkpointing for rewind support
-      if (!isPulseOrientation) {
-        options.enableFileCheckpointing = true;
-      }
-
-      // V1 query — single params object with prompt and options
-      const result = query({ prompt: enrichedPrompt, options });
+      // PR B2a: SDK call site moved into ClaudeAgentRuntime. Behavior is
+      // byte-identical to the pre-B2a inline assembly — the runtime
+      // builds the same Options shape, calls query() with the same
+      // prompt, returns the same Query result for the stream loop
+      // below to iterate. PR B3 will further normalize this so
+      // AgentService consumes AgentRuntimeEvent instead of SDK shapes.
+      const result = claudeRuntime.dispatchClaudeQuery({
+        prompt: enrichedPrompt,
+        model,
+        cwd: AGENT_CWD,
+        isPulse: isPulseOrientation,
+        effectiveEffort,
+        appendSystemPromptText: appendText,
+        pulseSystemPrompt,
+        mcpServers: !isPulseOrientation && Object.keys(mcpServersFromConfig).length > 0
+          ? buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage)
+          : undefined,
+        hooks: isPulseOrientation ? undefined : createHooks(hookContext),
+        resumeSessionId: !isPulseOrientation && thread.current_session_id
+          ? thread.current_session_id
+          : undefined,
+        abortController: activeAbortController,
+      });
       activeQuery = result;
 
       if (!isPulseOrientation) {
