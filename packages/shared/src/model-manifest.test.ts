@@ -241,6 +241,31 @@ describe('normalizeModelRef — accepts both legacy and canonical', () => {
     );
   });
 
+  it('maps legacy E0 preview bare ids to current Codex equivalents (PR E2 migration)', () => {
+    // PR E0 shipped placeholder ids (gpt-5, gpt-5-mini, o3) that PR E2
+    // replaced with real pi-ai-registered ids (gpt-5.1, gpt-5.1-codex-mini).
+    // Anyone whose config still names the old ids would otherwise fall
+    // through to the Claude fallback (claude/gpt-5), silently mis-routing
+    // a Codex-shaped id at the SDK boundary. Verify the alias map catches
+    // each old id and re-routes it as openai-codex.
+
+    const oldGpt5 = normalizeModelRef('gpt-5');
+    expect(oldGpt5.provider).toBe('openai-codex');
+    expect(oldGpt5.runtime).toBe('codex');
+    expect(oldGpt5.canonical).toBe('openai-codex/gpt-5.1');
+
+    const oldGpt5Mini = normalizeModelRef('gpt-5-mini');
+    expect(oldGpt5Mini.provider).toBe('openai-codex');
+    expect(oldGpt5Mini.runtime).toBe('codex');
+    expect(oldGpt5Mini.canonical).toBe('openai-codex/gpt-5.1-codex-mini');
+
+    const oldO3 = normalizeModelRef('o3');
+    expect(oldO3.provider).toBe('openai-codex');
+    expect(oldO3.runtime).toBe('codex');
+    // o3 routes to gpt-5.1 (reasoning-capable Codex; pi-ai has no o3)
+    expect(oldO3.canonical).toBe('openai-codex/gpt-5.1');
+  });
+
   it('throws a friendly error for empty input', () => {
     expect(() => normalizeModelRef('')).toThrow(/empty model reference/);
     expect(() => normalizeModelRef('   ')).toThrow(/empty model reference/);

@@ -346,6 +346,28 @@ export function parseModelRef(canonical: string): ModelRef | null {
  * Throws only for genuinely empty input or canonical-form input with an
  * unknown provider prefix.
  */
+/**
+ * Aliases for bare ids whose manifest entry has been replaced. Keyed by
+ * the OLD id, value is the canonical ref the new manifest entry uses.
+ * Used by `normalizeModelRef` after the manifest lookup miss but before
+ * the Claude fallback — so old config values stay routed to the right
+ * provider instead of silently falling through to the Claude SDK.
+ *
+ * Add entries here whenever a manifest id changes. Removing entries
+ * silently breaks anyone with the old id in their config; prefer to
+ * leave aliases in long-term unless the legacy id is known-dead.
+ */
+const LEGACY_BARE_ID_ALIASES: Record<string, string> = {
+  // PR E0 preview ids → PR E2 real pi-ai-registered ids.
+  'gpt-5': 'openai-codex/gpt-5.1',
+  'gpt-5-mini': 'openai-codex/gpt-5.1-codex-mini',
+  // o3 was the E0 reasoning placeholder. pi-ai's openai-codex registry
+  // doesn't expose an o3 id; route to gpt-5.1 (reasoning-capable Codex
+  // model) as the closest current equivalent. Users who specifically
+  // want o3-line reasoning can pick gpt-5.1-codex-mini in Settings.
+  'o3': 'openai-codex/gpt-5.1',
+};
+
 export function normalizeModelRef(input: string): ModelRef {
   if (!input || !input.trim()) {
     throw new Error('normalizeModelRef: empty model reference');
@@ -381,6 +403,21 @@ export function normalizeModelRef(input: string): ModelRef {
       model: entry.id,
       runtime: entry.runtime,
     };
+  }
+
+  // PR E2: legacy alias map for E0 preview ids. The first wave of Codex
+  // preview entries (gpt-5, gpt-5-mini, o3) were placeholders that PR E2
+  // replaced with real pi-ai-registered ids. Anyone who saved a preview
+  // id to their config would otherwise fall through to the Claude fallback
+  // below, silently sending a Codex-shaped id to the Claude SDK boundary.
+  // Map old → closest current Codex equivalent before the fallback.
+  const aliased = LEGACY_BARE_ID_ALIASES[trimmed];
+  if (aliased) {
+    // Re-resolve through the canonical-form branch — guarantees the
+    // mapped target gets validated against the manifest, and any future
+    // alias-of-alias mistake surfaces as an unknown provider error
+    // instead of silently mis-routing.
+    return normalizeModelRef(aliased);
   }
 
   // Legacy fallback: assume Claude. Matches every pre-multi-provider

@@ -1413,10 +1413,28 @@ export class AgentService {
             content: m.content,
             createdAt: m.created_at,
           }));
-        // Append the user's current message (which hasn't been persisted yet
-        // — persistence happens in the caller before _processQuery).
-        // The user message IS in the DB by this point (created earlier in
-        // the caller), so include it via the load above; do NOT double-add.
+
+        // PR E2 fix (Codex bot catch): the filter above drops `system`
+        // and other non-owner roles. The caller writes the current user
+        // message to the DB before invoking _processQuery, but some
+        // inbound channels (or future role types) might store it under
+        // a role we filter out — in which case GPT would be asked to
+        // respond without ever seeing what was just said.
+        //
+        // Defensive: if the chronologically-last user-role message in
+        // the replay doesn't match the current prompt, append it
+        // explicitly. Idempotent in the common case (DB user-role row
+        // matches), defensive against future weird role mappings.
+        const lastMsg = normalizedMessages[normalizedMessages.length - 1];
+        const currentPromptPresent = lastMsg?.role === 'user'
+          && lastMsg.content === content;
+        if (!currentPromptPresent) {
+          normalizedMessages.push({
+            role: 'user',
+            content,
+            createdAt: new Date().toISOString(),
+          });
+        }
 
         // System prompt folds CLAUDE.md + tool rules + orientation into
         // one block. Codex doesn't have a system-vs-developer-vs-user
