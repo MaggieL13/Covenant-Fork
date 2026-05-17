@@ -1,4 +1,4 @@
-import { query, AbortError, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import { query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
@@ -595,20 +595,11 @@ class QueryQueue {
 
 const queryQueue = new QueryQueue();
 
-// Extract a short summary from thinking text (first sentence, capped at ~120 chars)
-function extractThinkingSummary(text: string): string {
-  const trimmed = text.replace(/^\s+/, '');
-  // Find first sentence boundary
-  const match = trimmed.match(/^(.+?(?:\.\s|!\s|\?\s|\n))/);
-  if (match) {
-    const sentence = match[1].trim();
-    if (sentence.length <= 120) return sentence;
-    return sentence.slice(0, 117) + '...';
-  }
-  // No sentence boundary found — take first 120 chars
-  if (trimmed.length <= 120) return trimmed;
-  return trimmed.slice(0, 117) + '...';
-}
+// PR B3: `extractThinkingSummary` moved into `runtimes/claude-sdk.ts`
+// (its only caller, `runClaudeTurn`, lives there now). Duplicated as a
+// small private helper in the runtime file rather than back-imported
+// to avoid circular module evaluation risk between agent.ts and
+// runtimes/claude-sdk.ts.
 
 interface ThinkingInsertion {
   textOffset: number;
@@ -939,7 +930,10 @@ export class AgentService {
     let isCompactionInProgress = false;
     const toolInsertions: ToolInsertion[] = [];
     const thinkingBlocks: ThinkingInsertion[] = [];
-    let currentThinkingAccum = '';
+    // PR B3: `currentThinkingAccum` (the per-content-block thinking
+    // text buffer) moved into `runClaudeTurn`. The runtime accumulates
+    // deltas internally and emits a single `thinking_delta` event with
+    // the full block text + summary at `content_block_stop`.
 
     // Build hook context
     const platform = platformOpts?.platform || 'web';
@@ -1146,75 +1140,15 @@ export class AgentService {
         activeAbortController?.abort();
       }, timeoutMs);
 
-      // PR B2a: SDK call site moved into ClaudeAgentRuntime. Behavior is
-      // byte-identical to the pre-B2a inline assembly — the runtime
-      // builds the same Options shape, calls query() with the same
-      // prompt, returns the same Query result for the stream loop
-      // below to iterate. PR B3 will further normalize this so
-      // AgentService consumes AgentRuntimeEvent instead of SDK shapes.
-      const result = claudeRuntime.dispatchClaudeQuery({
-        prompt: enrichedPrompt,
-        model,
-        cwd: AGENT_CWD,
-        isPulse: isPulseOrientation,
-        effectiveEffort,
-        appendSystemPromptText: appendText,
-        pulseSystemPrompt,
-        mcpServers: !isPulseOrientation && Object.keys(mcpServersFromConfig).length > 0
-          ? buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage)
-          : undefined,
-        hooks: isPulseOrientation ? undefined : createHooks(hookContext),
-        resumeSessionId: !isPulseOrientation && thread.current_session_id
-          ? thread.current_session_id
-          : undefined,
-        abortController: activeAbortController,
-      });
-      // PR B2b-2: `claudeRuntime.dispatchClaudeQuery` captures the
-      // returned Query as its own `activeQuery` so capability methods
-      // (rewindFiles, MCP live ops, fireContextUsageRefresh) operate
-      // on it without AgentService having to pass it through.
-
-      if (!isPulseOrientation) {
-        // Enforce MCP server preferences on query start (disable servers
-        // the user toggled off; re-enable + reconnect servers that
-        // should be on). All SDK ops go through the runtime — AgentService
-        // doesn't reach into `result.toggleMcpServer` directly.
-        const disabledServers = getDisabledMcpServers();
-        claudeRuntime.mcpServerStatusLive().then(async (statuses) => {
-          if (!statuses) return;
-          for (const s of statuses) {
-            if (disabledServers.has(s.name) && s.status !== 'disabled') {
-              const toggleResult = await claudeRuntime.toggleMcpServerLive(s.name, false);
-              if (!toggleResult.error) {
-                console.log(`[MCP] Disabled "${s.name}" on query start (persistent preference)`);
-              }
-            } else if (!disabledServers.has(s.name) && s.status === 'disabled') {
-              const toggleResult = await claudeRuntime.toggleMcpServerLive(s.name, true);
-              if (!toggleResult.error) {
-                await claudeRuntime.reconnectMcpServerLive(s.name);
-                console.log(`[MCP] Re-enabled "${s.name}" on query start (persistent preference)`);
-              }
-            }
-          }
-        }).catch(() => {});
-
-        // Refresh MCP server status cache (non-blocking — feeds the
-        // settings panel via getMcpStatus()).
-        claudeRuntime.mcpServerStatusLive().then(statuses => {
-          if (!statuses) return;
-          cachedMcpStatus = statuses.map(s => ({
-            name: s.name,
-            status: s.status as McpServerInfo['status'],
-            error: s.error,
-            toolCount: s.tools?.length ?? 0,
-            tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
-            scope: s.scope,
-          }));
-          console.log(`MCP status refreshed: ${cachedMcpStatus.length} servers`);
-        }).catch(err => {
-          console.warn('Failed to get MCP status:', err instanceof Error ? err.message : err);
-        });
-      }
+      // PR B3: SDK call site + stream consumption both live on the
+      // runtime now. `claudeRuntime.runClaudeTurn` internally calls
+      // `dispatchClaudeQuery` (still does the Options assembly) and
+      // iterates the resulting Query, yielding normalized
+      // `AgentRuntimeEvent`s instead of raw SDK message shapes.
+      // AgentService consumes those events below; the post-dispatch
+      // MCP enforce/refresh dance hangs off the `start` event handler
+      // (fires once the runtime's activeQuery is populated).
+      const modelRef = normalizeModelRef(model);
 
       // PR B2b-2: `fireContextUsageRefresh` closure + dedup state
       // (`pendingContextRefresh`, `lastReportedTokens`) + the
@@ -1234,108 +1168,130 @@ export class AgentService {
         });
       };
 
-      // Simplified stream loop — hooks handle tool activity, audit, images
-      // Inner try/catch for AbortError (stop_generation)
-      try {
-      for await (const msg of result) {
-        // Capture session ID from any message
-        if (msg && typeof msg === 'object' && 'session_id' in msg) {
-          const newSessionId = msg.session_id as string;
-          if (newSessionId && newSessionId !== sessionId) {
-            sessionId = newSessionId;
-            // Update hook context so hooks log the correct session
-            hookContext.sessionId = sessionId;
-          }
-        }
-
-        if (!msg || typeof msg !== 'object' || !('type' in msg)) continue;
-
-        const msgType = (msg as any).type;
-        // Capture thinking from raw stream events (SDK strips them from assistant messages)
-        if (msgType === 'stream_event') {
-          const streamEvent = (msg as any).event;
-          if (streamEvent?.type === 'content_block_start' && streamEvent?.content_block?.type === 'thinking') {
-            currentThinkingAccum = '';
-          } else if (streamEvent?.type === 'content_block_delta' && streamEvent?.delta?.type === 'thinking_delta') {
-            const thinkingText = streamEvent.delta.thinking || '';
-            if (thinkingText) {
-              currentThinkingAccum += thinkingText;
-            }
-          } else if (streamEvent?.type === 'content_block_stop' && currentThinkingAccum) {
-            const summary = extractThinkingSummary(currentThinkingAccum);
-            thinkingBlocks.push({
-              textOffset: fullResponse.length,
-              content: currentThinkingAccum,
-              summary,
-            });
-            registry.broadcast({ type: 'thinking', content: currentThinkingAccum, summary });
-            currentThinkingAccum = '';
-          }
-        }
-
-        if (msgType === 'assistant') {
-          // PR #10: refresh context-usage state on each assistant tick
-          // while the query is still alive. Calling getContextUsage()
-          // from the `result` handler races the SDK's stream-close (it
-          // fires `Query closed before response received`); calling here
-          // succeeds because we're still mid-stream.
-          //
-          // Fire-and-forget — do NOT await. We don't want to delay the
-          // assistant message handling below for a metrics round-trip.
-          // The helper debounces via `pendingContextRefresh` so multiple
-          // assistant ticks in a single turn don't pile up control
-          // requests. Last successful fetch in the turn wins, which is
-          // what the chat-header / /cost surfaces want.
-          //
-          // Pulse turns deliberately excluded — pulse's tiny session
-          // shouldn't bounce the gauge away from the real chat/autonomous
-          // session value.
+      // PR B3: normalized event-stream loop. `runClaudeTurn` translates
+      // SDK message shapes into `AgentRuntimeEvent`s; this loop maps
+      // each event type to the appropriate side effects (broadcast /
+      // persistence / session bookkeeping). Errors from the runtime
+      // surface as `{type: 'error'}` events; aborts as
+      // `{type: 'done', finishReason: 'aborted'}`. The runtime aims to
+      // never throw — the outer `try/catch` below is a safety net for
+      // genuinely unexpected exceptions.
+      for await (const event of claudeRuntime.runClaudeTurn({
+        prompt: enrichedPrompt,
+        model,
+        cwd: AGENT_CWD,
+        isPulse: isPulseOrientation,
+        effectiveEffort,
+        appendSystemPromptText: appendText,
+        pulseSystemPrompt,
+        mcpServers: !isPulseOrientation && Object.keys(mcpServersFromConfig).length > 0
+          ? buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage)
+          : undefined,
+        hooks: isPulseOrientation ? undefined : createHooks(hookContext),
+        resumeSessionId: !isPulseOrientation && thread.current_session_id
+          ? thread.current_session_id
+          : undefined,
+        abortController: activeAbortController,
+      }, modelRef)) {
+        if (event.type === 'start') {
+          // First event — `dispatchClaudeQuery` has run inside the
+          // runtime and `activeQuery` is now populated. Kick off the
+          // post-dispatch MCP enforce + refresh dance (was inline
+          // immediately after `dispatchClaudeQuery` returned pre-B3).
           if (!isPulseOrientation) {
-            fireContextUsageRefresh();
-          }
-
-          const assistantMsg = msg as any;
-          if (assistantMsg.message?.content) {
-            for (const block of assistantMsg.message.content) {
-              if (block.type === 'text' && block.text) {
-                if (!responseTruncated) {
-                  if (fullResponse) fullResponse += '\n\n' + block.text;
-                  else fullResponse = block.text;
-
-                  if (fullResponse.length > MAX_RESPONSE_LENGTH) {
-                    fullResponse = fullResponse.slice(0, MAX_RESPONSE_LENGTH) + '\n[Response truncated due to length]';
-                    responseTruncated = true;
+            const disabledServers = getDisabledMcpServers();
+            claudeRuntime.mcpServerStatusLive().then(async (statuses) => {
+              if (!statuses) return;
+              for (const s of statuses) {
+                if (disabledServers.has(s.name) && s.status !== 'disabled') {
+                  const toggleResult = await claudeRuntime.toggleMcpServerLive(s.name, false);
+                  if (!toggleResult.error) {
+                    console.log(`[MCP] Disabled "${s.name}" on query start (persistent preference)`);
                   }
-
-                  if (autonomousOpts.streamToClient !== false) {
-                    registry.broadcast({
-                      type: 'stream_token',
-                      messageId: streamMsgId,
-                      token: fullResponse,
-                    });
+                } else if (!disabledServers.has(s.name) && s.status === 'disabled') {
+                  const toggleResult = await claudeRuntime.toggleMcpServerLive(s.name, true);
+                  if (!toggleResult.error) {
+                    await claudeRuntime.reconnectMcpServerLive(s.name);
+                    console.log(`[MCP] Re-enabled "${s.name}" on query start (persistent preference)`);
                   }
                 }
               }
-              // Thinking blocks are captured from stream_event, not here (avoids duplicates)
+            }).catch(() => {});
+
+            claudeRuntime.mcpServerStatusLive().then(statuses => {
+              if (!statuses) return;
+              cachedMcpStatus = statuses.map(s => ({
+                name: s.name,
+                status: s.status as McpServerInfo['status'],
+                error: s.error,
+                toolCount: s.tools?.length ?? 0,
+                tools: s.tools?.map(t => ({ name: t.name, description: t.description })),
+                scope: s.scope,
+              }));
+              console.log(`MCP status refreshed: ${cachedMcpStatus.length} servers`);
+            }).catch(err => {
+              console.warn('Failed to get MCP status:', err instanceof Error ? err.message : err);
+            });
+          }
+          continue;
+        }
+
+        if (event.type === 'session') {
+          if (event.sessionId !== sessionId) {
+            sessionId = event.sessionId;
+            // Update hook context so hooks log the correct session
+            hookContext.sessionId = sessionId;
+          }
+          continue;
+        }
+
+        if (event.type === 'text_delta') {
+          // PR #10: refresh context-usage state on each text tick while
+          // the query is still alive (was per-assistant-message pre-B3,
+          // which fires at roughly the same cadence as text deltas
+          // anyway since text comes via assistant messages). Pulse turns
+          // excluded — pulse's tiny session shouldn't bounce the gauge.
+          if (!isPulseOrientation) {
+            fireContextUsageRefresh();
+          }
+          if (!responseTruncated) {
+            if (fullResponse) fullResponse += '\n\n' + event.text;
+            else fullResponse = event.text;
+
+            if (fullResponse.length > MAX_RESPONSE_LENGTH) {
+              fullResponse = fullResponse.slice(0, MAX_RESPONSE_LENGTH) + '\n[Response truncated due to length]';
+              responseTruncated = true;
+            }
+
+            if (autonomousOpts.streamToClient !== false) {
+              registry.broadcast({
+                type: 'stream_token',
+                messageId: streamMsgId,
+                token: fullResponse,
+              });
             }
           }
-        } else if (msgType === 'result') {
-          const resultMsg = msg as any;
-          // Context-usage state is populated by the assistant-message
-          // handler via fireContextUsageRefresh() (defined below). The
-          // result message arrives as the SDK closes the stream, so
-          // calling getContextUsage() here races the close — see the
-          // fire-and-forget pattern in the assistant branch for the
-          // working timing.
+          continue;
+        }
 
-          if (resultMsg.subtype !== 'success') {
-            console.error('Agent error:', resultMsg.subtype, resultMsg.errors);
-          }
-        } else if (msgType === 'system') {
-          const systemMsg = msg as any;
-          // Detect compaction boundary
-          if (systemMsg.subtype === 'compact_boundary' && systemMsg.compact_metadata) {
-            const preTokens = systemMsg.compact_metadata.pre_tokens || claudeRuntime.getContextUsage().tokensUsed;
+        if (event.type === 'thinking_delta') {
+          thinkingBlocks.push({
+            textOffset: fullResponse.length,
+            content: event.text,
+            summary: event.summary ?? '',
+          });
+          registry.broadcast({ type: 'thinking', content: event.text, summary: event.summary ?? '' });
+          continue;
+        }
+
+        if (event.type === 'compaction_notice') {
+          if (event.phase === 'starting') {
+            console.log('[Compaction] Compacting in progress...');
+            isCompactionInProgress = true;  // PR #11: set flag — abort path needs to know
+          } else {
+            // phase === 'complete' — `preTokens` from event when available,
+            // fall back to the gauge snapshot (matches pre-B3 fallback).
+            const preTokens = event.preTokens || claudeRuntime.getContextUsage().tokensUsed;
             console.log(`[Compaction] Context compacted. Pre-tokens: ${preTokens}`);
             isCompactionInProgress = false;  // PR #11: clear flag — boundary completed normally
             registry.broadcast({
@@ -1344,72 +1300,95 @@ export class AgentService {
               message: `Context compacted (was ${Math.round(preTokens / 1000)}K tokens)`,
               isComplete: true,
             });
-            // Context window is fresh post-compaction; reset only the tracking
-            // counter. Do NOT reset fullResponse / toolInsertions / thinkingBlocks
-            // — the model continues writing into the same response buffer, with
+            // Context window is fresh post-compaction; reset the gauge counter.
+            // Do NOT reset fullResponse / toolInsertions / thinkingBlocks —
+            // the model continues writing into the same response buffer, with
             // the strict anti-narration instruction injected by PreCompact
-            // (hooks.ts buildPreCompact) preventing meta-event leakage. The
-            // previous resets defended against re-grounding monologue leaking
-            // into Discord/phone replies; that defense is now in the prompt
-            // itself, unified across all platforms, so the user's in-flight
-            // response is preserved across the compaction boundary.
-            // PR B2b-2: context gauge state lives on the runtime now.
+            // (hooks.ts buildPreCompact) preventing meta-event leakage.
             claudeRuntime.resetContextOnCompaction();
-          } else if (systemMsg.status === 'compacting') {
-            console.log('[Compaction] Compacting in progress...');
-            isCompactionInProgress = true;  // PR #11: set flag — abort path needs to know
           }
-        } else if (msgType === 'rate_limit_event') {
-          const rle = msg as any;
-          const info = rle.rate_limit_info;
-          if (info && (info.status === 'rejected' || info.status === 'allowed_warning')) {
+          continue;
+        }
+
+        if (event.type === 'rate_limit') {
+          // Status is optional on AgentRuntimeEvent for provider
+          // generality (non-Claude rate-limit signals may not carry
+          // it), but the WS protocol requires it. Guard at the
+          // broadcast site so non-Claude runtimes that emit a
+          // status-less rate_limit just no-op the WS broadcast
+          // (rate-limit awareness still surfaces in logs).
+          // `resetsAt` flows through as-is — pre-B3 typing was `any`;
+          // the cast preserves that loose contract until the WS
+          // protocol type is reconciled with the SDK's actual shape.
+          if (event.status) {
             registry.broadcast({
               type: 'rate_limit',
-              status: info.status,
-              resetsAt: info.resetsAt,
-              rateLimitType: info.rateLimitType,
-              utilization: info.utilization,
+              status: event.status,
+              resetsAt: event.resetsAt as unknown as number | undefined,
+              rateLimitType: event.rateLimitType,
+              utilization: event.utilization,
             });
-            console.log(`[Agent] Rate limit: ${info.status}, type: ${info.rateLimitType}, resets: ${info.resetsAt}`);
+            console.log(`[Agent] Rate limit: ${event.status}, type: ${event.rateLimitType}, resets: ${event.resetsAt}`);
           }
-        } else if (msgType === 'tool_progress') {
-          const tp = msg as any;
+          continue;
+        }
+
+        if (event.type === 'tool_progress') {
           registry.broadcast({
             type: 'tool_progress',
-            toolId: tp.tool_use_id,
-            toolName: tp.tool_name,
-            elapsed: tp.elapsed_time_seconds,
+            toolId: event.toolId,
+            toolName: event.toolName,
+            elapsed: event.elapsedSeconds,
           });
+          continue;
         }
-      }
-      } catch (abortErr) {
-        if (abortErr instanceof AbortError || (abortErr instanceof Error && abortErr.name === 'AbortError')) {
-          console.log('[Agent] Generation stopped by user');
-          // PR #11 / chip #38: if compaction was in flight when the abort
-          // fired, the SDK never gets to send compact_boundary, so the
-          // frontend's "Context compacting" banner stays pinned forever.
-          // Broadcast a synthetic completion notice so the banner exits
-          // via the existing 8-second auto-hide path (same way a real
-          // boundary message clears it). Without this the banner is a
-          // zombie until a manual page reload.
-          if (isCompactionInProgress) {
-            console.log('[Compaction] Abort during compaction — clearing banner');
-            registry.broadcast({
-              type: 'compaction_notice',
-              preTokens: claudeRuntime.getContextUsage().tokensUsed,
-              message: 'Context compaction interrupted',
-              isComplete: true,
-            });
-            isCompactionInProgress = false;
+
+        if (event.type === 'done') {
+          if (event.finishReason === 'aborted') {
+            console.log('[Agent] Generation stopped by user');
+            // PR #11 / chip #38: if compaction was in flight when the abort
+            // fired, the SDK never gets to send compact_boundary, so the
+            // frontend's "Context compacting" banner stays pinned forever.
+            // Broadcast a synthetic completion notice so the banner exits
+            // via the existing 8-second auto-hide path.
+            if (isCompactionInProgress) {
+              console.log('[Compaction] Abort during compaction — clearing banner');
+              registry.broadcast({
+                type: 'compaction_notice',
+                preTokens: claudeRuntime.getContextUsage().tokensUsed,
+                message: 'Context compaction interrupted',
+                isComplete: true,
+              });
+              isCompactionInProgress = false;
+            }
+            registry.broadcast({ type: 'generation_stopped' });
           }
-          registry.broadcast({ type: 'generation_stopped' });
-        } else {
-          throw abortErr; // Re-throw non-abort errors to outer catch
+          // 'stop' / 'length' / 'tool_calls': normal completion. No
+          // broadcast here — `stream_end` fires later after createMessage.
+          continue;
+        }
+
+        if (event.type === 'error') {
+          // `recoverable: true` events (currently: SDK `result.subtype !== 'success'`)
+          // log but don't surface as the response — matches pre-B3 behavior where
+          // the result-message error was logged inline but the user-facing reply
+          // was whatever assistant text accumulated. `recoverable: false` events
+          // (thrown SDK errors caught by the runtime) set fullResponse to the
+          // bracketed error string — matches pre-B3 outer-catch behavior.
+          console.error('Agent query error:', event.message);
+          if (!event.recoverable) {
+            fullResponse = fullResponse || `[Agent error: ${event.message}]`;
+          }
+          continue;
         }
       }
     } catch (error) {
+      // Safety net for genuinely unexpected exceptions. The runtime
+      // catches SDK errors and emits {type: 'error'} events, so we
+      // shouldn't reach here under normal failure modes. Kept for
+      // defense in depth (e.g. event-iteration internals throwing).
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error('Agent query error:', errMsg, error);
+      console.error('Agent stream error:', errMsg, error);
       fullResponse = fullResponse || `[Agent error: ${errMsg}]`;
     } finally {
       // Clean up active query tracking

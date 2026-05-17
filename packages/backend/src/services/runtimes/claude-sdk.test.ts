@@ -31,18 +31,24 @@ describe('ClaudeAgentRuntime — stub for PR B1', () => {
     expect(runtime.providerId).toBe('claude');
   });
 
-  it('runTurn throws the "not yet wired" stub error pointing at PR B3', async () => {
-    // PR B2a moved the SDK call site into ClaudeAgentRuntime via
-    // `dispatchClaudeQuery` but left stream consumption / event
-    // normalization in `_processQuery`. The normalized-event `runTurn`
-    // implementation lands in PR B3 — that's where the stub stops
-    // throwing.
+  it('runTurn throws the "not yet wired" stub error pointing at the AgentTurnInput migration', async () => {
+    // PR B3 added the normalized event stream via `runClaudeTurn`
+    // (Claude-specific input). The abstract `runTurn(AgentTurnInput)`
+    // remains stubbed because AgentService doesn't construct
+    // `AgentTurnInput` yet — that migration lands in a later PR
+    // (likely folded into the C-series session work). Stub stays
+    // throwing in the meantime to flag any accidental caller.
     const runtime = new ClaudeAgentRuntime();
     // Async generators don't throw until iterated. The first .next() call
     // runs the generator body up to the throw.
     const iter = runtime.runTurn({} as never)[Symbol.asyncIterator]();
     await expect(iter.next()).rejects.toThrow(/not wired up yet/);
-    await expect(runtime.runTurn({} as never)[Symbol.asyncIterator]().next()).rejects.toThrow(/PR B3/);
+    await expect(
+      runtime.runTurn({} as never)[Symbol.asyncIterator]().next(),
+    ).rejects.toThrow(/AgentTurnInput migration/);
+    await expect(
+      runtime.runTurn({} as never)[Symbol.asyncIterator]().next(),
+    ).rejects.toThrow(/runClaudeTurn/);
   });
 
   it('resumeSessionId returns undefined (no-op stub)', () => {
