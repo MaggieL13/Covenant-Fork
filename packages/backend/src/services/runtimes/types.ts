@@ -205,15 +205,23 @@ export type AgentRuntimeEvent =
 // ---------------------------------------------------------------------------
 
 /**
- * Capability key for optional runtime-specific extensions
- * (MCP server toggle, listSessions, file rewind). Each runtime
- * exposes whichever capabilities it actually implements via
- * `getCapabilityProvider`. Consumers check for `undefined`
- * before calling — non-Claude runtimes return `undefined` for
- * Claude-SDK-specific caps and that's the correct contract.
+ * Capability key for optional runtime-specific extensions. Intended
+ * future use: callers ask `runtime.getCapabilityProvider<T>(key)` for
+ * an interface they can call, and runtimes that don't implement that
+ * capability return `undefined` (so the UI hides the corresponding
+ * controls instead of offering features the runtime can't deliver).
  *
- * For PR B1 this is a plain string. Later PRs may move to a
- * branded type for static type-safety.
+ * **Current status (PR B2b):** the runtime-specific capability
+ * methods that exist today (`listSessions`, `mcpServerStatusLive`,
+ * `toggleMcpServerLive`, `reconnectMcpServerLive`, `rewindFiles`,
+ * `fireContextUsageRefresh`, `getContextUsage`,
+ * `resetContextOnCompaction`) are exposed as **direct concrete
+ * methods on `ClaudeAgentRuntime`**, not through this lookup.
+ * `getCapabilityProvider` exists on the interface but every runtime
+ * currently returns `undefined`. The cap-provider abstraction will
+ * matter once PR E ships the Codex runtime and AgentService's
+ * MCP/rewind/etc. methods need to consult the resolved runtime's
+ * capabilities at the call site.
  */
 export type CapabilityKey = string;
 
