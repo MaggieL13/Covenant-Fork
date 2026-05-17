@@ -258,9 +258,13 @@ export const MODELS: readonly ModelEntry[] = [
   // Codex (ChatGPT OAuth) — PREVIEW entries. Selecting any of these
   // today produces a friendly "codex runtime not wired up yet" error
   // from `resolveConfiguredRuntime`. PR E lands the runtime.
-  codexEntry('gpt-5', 'GPT-5 (Codex preview)', ['interactive', 'autonomous', 'memory']),
-  codexEntry('gpt-5-mini', 'GPT-5 Mini (Codex preview)', ['interactive', 'autonomous', 'memory']),
-  codexEntry('o3', 'o3 reasoning (Codex preview)', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
+  // PR E2 update: ids now match what pi-ai's openai-codex registry
+  // exposes. The "preview" suffix is dropped — the runtime is wired
+  // in this PR, so these models are functional (subject to user being
+  // logged in via Settings → Codex (ChatGPT) OAuth).
+  codexEntry('gpt-5.1', 'GPT-5.1 (Codex)', ['interactive', 'autonomous', 'memory'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.1-codex-mini', 'GPT-5.1 Codex Mini', ['interactive', 'autonomous', 'memory'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.2', 'GPT-5.2 (Codex)', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
 ] as const;
 
 /**
