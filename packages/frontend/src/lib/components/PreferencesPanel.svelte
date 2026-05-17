@@ -14,6 +14,10 @@
     agent: {
       model: string;
       model_autonomous: string;
+      model_pulse: string;
+      /** PR D: memory tier — used by the handoff packet summary call.
+       *  Defaults to Haiku (cheap, JSON-reliable for short summaries). */
+      model_memory: string;
       thinking_effort: string;
       // PR #10: optional autonomous-tier override. Undefined when unset
       // (autonomous tier inherits chat's effort — pre-PR-#10 behavior).
@@ -46,6 +50,10 @@
   let timezone = $state('');
   let model = $state('');
   let modelAutonomous = $state('');
+  // PR D: memory tier model — drives the ProviderHandoff summary call.
+  // Default Haiku; users can pick e.g. Sonnet for richer cross-provider
+  // summaries at higher cost per switch.
+  let modelMemory = $state('');
   let thinkingEffort = $state('auto');
   // PR #10: empty string = "match chat tier" (the default, no override).
   // Any other value = explicit autonomous-tier override.
@@ -127,6 +135,9 @@
       // skipping it here would let the panel show a stale YAML value
       // while autonomous wakes use a different model from DB.
       modelAutonomous = dbConfig['agent.model_autonomous'] || prefs!.agent.model_autonomous;
+      // PR D: same DB > YAML cascade for memory tier — matches what
+      // services/handoff.ts reads via resolveConfiguredClaudeSdkModel('memory').
+      modelMemory = dbConfig['agent.model_memory'] || prefs!.agent.model_memory;
       // ORDER: DB-backed thinking_effort wins over YAML so the dropdown
       // reflects what the backend actually uses. Mirrors the model field
       // above (line 113-114) and the backend's getConfiguredThinkingEffort
@@ -165,6 +176,8 @@
         agent: {
           model,
           model_autonomous: modelAutonomous,
+          // PR D: persist memory tier alongside the other tiers.
+          model_memory: modelMemory,
           thinking_effort: thinkingEffort,
           // PR #10: empty string clears the override at the API layer
           // (deletes the YAML field, returns to chat-tier fallback).
@@ -197,6 +210,11 @@
         // saving only to YAML would leave the panel disagreeing with what
         // autonomous wakes actually use whenever a DB override exists.
         await updateSetting('agent.model_autonomous', modelAutonomous);
+        // PR D: mirror the DB sync for memory tier — backend
+        // resolveConfiguredClaudeSdkModel('memory') reads DB > YAML, so
+        // skipping this would leave handoff summaries using a stale
+        // model from YAML even after the user picked a new one here.
+        await updateSetting('agent.model_memory', modelMemory);
         await updateSetting('agent.thinking_effort', thinkingEffort);
         // PR #10: keep DB layer in sync with YAML save. Empty string
         // clears via the same delete-on-empty semantics as the API path.
@@ -448,10 +466,12 @@
       models={MODELS}
       {model}
       {modelAutonomous}
+      {modelMemory}
       {thinkingEffort}
       {thinkingEffortAutonomous}
       onmodelchange={(value) => model = value}
       onautonomousmodelchange={(value) => modelAutonomous = value}
+      onmemorymodelchange={(value) => modelMemory = value}
       onthinkingeffortchange={(value) => thinkingEffort = value}
       onautonomouseffortchange={(value) => thinkingEffortAutonomous = value}
     />

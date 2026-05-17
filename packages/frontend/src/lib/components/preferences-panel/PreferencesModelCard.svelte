@@ -5,16 +5,25 @@
     models,
     model,
     modelAutonomous,
+    modelMemory,
     thinkingEffort,
     thinkingEffortAutonomous,
     onmodelchange,
     onautonomousmodelchange,
+    onmemorymodelchange,
     onthinkingeffortchange,
     onautonomouseffortchange,
   } = $props<{
     models: ReadonlyArray<{ id: string; label: string }>;
     model: string;
     modelAutonomous: string;
+    /** PR D: memory tier model — drives the ProviderHandoff summary call
+     *  when a thread switches to a (runtime, provider, model_ref) combo
+     *  with no prior session. Cheap-model default (Haiku); users can pick
+     *  e.g. Sonnet for richer cross-provider summaries at higher cost
+     *  per switch. No effort field — the call is one-shot read-only and
+     *  doesn't use extended thinking. */
+    modelMemory: string;
     thinkingEffort: string;
     /** Empty string means "match chat tier" (the default — autonomous
      *  inherits chat's effort, pre-PR-#10 behavior). Any other value is
@@ -22,6 +31,7 @@
     thinkingEffortAutonomous: string;
     onmodelchange?: (value: string) => void;
     onautonomousmodelchange?: (value: string) => void;
+    onmemorymodelchange?: (value: string) => void;
     onthinkingeffortchange?: (value: string) => void;
     onautonomouseffortchange?: (value: string) => void;
   }>();
@@ -170,6 +180,34 @@
     </div>
   </div>
 
+  <div class="memory-row">
+    <h4 class="tier-title">Memory</h4>
+    <p class="tier-sub">
+      Cross-provider continuity — generates a short summary of prior conversation
+      when you switch models mid-thread and no session exists for the new combo.
+      One-shot, read-only, no tools or thinking. Defaults to Haiku (cheap +
+      reliable for short summaries); pick a heavier model only if you want
+      richer cross-provider handoffs at higher per-switch cost.
+    </p>
+
+    <div class="field">
+      <label class="field-label" for="pref-memory-model">Model</label>
+      <select
+        id="pref-memory-model"
+        class="field-select"
+        value={modelMemory}
+        onchange={(event) => onmemorymodelchange?.((event.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each models as m}
+          <option value={m.id}>{m.label}</option>
+        {/each}
+      </select>
+      <span class="field-hint">
+        Falls back to extractive summary (no model call) if this model is unavailable.
+      </span>
+    </div>
+  </div>
+
   <p class="footer-hint">
     ⓘ Pulse heartbeats configured in the Orchestrator tab. Pulse never uses thinking,
     so there's no effort field for that tier.
@@ -219,6 +257,13 @@
     background: rgba(220, 180, 80, 0.1);
     color: rgb(200, 160, 80);
     font-size: 0.75rem;
+  }
+  .memory-row {
+    margin-top: 1rem;
+    border: 1px solid rgba(155, 114, 207, 0.2);
+    border-radius: 0.5rem;
+    padding: 0.875rem;
+    background: rgba(255, 255, 255, 0.015);
   }
   .footer-hint {
     margin-top: 1rem;
