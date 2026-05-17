@@ -23,6 +23,7 @@ import canvasesRouter from './canvases.js';
 import pushAdminRouter from './push-admin.js';
 import voiceRouter from './voice.js';
 import runtimeAdminRouter from './runtime-admin.js';
+import codexAuthRouter from './codex-auth.js';
 
 const router = Router();
 
@@ -67,6 +68,7 @@ router.use(markReadHandler);
 router.use('/discord', discordAdminRouter);
 router.use('/orchestrator', orchestratorAdminRouter);
 router.use('/runtime', runtimeAdminRouter);
+router.use(codexAuthRouter);
 router.use(configAdminRouter);
 router.use(filesRouter);
 router.use(searchRouter);
