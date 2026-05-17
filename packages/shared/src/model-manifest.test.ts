@@ -182,6 +182,65 @@ describe('normalizeModelRef — accepts both legacy and canonical', () => {
     expect(ref.canonical).toBe('claude/claude-opus-99');
   });
 
+  it('looks up bare ids in the manifest BEFORE falling back to Claude (PR E0 smoke catch)', () => {
+    // PR E0 live smoke caught: selecting "GPT-5 (Codex preview)" in
+    // the UI sent the bare id `gpt-5` to the resolver. The legacy
+    // fallback wrapped it as `claude/gpt-5` (provider=claude,
+    // runtime=claude-sdk), `unwrapModelRefForClaudeSdk` happily
+    // unwrapped it (runtime was claude-sdk after all), and the Claude
+    // SDK got called with model `gpt-5` — bypassing the friendly-error
+    // guard that should have surfaced "requires codex runtime."
+    //
+    // Fix: bare-id lookup checks the manifest first. If the id matches
+    // a known entry, use that entry's provider/runtime (so `gpt-5`
+    // correctly resolves to openai-codex). Falls back to Claude only
+    // when no manifest entry matches (preserves the typo path above).
+
+    // Codex bare id should resolve to the codex provider, NOT Claude
+    const gpt5 = normalizeModelRef('gpt-5');
+    expect(gpt5.provider).toBe('openai-codex');
+    expect(gpt5.runtime).toBe('codex');
+    expect(gpt5.canonical).toBe('openai-codex/gpt-5');
+
+    const gpt5Mini = normalizeModelRef('gpt-5-mini');
+    expect(gpt5Mini.provider).toBe('openai-codex');
+    expect(gpt5Mini.runtime).toBe('codex');
+
+    const o3 = normalizeModelRef('o3');
+    expect(o3.provider).toBe('openai-codex');
+    expect(o3.runtime).toBe('codex');
+
+    // Claude bare ids still resolve to Claude (back-compat unaffected)
+    const sonnet = normalizeModelRef('claude-sonnet-4-6');
+    expect(sonnet.provider).toBe('claude');
+    expect(sonnet.runtime).toBe('claude-sdk');
+
+    // Family alias still resolves via manifest match
+    const sonnetAlias = normalizeModelRef('sonnet');
+    expect(sonnetAlias.provider).toBe('claude');
+    expect(sonnetAlias.runtime).toBe('claude-sdk');
+
+    // Unknown bare id falls back to Claude (typo path preserved)
+    const typo = normalizeModelRef('claude-opus-99');
+    expect(typo.provider).toBe('claude');
+    expect(typo.runtime).toBe('claude-sdk');
+  });
+
+  it('downstream: selecting a Codex bare id from the UI now correctly triggers unwrapModelRefForClaudeSdk to throw', () => {
+    // The end-to-end regression: bare Codex id → normalizeModelRef →
+    // unwrap should throw the friendly "codex runtime not wired up yet"
+    // error, surfacing as the inline chat error users see. Before the
+    // fix this silently went to the Claude SDK with `gpt-5` as the
+    // model name.
+    const gpt5 = normalizeModelRef('gpt-5');
+    expect(() => unwrapModelRefForClaudeSdk(gpt5, 'interactive')).toThrow(
+      /requires the codex runtime/,
+    );
+    expect(() => unwrapModelRefForClaudeSdk(gpt5, 'interactive')).toThrow(
+      /interactive tier/,
+    );
+  });
+
   it('throws a friendly error for empty input', () => {
     expect(() => normalizeModelRef('')).toThrow(/empty model reference/);
     expect(() => normalizeModelRef('   ')).toThrow(/empty model reference/);
@@ -252,6 +311,67 @@ describe('getModelsForTier', () => {
     const memoryModels = getModelsForTier('memory');
     for (const m of memoryModels) {
       expect(m.id.toLowerCase()).not.toMatch(/opus/);
+    }
+  });
+});
+
+describe('Codex (openai-codex) preview entries (PR E0 scaffolding)', () => {
+  // These are placeholder entries surfacing Codex models in the
+  // dropdowns. Selecting one today hits the existing
+  // `resolveConfiguredRuntime` friendly-error path ("codex runtime not
+  // wired up yet") because there is no CodexRuntime implementation.
+  // PR E proper adds the runtime + OAuth + streaming. These tests pin
+  // the preview shape so a future regression cannot accidentally
+  // (a) drop the entries, (b) promote them to a wired-up state without
+  // PR E landing, or (c) put Codex in the pulse tier.
+
+  it('exposes at least the gpt-5 + gpt-5-mini + o3 preview entries', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    expect(codexModels.length).toBeGreaterThanOrEqual(3);
+    const ids = codexModels.map((m) => m.id);
+    expect(ids).toContain('gpt-5');
+    expect(ids).toContain('gpt-5-mini');
+    expect(ids).toContain('o3');
+  });
+
+  it('every Codex entry uses provider=openai-codex + runtime=codex + auth=codex-oauth', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    for (const m of codexModels) {
+      expect(m.provider).toBe('openai-codex');
+      expect(m.runtime).toBe('codex');
+      expect(m.auth.type).toBe('codex-oauth');
+      // Canonical ref format
+      expect(m.ref).toBe(`openai-codex/${m.id}`);
+    }
+  });
+
+  it('Codex entries are NOT in the pulse tier (pulse needs PULSE_OK reliability; Haiku stays default)', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    for (const m of codexModels) {
+      expect(m.tierHints).not.toContain('pulse');
+    }
+  });
+
+  it('Codex chat models declare reasoning: false; o-series declares reasoning: true', () => {
+    const gpt5 = MODELS.find((m) => m.id === 'gpt-5')!;
+    expect(gpt5.capabilities.reasoning).toBe(false);
+    const o3 = MODELS.find((m) => m.id === 'o3')!;
+    expect(o3.capabilities.reasoning).toBe(true);
+  });
+
+  it('Codex entries declare mcp: false + tools: false + fileCheckpointing: false (Claude-SDK-only features)', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    for (const m of codexModels) {
+      expect(m.capabilities.mcp).toBe(false);
+      expect(m.capabilities.tools).toBe(false);
+      expect(m.capabilities.fileCheckpointing).toBe(false);
+    }
+  });
+
+  it('Codex preview labels include "(Codex preview)" so the UI signals these are not yet usable', () => {
+    const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
+    for (const m of codexModels) {
+      expect(m.label).toMatch(/Codex preview/i);
     }
   });
 });
