@@ -72,11 +72,31 @@
 
   async function handleLoginClick() {
     localError = null;
+    // Open the popup SYNCHRONOUSLY before the await — popup blockers in
+    // Firefox/Safari (and stricter Chrome settings) correlate window.open
+    // with the click event. Any await before window.open loses the
+    // user-gesture context and the call returns null. We open a blank
+    // placeholder now, then navigate it to the OAuth URL once the backend
+    // returns it.
+    //
+    // Note: no `noopener` here — we need the window handle to navigate it
+    // afterward. The OAuth target is a known issuer (ChatGPT) so opener
+    // exposure is an acceptable trade for the popup-blocker fix.
+    const popup = window.open('about:blank', '_blank');
     const result = await startCodexLogin();
     if (result.url) {
-      // Open in a new tab so the user doesn't lose the Covenant UI.
-      window.open(result.url, '_blank', 'noopener,noreferrer');
+      if (popup && !popup.closed) {
+        popup.location.href = result.url;
+      } else {
+        // Popup was blocked even with the synchronous-open trick (very
+        // strict settings, or the user already closed the placeholder).
+        // Fall back to a second window.open + manual-URL recovery via the
+        // [Reopen login URL] button below.
+        window.open(result.url, '_blank');
+        localError = 'Browser blocked the popup. If no tab opened, use [Reopen login URL] below.';
+      }
     } else {
+      popup?.close();
       localError = 'OAuth flow failed to produce a URL. See errors below.';
     }
   }
