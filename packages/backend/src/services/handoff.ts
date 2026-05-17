@@ -189,13 +189,25 @@ export async function buildProviderHandoff(opts: {
   // any failure / empty result. The memory-tier call is one-shot and
   // read-only when the caller uses `runOneShotQuery` (plan permission
   // mode, no tools, no session persist) so it cannot mutate state.
+  //
+  // PR D Codex catch (second pass): summary maxChars must be clamped
+  // by totalCap too. Without this, a custom budget where
+  // `summaryTokens > totalCap` lets the generated summary exceed the
+  // full packet cap before recent-message trimming even runs. The
+  // later `totalCap` enforcement loop only trims recentMessages, so
+  // an oversized summary would survive intact and break the
+  // function's end-to-end cap promise. Clamping pre-generation also
+  // means the memory-tier model gets the right ceiling AND the
+  // extractive fallback inherits the same cap (both call sites read
+  // `opts.maxChars` from the same value).
+  const summaryMaxTokens = Math.min(budget.summaryTokens, budget.totalCap);
   const { summary, summarySource } = await generateSummary({
     messages: normalized,
     summarize: opts.summarize,
     memoryTierModel: opts.memoryTierModel,
     companionName: opts.identityCompanionName,
     userName: opts.identityUserName,
-    maxChars: budget.summaryTokens * CHARS_PER_TOKEN,
+    maxChars: summaryMaxTokens * CHARS_PER_TOKEN,
   });
 
   // Trim the recent-messages list to fit `budget.recentTokens`. Take

@@ -309,6 +309,45 @@ describe('buildProviderHandoff — PR D cross-provider continuity', () => {
       expect(truncated).not.toContain(headMarker);
     });
 
+    it('clamps the summary itself by totalCap when summaryTokens exceeds totalCap (custom-budget hole)', async () => {
+      // Codex bot second-pass catch: prior fix enforced totalCap on
+      // summary+recent combined via recent-message trimming, but the
+      // summary itself was bounded only by summaryTokens. If a caller
+      // passed a custom budget where summaryTokens > totalCap, the
+      // generated summary could already exceed totalCap before
+      // recent-message trimming even ran — breaking the function's
+      // end-to-end cap promise. Fix clamps summary maxChars to
+      // min(summaryTokens, totalCap) before generateSummary runs.
+      //
+      // Stress-test budget: each sub-lane (100 tokens) larger than the
+      // total cap (10 tokens). Real-world budgets never look like this;
+      // the numbers are deliberately pathological to pin the invariant.
+      seedConversation('thread-1', [
+        { role: 'user', content: 'hi' },
+        { role: 'companion', content: 'hi back' },
+      ]);
+      const longSummarize: SummarizeFn = async () => 'x'.repeat(5000);
+      const thread = getThread('thread-1')!;
+      const stressBudget = { summaryTokens: 100, recentTokens: 100, totalCap: 10 };
+      const handoff = await buildProviderHandoff({
+        ...COMMON,
+        thread,
+        summarize: longSummarize,
+        budget: stressBudget,
+      });
+
+      // summary.length must respect the totalCap, not its own summaryTokens lane
+      expect(handoff!.summary.length).toBeLessThanOrEqual(stressBudget.totalCap * 4);  // CHARS_PER_TOKEN
+      // total approximation respects the overall cap
+      expect(handoff!.totalTokensApprox).toBeLessThanOrEqual(stressBudget.totalCap);
+      // Whole packet's char total respects totalCap too
+      const recentChars = handoff!.recentMessages.reduce(
+        (sum, m) => sum + m.content.length + 32,
+        0,
+      );
+      expect(handoff!.summary.length + recentChars).toBeLessThanOrEqual(stressBudget.totalCap * 4);
+    });
+
     it('enforces totalCap even when summaryTokens + recentTokens would individually fit but together exceed', async () => {
       // Custom budget where individual lanes (50 + 100 = 150) would
       // each accept content but the combined cap is small (60).
