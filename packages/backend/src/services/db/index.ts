@@ -65,6 +65,7 @@ export type { ProviderSession, ProviderSessionKey } from './provider-sessions.js
 export {
   getProviderSession,
   setProviderSession,
+  hasProviderSessionsForThread,
   listProviderSessionsForThread,
   clearProviderSessionsForThread,
   clearAllProviderSessions,

@@ -3,7 +3,7 @@ import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import type { AgentRuntime } from './runtimes/types.js';
-import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, clearAllProviderSessions } from './db.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -1166,8 +1166,26 @@ export class AgentService {
 
       // PR C: resolve the resume session id from the per-provider
       // sidecar table first; fall back to `threads.current_session_id`
-      // only for the Claude runtime (pre-PR-C threads + Claude
-      // fast-path). Pulse never resumes (`persistSession: false`).
+      // ONLY for genuinely pre-PR-C threads (no sidecar rows yet).
+      // Pulse never resumes (`persistSession: false`).
+      //
+      // Codex bot catch on PR #16: the legacy fallback was originally
+      // gated on `runtime === 'claude-sdk' && thread.current_session_id`
+      // alone, which fired whenever the exact (runtime, provider,
+      // model_ref) lookup missed — including normal model switches.
+      // A thread mid-Sonnet-session that switched to Opus would have
+      // NO Opus sidecar row, fall through to `thread.current_session_id`,
+      // and resume the Sonnet session under Opus — defeating per-model
+      // isolation and risking incompatible context.
+      //
+      // The fix: gate the fallback on `!hasProviderSessionsForThread()`
+      // too. Once a thread has ANY sidecar row, the sidecar is
+      // authoritative; a missing exact-key means "this combo has no
+      // session yet" (fresh start), NOT "fall back to the old single
+      // pointer." Pre-PR-C threads (zero sidecar rows + legacy pointer)
+      // still resume cleanly on their first post-migration Claude turn,
+      // and the finally block then writes the first sidecar row so
+      // subsequent turns hit the sidecar path directly.
       const resumeSessionId = isPulseOrientation
         ? undefined
         : (() => {
@@ -1178,14 +1196,11 @@ export class AgentService {
               modelRef: modelRef.canonical,
             });
             if (providerSession) return providerSession.session_id;
-            // Legacy fallback for the Claude case: a thread that
-            // existed before this migration still has its session
-            // pointer in `threads.current_session_id` and no row in
-            // `thread_provider_sessions` yet. First post-PR-C turn on
-            // such a thread reads from here, then the finally block
-            // writes the new sidecar row so subsequent lookups hit
-            // the sidecar directly.
-            if (modelRef.runtime === 'claude-sdk' && thread.current_session_id) {
+            if (
+              modelRef.runtime === 'claude-sdk' &&
+              thread.current_session_id &&
+              !hasProviderSessionsForThread(thread.id)
+            ) {
               return thread.current_session_id;
             }
             return undefined;
