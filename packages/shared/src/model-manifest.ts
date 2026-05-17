@@ -164,6 +164,75 @@ function claudeEntry(
 }
 
 // ---------------------------------------------------------------------------
+// Codex (ChatGPT OAuth) preview entries — PR E0
+// ---------------------------------------------------------------------------
+//
+// These are **preview/scaffold entries** that surface Codex models in the
+// Settings + chat-header dropdowns so users can see the multi-provider
+// architecture has landed. **Selecting one today produces the existing
+// friendly error** from `resolveConfiguredRuntime` ("requires the codex
+// runtime, which is not wired up yet") — there is no CodexRuntime
+// implementation, no OAuth flow, no actual ChatGPT request. PR E proper
+// (next) lands the runtime + auth + event-translation work that makes
+// these entries usable.
+//
+// Capability profile reflects what Codex via the responses API actually
+// supports / will support once wired:
+//  - tools: false  — MCP-to-OpenAI tool-schema bridge is a separate PR
+//  - vision: true  — gpt-5 supports image inputs natively
+//  - reasoning: true for o-series, false for chat/instruct models
+//  - mcp: false  — Codex has no MCP equivalent
+//  - sessionResume: true — Codex maintains a conversation_id per
+//    response chain (will be persisted in `thread_provider_sessions`)
+//  - fileCheckpointing: false — Claude-SDK-specific
+//
+// Tier hints: interactive / autonomous / memory.
+// NOT pulse — pulse needs literal `PULSE_OK` reliability across cycles;
+// Codex is new + has different output conventions, Haiku stays the pulse
+// default. Users can override per Settings if they really want.
+//
+// Auth: `codex-oauth` — runtime-health card surfaces "Logged in" /
+// "Login required" once PR E adds the auth state machine.
+//
+// Exact model list will be refined when PR E runtime model-discovery
+// lands; these entries are a curated starting set.
+
+const CODEX_AUTH: ModelAuth = { type: 'codex-oauth' };
+
+const CODEX_CHAT_CAPABILITIES: ModelCapabilities = {
+  tools: false,
+  vision: true,
+  reasoning: false,
+  mcp: false,
+  sessionResume: true,
+  fileCheckpointing: false,
+};
+
+const CODEX_REASONING_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_CHAT_CAPABILITIES,
+  reasoning: true,
+};
+
+/** Build a Codex (ChatGPT OAuth) entry. */
+function codexEntry(
+  id: string,
+  label: string,
+  tierHints: TierHint[],
+  capabilities: ModelCapabilities = CODEX_CHAT_CAPABILITIES,
+): ModelEntry {
+  return {
+    id,
+    label,
+    provider: 'openai-codex',
+    runtime: 'codex',
+    ref: `openai-codex/${id}`,
+    tierHints,
+    capabilities,
+    auth: CODEX_AUTH,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------
 
@@ -185,6 +254,13 @@ export const MODELS: readonly ModelEntry[] = [
   claudeEntry('opus', 'Opus (latest, auto-updates)', ['interactive', 'autonomous'], '2.1.111'),
   claudeEntry('sonnet', 'Sonnet (latest, auto-updates)', ['interactive', 'autonomous', 'memory']),
   claudeEntry('haiku', 'Haiku (latest, auto-updates)', ['interactive', 'autonomous', 'pulse', 'memory']),
+
+  // Codex (ChatGPT OAuth) — PREVIEW entries. Selecting any of these
+  // today produces a friendly "codex runtime not wired up yet" error
+  // from `resolveConfiguredRuntime`. PR E lands the runtime.
+  codexEntry('gpt-5', 'GPT-5 (Codex preview)', ['interactive', 'autonomous', 'memory']),
+  codexEntry('gpt-5-mini', 'GPT-5 Mini (Codex preview)', ['interactive', 'autonomous', 'memory']),
+  codexEntry('o3', 'o3 reasoning (Codex preview)', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
 ] as const;
 
 /**
@@ -284,8 +360,29 @@ export function normalizeModelRef(input: string): ModelRef {
     );
   }
 
-  // Legacy bare-id path: assume Claude. Matches every config value that
-  // existed before the multi-provider arc.
+  // Bare-id path: check the manifest first. If this id matches a known
+  // entry, use that entry's provider/runtime so non-Claude bare ids
+  // (e.g. `gpt-5` from the dropdown) route correctly. Without this
+  // lookup, every bare id silently became a Claude ref via the legacy
+  // fallback below — which then bypassed `unwrapModelRefForClaudeSdk`'s
+  // friendly-error guard for non-Claude entries (PR E0 smoke caught:
+  // selecting "GPT-5 (Codex preview)" in the UI sent `gpt-5` to the
+  // SDK as a Claude model, which Anthropic's API silently accepted /
+  // routed somewhere unexpected instead of erroring cleanly).
+  const entry = MODELS.find((m) => m.id === trimmed);
+  if (entry) {
+    return {
+      canonical: entry.ref,
+      provider: entry.provider,
+      model: entry.id,
+      runtime: entry.runtime,
+    };
+  }
+
+  // Legacy fallback: assume Claude. Matches every pre-multi-provider
+  // config value (all of which were Claude ids), AND covers typoed
+  // ids (e.g. `claude-opus-99`) that aren't in the manifest but are
+  // clearly intended to be Claude — the SDK boundary catches them.
   return {
     canonical: `claude/${trimmed}`,
     provider: 'claude',
