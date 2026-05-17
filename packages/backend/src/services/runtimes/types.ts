@@ -2,18 +2,25 @@
  * Multi-provider runtime interface — the contract every provider runtime
  * (Claude SDK, Codex OAuth, OpenRouter, Ollama) implements.
  *
- * PR B1 (this file): defines the shape only. No runtime is wired up
- * yet; no caller dispatches through this interface. The existing
- * `_processQuery` path in `agent.ts` still calls
- * `@anthropic-ai/claude-agent-sdk.query()` directly.
+ * Status across the B-series PRs:
  *
- * PR B2: `ClaudeAgentRuntime` becomes the real implementation; the
- * guts of `_processQuery` move into it.
- *
- * PR B3: `AgentService` dispatches through `resolveConfiguredRuntime`
- * + the normalized event bridge instead of calling `query()` directly,
- * and the WebSocket broadcast layer consumes `AgentRuntimeEvent`
- * instead of Claude-SDK-shaped messages.
+ * - **PR B1** (interface scaffold): types defined. `ClaudeAgentRuntime`
+ *   exists as a stub whose `runTurn` throws. No caller dispatches
+ *   through the interface yet.
+ * - **PR B1.5** (digest reroute): the rogue `digest.ts` SDK import is
+ *   consolidated through `agent.ts`'s `runOneShotQuery` helper.
+ * - **PR B2a** (SDK call site moved): `ClaudeAgentRuntime.dispatchClaudeQuery`
+ *   owns SDK `Options` assembly and the `query()` call.
+ *   `_processQuery` calls it instead of `query()` directly, but still
+ *   iterates the returned SDK `Query` and consumes SDK-shaped messages.
+ * - **PR B2b** (next): MCP loading + capability methods
+ *   (`mcpServerStatus`, `toggleMcpServer`, `reconnectMcpServer`,
+ *   `rewindFiles`, `getContextUsage`, `listSessions`) move from
+ *   `AgentService` into the runtime as capability providers.
+ * - **PR B3**: `runTurn` stops throwing and becomes the canonical
+ *   entry point. AgentService consumes `AgentRuntimeEvent` directly;
+ *   the WS broadcast layer becomes runtime-agnostic. Side-by-side WS
+ *   regression suite proves event parity.
  *
  * See `shared/multi-provider-runtime-spec-2026-05-16.md` (gitignored)
  * for the full design and PR sequence rationale.

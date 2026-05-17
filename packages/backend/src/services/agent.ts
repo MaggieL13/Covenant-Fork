@@ -294,12 +294,14 @@ const FALLBACK_CAPABILITIES: ModelCapabilities = {
 /**
  * Resolve the configured tier to a runtime dispatch packet.
  *
- * **PR B1 status:** the only runtime wired up is `claude-sdk` (via the
- * scaffold `ClaudeAgentRuntime`). No caller in the codebase dispatches
- * through this resolver yet — `AgentService.processMessage` /
- * `processAutonomous` still call `_processQuery` which calls
- * `@anthropic-ai/claude-agent-sdk.query()` directly. This function
- * exists so the resolver shape is in place for PR B2/B3 wiring.
+ * **Current B-series status:** the only runtime wired up is
+ * `claude-sdk` (via `ClaudeAgentRuntime`). The runtime owns SDK
+ * `Options` assembly and the `query()` call (PR B2a); MCP loading +
+ * capability methods + stream consumption + event normalization still
+ * live in `_processQuery` / `AgentService` (move in PR B2b / B3).
+ * `resolveConfiguredRuntime` is exposed as the future dispatch
+ * entry point — once PR B3 lands `runTurn`, `_processQuery` becomes a
+ * thin consumer of `runtime.runTurn()` events.
  *
  * For tiers configured with a non-Claude ref today, this throws — the
  * runtime simply doesn't exist yet. PR E (Codex runtime) is the first
@@ -353,16 +355,18 @@ export function resolveConfiguredRuntime(tier: AgentModelTier): ResolvedRuntime 
  * **Why this helper exists:** before B1.5, `digest.ts` imported `query`
  * directly from `@anthropic-ai/claude-agent-sdk`. That made it a second
  * SDK touchpoint outside of `agent.ts`, which would have made the
- * upcoming runtime extraction (PR B2) harder — every site that imports
- * the SDK has to be considered when the abstraction lands. Consolidating
- * the SDK surface into `agent.ts` now means PR B2 only has one place to
- * change.
+ * runtime extraction (B-series) harder — every site that imports the
+ * SDK has to be considered when the abstraction lands. Consolidating
+ * the SDK surface into `agent.ts` means later B-series PRs only have
+ * one runtime call site to thread through `ClaudeAgentRuntime`.
  *
- * **Why not `ClaudeAgentRuntime.runTurn` instead:** the runtime stub
- * landed in PR B1 throws on `runTurn` and won't have a real
- * implementation until PR B2. Once B2 lands, `runOneShotQuery` can
- * become a thin wrapper that constructs an `AgentTurnInput` and
- * dispatches through the runtime — without touching `digest.ts` at all.
+ * **Why not `ClaudeAgentRuntime.runTurn` instead:** the runtime's
+ * `runTurn` lands in PR B3 (normalized event bridge). Until then this
+ * helper stays here for callers that need a fire-and-forget one-shot
+ * without the persist/broadcast/queue machinery of `_processQuery`.
+ * When B3 lands, `runOneShotQuery` can become a thin wrapper that
+ * constructs an `AgentTurnInput` and dispatches through the runtime —
+ * without touching `digest.ts` at all.
  *
  * `model` is the raw provider-native id (`'haiku'`, `'claude-sonnet-4-6'`).
  * Caller is responsible for unwrapping `ModelRef` → raw id before passing
