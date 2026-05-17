@@ -1,4 +1,4 @@
-import { query, AbortError, listSessions, type Query, type McpServerConfig, type ListSessionsOptions } from '@anthropic-ai/claude-agent-sdk';
+import { query, AbortError, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
@@ -859,13 +859,10 @@ export class AgentService {
 
   async listSessions(limit = 50): Promise<unknown[]> {
     ensureInit();
-    try {
-      const sessions = await listSessions({ dir: AGENT_CWD, limit });
-      return sessions;
-    } catch (err) {
-      console.error('Failed to list sessions:', err);
-      return [];
-    }
+    // PR B2b-1: moved to ClaudeAgentRuntime.listSessions. AgentService
+    // method stays as the public API surface (routes call `agent.listSessions`)
+    // but the SDK call lives in the runtime now.
+    return claudeRuntime.listSessions(AGENT_CWD, limit);
   }
 
   async processMessage(threadId: string, content: string, threadMeta?: { name: string; type: 'daily' | 'named' }, opts?: {

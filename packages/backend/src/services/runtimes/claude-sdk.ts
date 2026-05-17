@@ -41,7 +41,7 @@
  * runtime-agnostic. Hook consumers rewire to the normalized stream.
  */
 
-import { query, type Options, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
+import { query, listSessions, type Options, type Query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import { join } from 'path';
 import type { ProviderId, RuntimeId } from '@resonant/shared';
 import type { AgentRuntime, AgentRuntimeEvent, AgentTurnInput, CapabilityKey } from './types.js';
@@ -178,9 +178,32 @@ export class ClaudeAgentRuntime implements AgentRuntime {
   }
 
   /**
-   * Capability lookup. MCP toggle / listSessions / file rewind /
-   * getContextUsage move here in PR B2b. For now returns `undefined`
-   * for every cap (callers fall back to AgentService methods).
+   * List historical SDK sessions in a given working directory. Thin
+   * wrapper over `@anthropic-ai/claude-agent-sdk.listSessions` —
+   * moved here in PR B2b-1 so the SDK import surface stays
+   * consolidated to this file. Errors are swallowed to an empty
+   * array because the panel that consumes this can tolerate a
+   * missing session list (degrades gracefully to "no sessions
+   * shown") but should never 500 over a transient SDK hiccup.
+   */
+  async listSessions(cwd: string, limit = 50): Promise<unknown[]> {
+    try {
+      return await listSessions({ dir: cwd, limit });
+    } catch (err) {
+      console.error('[ClaudeAgentRuntime] Failed to list sessions:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Capability lookup. MCP toggle / file rewind / context usage move
+   * here in PR B2b-2 (the heavier landing — those couple through the
+   * shared `activeQuery` state and migrate together). For now returns
+   * `undefined` for every cap; the simple no-state capabilities
+   * (listSessions today) are exposed as direct methods instead of
+   * through this lookup so callers don't have to do double
+   * indirection. The cap lookup is preserved for future capabilities
+   * that genuinely benefit from runtime-agnostic typing.
    */
   getCapabilityProvider<T>(_cap: CapabilityKey): T | undefined {
     return undefined;
