@@ -3,7 +3,7 @@ import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import type { AgentRuntime } from './runtimes/types.js';
-import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages } from './db.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment } from '@resonant/shared';
@@ -1019,6 +1019,12 @@ export class AgentService {
       registry.broadcast({ type: 'presence', status: 'dormant' });
       return friendly;
     }
+    // PR C: hoist `modelRef` out of the inner try block so the finally
+    // block's session-bookkeeping (which writes to the per-provider
+    // sidecar via `setProviderSession`) can read it. Computed once
+    // immediately after `model` is resolved.
+    const modelRef = normalizeModelRef(model);
+
     // Effort resolves AFTER model selection so `auto` can pick the right
     // value per model class (high for Opus/Sonnet, medium for Haiku).
     // Pulse short-circuits to 'low' because it doesn't actually use
@@ -1148,7 +1154,37 @@ export class AgentService {
       // AgentService consumes those events below; the post-dispatch
       // MCP enforce/refresh dance hangs off the `start` event handler
       // (fires once the runtime's activeQuery is populated).
-      const modelRef = normalizeModelRef(model);
+      //
+      // `modelRef` is hoisted to the outer scope (declared right after
+      // model resolution) so the finally block can use it for sidecar
+      // writes.
+
+      // PR C: resolve the resume session id from the per-provider
+      // sidecar table first; fall back to `threads.current_session_id`
+      // only for the Claude runtime (pre-PR-C threads + Claude
+      // fast-path). Pulse never resumes (`persistSession: false`).
+      const resumeSessionId = isPulseOrientation
+        ? undefined
+        : (() => {
+            const providerSession = getProviderSession({
+              threadId: thread.id,
+              runtimeId: modelRef.runtime,
+              provider: modelRef.provider,
+              modelRef: modelRef.canonical,
+            });
+            if (providerSession) return providerSession.session_id;
+            // Legacy fallback for the Claude case: a thread that
+            // existed before this migration still has its session
+            // pointer in `threads.current_session_id` and no row in
+            // `thread_provider_sessions` yet. First post-PR-C turn on
+            // such a thread reads from here, then the finally block
+            // writes the new sidecar row so subsequent lookups hit
+            // the sidecar directly.
+            if (modelRef.runtime === 'claude-sdk' && thread.current_session_id) {
+              return thread.current_session_id;
+            }
+            return undefined;
+          })();
 
       // PR B2b-2: `fireContextUsageRefresh` closure + dedup state
       // (`pendingContextRefresh`, `lastReportedTokens`) + the
@@ -1188,9 +1224,7 @@ export class AgentService {
           ? buildMcpServersForQuery(mcpServersFromConfig, content, isAutonomous, isFirstMessage)
           : undefined,
         hooks: isPulseOrientation ? undefined : createHooks(hookContext),
-        resumeSessionId: !isPulseOrientation && thread.current_session_id
-          ? thread.current_session_id
-          : undefined,
+        resumeSessionId,
         abortController: activeAbortController,
       }, modelRef)) {
         if (event.type === 'start') {
@@ -1451,6 +1485,18 @@ export class AgentService {
           }
 
           updateThreadSession(threadId, sessionId);
+          // PR C: write to the per-provider sidecar alongside the
+          // legacy fast-path. Both writes survive together — the
+          // sidecar is authoritative for future lookups (including
+          // non-Claude runtimes), `threads.current_session_id` stays
+          // as the Claude-runtime fast-path for back-compat.
+          setProviderSession({
+            threadId,
+            runtimeId: modelRef.runtime,
+            provider: modelRef.provider,
+            modelRef: modelRef.canonical,
+            sessionId,
+          });
           if (clearPending) {
             this.clearPendingForThread.delete(threadId);
             console.log(`[Session] interactive turn claimed fresh session after /clear for thread "${thread.name}"`);
