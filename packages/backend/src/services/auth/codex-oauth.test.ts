@@ -40,6 +40,10 @@ vi.mock('@earendil-works/pi-ai/oauth', () => ({
     loginCapture.onAuth = opts.onAuth;
     if (opts.onManualCodeInput) {
       loginCapture.manualCodePromise = opts.onManualCodeInput();
+      // In production pi-ai awaits this; in tests that cancel without
+      // exercising the manual-code path, no one does — silence the
+      // unhandled rejection so it doesn't pollute the test output.
+      loginCapture.manualCodePromise.catch(() => { /* noop */ });
     }
     // Fire onAuth synchronously so startCodexLogin's urlReady race resolves quickly.
     opts.onAuth({ url: 'https://oauth.openai.example/authorize?code_challenge=...' });
@@ -277,6 +281,56 @@ describe('codex-oauth — login flow', () => {
     expect(getLoginSession().status).toBe('idle');  // module-level cleared
 
     await expect(promise).rejects.toThrow(/cancelled/i);
+  });
+
+  it('does NOT write credentials when a late browser callback resolves after cancel', async () => {
+    // Regression for the cancel-then-late-callback race: pi-ai's browser
+    // callback path is independent of our manual-code rejection, so
+    // loginOpenAICodex can still resolve successfully after the user
+    // cancelled. Without the activeLogin/status gate the background
+    // task would recreate the credentials the user just dismissed.
+    await startCodexLogin();
+    expect(loginCapture.resolveLogin).not.toBeNull();
+
+    // User cancels mid-flight.
+    cancelLoginSession();
+    expect(getLoginSession().status).toBe('idle');  // activeLogin cleared
+
+    // Browser callback resolves AFTER cancel (the race we're guarding).
+    loginCapture.resolveLogin!({
+      refresh: 'late-refresh',
+      access: 'late-access',
+      expires: farFuture(),
+    });
+
+    // Give the background async block a tick to reach the gate.
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(existsSync(authPath)).toBe(false);
+    // Status snapshot still reads idle (no credentials, no in-flight login).
+    const snap = await getCodexAuthSnapshot();
+    expect(snap.loggedIn).toBe(false);
+  });
+
+  it('does NOT recreate credentials when a late callback resolves after logout', async () => {
+    // Same race, but the trigger is logoutCodex (which calls cancel +
+    // deleteCredentialsFile). A late browser callback must not undo the
+    // logout by re-writing the file.
+    writeAuthFile({ refresh: 'old', access: 'old', expires: farFuture() });
+    await startCodexLogin();
+
+    await logoutCodex();
+    expect(existsSync(authPath)).toBe(false);
+
+    // Late callback fires.
+    loginCapture.resolveLogin!({
+      refresh: 'recreated',
+      access: 'recreated',
+      expires: farFuture(),
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(existsSync(authPath)).toBe(false);
   });
 
   it('a login failure surfaces an error in getLoginSession', async () => {

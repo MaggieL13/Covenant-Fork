@@ -326,6 +326,21 @@ export async function startCodexLogin(): Promise<CodexLoginSnapshot> {
         onProgress: (msg) => console.log('[CodexAuth]', msg),
       });
 
+      // Gate before writing: pi-ai's browser-callback path can still
+      // resolve loginOpenAICodex even after we've rejected the
+      // manual-code race in cancelLoginSession() — the two are
+      // independent. If the session was cancelled (or superseded by a
+      // newer login, or cleared by logoutCodex) while we were awaiting,
+      // discard these credentials instead of recreating them. Otherwise
+      // a late callback re-writes the file the user just removed,
+      // violating logout's "deletes credentials" contract.
+      if (activeLogin !== session || session.status !== 'awaiting_browser') {
+        console.log(
+          '[CodexAuth] Login resolved but session is no longer active (status:',
+          session.status + ') — discarding credentials',
+        );
+        return;
+      }
       await writeCredentials(creds);
       session.status = 'complete';
       console.log(
