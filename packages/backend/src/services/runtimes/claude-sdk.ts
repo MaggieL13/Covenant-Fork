@@ -26,11 +26,22 @@
  * need to consolidate the SDK touchpoint; emitting Claude-native
  * shapes through the existing path is the smallest correct step.
  *
- * ## PR B2b: MCP loading, hooks attachment, capability methods
+ * ## PR B2b status: capabilities moved as DIRECT METHODS
  *
- * `mcpServerStatus`, `toggleMcpServer`, `reconnectMcpServer`,
- * `rewindFiles`, `getContextUsage`, `listSessions` move from
- * `AgentService` to this runtime (exposed via `getCapabilityProvider`).
+ * `listSessions` (B2b-1) + `mcpServerStatusLive` /
+ * `toggleMcpServerLive` / `reconnectMcpServerLive` / `rewindFiles` /
+ * `fireContextUsageRefresh` / `getContextUsage` /
+ * `resetContextOnCompaction` (B2b-2) live as direct concrete methods
+ * on `ClaudeAgentRuntime`, not behind `getCapabilityProvider`.
+ *
+ * Direct methods chosen over the cap-provider lookup because every
+ * caller today knows it's talking to Claude (AgentService is the only
+ * dispatcher, and it still calls these methods directly through the
+ * `claudeRuntime` singleton). When PR E ships the Codex runtime,
+ * AgentService's MCP/rewind/etc. methods will need to consult the
+ * resolved runtime's capabilities — that's the point to reconsider
+ * `getCapabilityProvider` as a runtime-agnostic typed lookup. For B2b
+ * the abstraction would be overhead without payoff.
  *
  * ## PR B3: normalized event bridge + callers switch
  *
@@ -86,9 +97,65 @@ export interface ClaudeRuntimeDispatchInput {
   abortController: AbortController;
 }
 
+/**
+ * Callback shape `fireContextUsageRefresh` invokes when a fresh
+ * context-usage snapshot arrives. AgentService wires this to its
+ * WebSocket broadcaster + log line — the runtime doesn't reach into
+ * the registry directly so the abstraction stays clean.
+ */
+export interface ContextUsageUpdate {
+  used: number;
+  window: number;
+  percentage: number;
+  model: string;
+}
+
+/**
+ * Status snapshot returned by MCP live ops. Mirrors the SDK's
+ * `mcpServerStatus()` return shape — AgentService maps these into the
+ * Resonant-flavored `McpServerInfo` (with `toolCount` etc.) at the
+ * boundary, keeping protocol translation in the runtime and shape
+ * conversion in the consumer.
+ */
+export interface McpLiveOpResult {
+  statuses?: Array<{
+    name: string;
+    status: string;
+    error?: string;
+    tools?: Array<{ name: string; description?: string }>;
+    scope?: string;
+  }>;
+  error?: string;
+}
+
 export class ClaudeAgentRuntime implements AgentRuntime {
   readonly id: RuntimeId = 'claude-sdk';
   readonly providerId: ProviderId = 'claude';
+
+  /**
+   * In-flight Claude SDK Query — captured during `dispatchClaudeQuery`,
+   * released in `clearActiveQuery` (called by AgentService's `finally`
+   * block in `_processQuery`). Capability methods (`rewindFiles`, MCP
+   * live ops, `fireContextUsageRefresh`) operate on this reference;
+   * they short-circuit to `{ error: 'No active session' }` when null.
+   *
+   * Was a module-level `let activeQuery` in `agent.ts` before PR B2b-2.
+   * Moving to instance state ties the SDK lifecycle to the runtime
+   * (where it belongs) and clears the way for multiple runtime
+   * implementations to maintain their own provider-native in-flight
+   * handles independently.
+   */
+  private activeQuery: Query | null = null;
+
+  // Context-usage gauge state. Updated by `fireContextUsageRefresh`;
+  // read by `getContextUsage`. `pendingContextRefresh` debounces
+  // simultaneous SDK calls; `lastReportedTokens` dedupes value-equal
+  // refreshes (same number twice in a row → no broadcast).
+  // All four were module/closure state in `_processQuery` before B2b-2.
+  private contextTokensUsed = 0;
+  private contextWindowSize = 0;
+  private pendingContextRefresh = false;
+  private lastReportedTokens = -1;
 
   /**
    * Build SDK `Options` and call `query()`. Returns the SDK `Query`
@@ -96,6 +163,11 @@ export class ClaudeAgentRuntime implements AgentRuntime {
    * shape (preset system prompt, pulse-mode branching, plugin path
    * derivation, file checkpointing flag, resume id placement) lives
    * here so `AgentService` doesn't have to know about it.
+   *
+   * As of PR B2b-2 this also captures the returned `Query` as the
+   * runtime's `activeQuery` so capability methods (`rewindFiles`, MCP
+   * live ops, context refresh) can operate on the in-flight session
+   * without AgentService having to pass it through.
    *
    * Behavior must remain byte-identical to the pre-B2a inline assembly
    * in `_processQuery`. If you find yourself "improving" the option
@@ -143,7 +215,187 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       ...(input.resumeSessionId && !input.isPulse ? { resume: input.resumeSessionId } : {}),
     };
 
-    return query({ prompt: input.prompt, options });
+    const result = query({ prompt: input.prompt, options });
+    this.activeQuery = result;
+    return result;
+  }
+
+  /**
+   * Release the in-flight Query reference. Called by AgentService's
+   * `_processQuery` `finally` block after the stream loop completes
+   * (success, error, or abort). Subsequent capability calls return
+   * "No active session" until the next `dispatchClaudeQuery`.
+   *
+   * Also resets context-usage dedup state so the first refresh on the
+   * next turn always fires (otherwise a turn-to-turn collision on
+   * `totalTokens` would silently skip the first broadcast).
+   */
+  clearActiveQuery(): void {
+    this.activeQuery = null;
+    this.pendingContextRefresh = false;
+    this.lastReportedTokens = -1;
+  }
+
+  /** True iff a Query is currently in flight. */
+  hasActiveQuery(): boolean {
+    return this.activeQuery !== null;
+  }
+
+  /**
+   * Current gauge snapshot (from the most recent successful refresh).
+   * `tokensUsed` and `contextWindow` are 0 before any refresh has
+   * happened in the current session.
+   */
+  getContextUsage(): { tokensUsed: number; contextWindow: number } {
+    return { tokensUsed: this.contextTokensUsed, contextWindow: this.contextWindowSize };
+  }
+
+  /**
+   * Called from the compaction-boundary handler in `_processQuery`
+   * after the SDK reports a successful compaction. The window is
+   * fresh post-compaction so the gauge resets to 0; the next refresh
+   * tick repopulates it.
+   */
+  resetContextOnCompaction(): void {
+    this.contextTokensUsed = 0;
+  }
+
+  /**
+   * Fire-and-forget context-usage refresh. Called from
+   * `_processQuery`'s stream loop on each assistant tick.
+   *
+   * - Debounced: `pendingContextRefresh` ensures only one outstanding
+   *   SDK control request at a time (multiple assistant ticks within
+   *   a single turn don't pile up).
+   * - Value-deduped: `lastReportedTokens` tracks the last successful
+   *   read; identical-value refreshes skip both the local mutation
+   *   AND the `onUpdate` callback so the broadcaster doesn't emit
+   *   redundant `context_usage` events.
+   * - Error-tolerant: the SDK's "Query closed before response
+   *   received" race (which fires on the last refresh tick of every
+   *   successful turn) is silenced at the log level; other failures
+   *   surface as warnings.
+   *
+   * The `onUpdate` callback is invoked synchronously on the
+   * micro-task that handles the SDK response. AgentService passes
+   * the WebSocket broadcaster + log line as the callback so the
+   * runtime stays free of `registry` / `console.log` formatting
+   * coupling.
+   */
+  fireContextUsageRefresh(onUpdate: (info: ContextUsageUpdate) => void): void {
+    if (!this.activeQuery || this.pendingContextRefresh) return;
+    this.pendingContextRefresh = true;
+    this.activeQuery.getContextUsage().then((usage) => {
+      if (
+        usage
+        && typeof usage.totalTokens === 'number'
+        && typeof usage.maxTokens === 'number'
+        && usage.maxTokens > 0
+      ) {
+        if (usage.totalTokens === this.lastReportedTokens) return;
+        this.lastReportedTokens = usage.totalTokens;
+        this.contextTokensUsed = usage.totalTokens;
+        this.contextWindowSize = usage.maxTokens;
+        const percentage = typeof usage.percentage === 'number'
+          ? Math.round(usage.percentage)
+          : Math.round((usage.totalTokens / usage.maxTokens) * 100);
+        onUpdate({
+          used: this.contextTokensUsed,
+          window: this.contextWindowSize,
+          percentage,
+          model: usage.model ?? '?',
+        });
+      }
+    }).catch((err) => {
+      // Defensive: getContextUsage() can fail if the query closed
+      // between our request and the response. The LAST refresh tick
+      // on any turn races the SDK's stream-close — that's expected,
+      // not a failure. Suppress that specific message; surface real
+      // errors.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/Query closed before response received/i.test(msg)) {
+        console.warn('[ClaudeAgentRuntime] getContextUsage failed:', msg);
+      }
+    }).finally(() => {
+      this.pendingContextRefresh = false;
+    });
+  }
+
+  /**
+   * Snapshot of MCP server statuses from the live session. Returns
+   * `null` (not throw) when there's no active query — caller should
+   * treat as "status unavailable right now, try after next turn."
+   */
+  async mcpServerStatusLive(): Promise<McpLiveOpResult['statuses'] | null> {
+    if (!this.activeQuery) return null;
+    try {
+      return await this.activeQuery.mcpServerStatus();
+    } catch (err) {
+      console.warn('[ClaudeAgentRuntime] Failed to get MCP status:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Reconnect a single MCP server in the live session, then return
+   * the post-reconnect status snapshot for the caller to merge into
+   * its cache. Returns `{ error }` if there's no active query (which
+   * means the reconnect will happen on the next turn automatically
+   * — caller surfaces this as "will apply on next message").
+   */
+  async reconnectMcpServerLive(name: string): Promise<McpLiveOpResult> {
+    if (!this.activeQuery) {
+      return { error: 'No active session — will apply on next message' };
+    }
+    try {
+      await this.activeQuery.reconnectMcpServer(name);
+      const statuses = await this.activeQuery.mcpServerStatus();
+      return { statuses };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Toggle a single MCP server enabled/disabled in the live session,
+   * then return the post-toggle status snapshot. Returns `{}` (no
+   * statuses, no error) when there's no active query — caller's DB
+   * write of the persistent disabled-list is the source of truth for
+   * future turns; this op is purely the in-flight SDK adjustment.
+   */
+  async toggleMcpServerLive(name: string, enabled: boolean): Promise<McpLiveOpResult> {
+    if (!this.activeQuery) {
+      return {};
+    }
+    try {
+      await this.activeQuery.toggleMcpServer(name, enabled);
+      const statuses = await this.activeQuery.mcpServerStatus();
+      return { statuses };
+    } catch {
+      // Best-effort — failures here don't propagate to the caller
+      // because the persistent disabled-list is already authoritative
+      // for the next turn. Matches pre-B2b-2 behavior in
+      // AgentService.toggleMcpServer which silently swallowed live-op
+      // failures.
+      return {};
+    }
+  }
+
+  /**
+   * Rewind filesystem changes back to the state at a previous user
+   * message. Thin wrap of `Query.rewindFiles` from the SDK; returns
+   * `{ canRewind: false, error: ... }` when there's no active query
+   * (matches the pre-B2b-2 AgentService behavior).
+   */
+  async rewindFiles(userMessageId: string, dryRun?: boolean): Promise<{ canRewind: boolean; filesChanged?: string[]; insertions?: number; deletions?: number; error?: string }> {
+    if (!this.activeQuery) {
+      return { canRewind: false, error: 'No active session' };
+    }
+    try {
+      return await this.activeQuery.rewindFiles(userMessageId, { dryRun });
+    } catch (err) {
+      return { canRewind: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /**
