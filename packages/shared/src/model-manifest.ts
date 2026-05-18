@@ -258,9 +258,20 @@ export const MODELS: readonly ModelEntry[] = [
   // Codex (ChatGPT OAuth) — PREVIEW entries. Selecting any of these
   // today produces a friendly "codex runtime not wired up yet" error
   // from `resolveConfiguredRuntime`. PR E lands the runtime.
-  codexEntry('gpt-5', 'GPT-5 (Codex preview)', ['interactive', 'autonomous', 'memory']),
-  codexEntry('gpt-5-mini', 'GPT-5 Mini (Codex preview)', ['interactive', 'autonomous', 'memory']),
-  codexEntry('o3', 'o3 reasoning (Codex preview)', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
+  // PR E2 (post-review): ids match the current Codex UI / pi-ai's
+  // live registry — not a stale subset. Codex itself surfaces 5.5 /
+  // 5.4 / 5.3-codex / 5.2 as its current chat tier, so showing the
+  // older 5.1 entries as the primary picker would be confusing.
+  //
+  // Older ids (gpt-5.1, gpt-5.1-codex-mini) stay as hidden migration
+  // aliases in LEGACY_BARE_ID_ALIASES below — anyone who configured
+  // them in the brief E2 → fix window auto-routes to the current
+  // equivalents, no visible dropdown clutter.
+  codexEntry('gpt-5.5', 'GPT-5.5', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.4', 'GPT-5.4', ['interactive', 'autonomous', 'memory'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.4-mini', 'GPT-5.4 Mini', ['interactive', 'autonomous', 'memory'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.3-codex', 'GPT-5.3 Codex', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
+  codexEntry('gpt-5.2', 'GPT-5.2', ['interactive', 'autonomous'], CODEX_REASONING_CAPABILITIES),
 ] as const;
 
 /**
@@ -342,6 +353,34 @@ export function parseModelRef(canonical: string): ModelRef | null {
  * Throws only for genuinely empty input or canonical-form input with an
  * unknown provider prefix.
  */
+/**
+ * Aliases for bare ids whose manifest entry has been replaced. Keyed by
+ * the OLD id, value is the canonical ref the new manifest entry uses.
+ * Used by `normalizeModelRef` after the manifest lookup miss but before
+ * the Claude fallback — so old config values stay routed to the right
+ * provider instead of silently falling through to the Claude SDK.
+ *
+ * Add entries here whenever a manifest id changes. Removing entries
+ * silently breaks anyone with the old id in their config; prefer to
+ * leave aliases in long-term unless the legacy id is known-dead.
+ */
+const LEGACY_BARE_ID_ALIASES: Record<string, string> = {
+  // PR E0 preview ids → current Codex equivalents (PR E2 post-review).
+  'gpt-5': 'openai-codex/gpt-5.5',
+  'gpt-5-mini': 'openai-codex/gpt-5.4-mini',
+  // o3 was the E0 reasoning placeholder. pi-ai's openai-codex registry
+  // doesn't expose an o3 id; route to gpt-5.5 (current reasoning-
+  // capable Codex flagship). Users who want a smaller reasoning model
+  // can pick gpt-5.4-mini explicitly in Settings.
+  'o3': 'openai-codex/gpt-5.5',
+  // Brief-window aliases: ids that appeared in PR E2's initial commit
+  // before the post-review version bump. Cheap to keep and protect
+  // anyone who configured them in the gap. Drop after a few releases
+  // once it's clear no one's pinning them.
+  'gpt-5.1': 'openai-codex/gpt-5.5',
+  'gpt-5.1-codex-mini': 'openai-codex/gpt-5.4-mini',
+};
+
 export function normalizeModelRef(input: string): ModelRef {
   if (!input || !input.trim()) {
     throw new Error('normalizeModelRef: empty model reference');
@@ -377,6 +416,21 @@ export function normalizeModelRef(input: string): ModelRef {
       model: entry.id,
       runtime: entry.runtime,
     };
+  }
+
+  // PR E2: legacy alias map for E0 preview ids. The first wave of Codex
+  // preview entries (gpt-5, gpt-5-mini, o3) were placeholders that PR E2
+  // replaced with real pi-ai-registered ids. Anyone who saved a preview
+  // id to their config would otherwise fall through to the Claude fallback
+  // below, silently sending a Codex-shaped id to the Claude SDK boundary.
+  // Map old → closest current Codex equivalent before the fallback.
+  const aliased = LEGACY_BARE_ID_ALIASES[trimmed];
+  if (aliased) {
+    // Re-resolve through the canonical-form branch — guarantees the
+    // mapped target gets validated against the manifest, and any future
+    // alias-of-alias mistake surfaces as an unknown provider error
+    // instead of silently mis-routing.
+    return normalizeModelRef(aliased);
   }
 
   // Legacy fallback: assume Claude. Matches every pre-multi-provider
