@@ -371,6 +371,67 @@ describe('CodexRuntime.runTurn — successful stream end-to-end', () => {
     });
   });
 
+  it('buffers thinking deltas across start/delta/end into one consolidated emission', async () => {
+    // Smoke catch: pi-ai sends one thinking_delta per token, which the
+    // UI was rendering as one card per word. CodexRuntime must
+    // accumulate inside a thinking_start/thinking_end pair and emit a
+    // single thinking_delta when the block closes (matching Claude's
+    // per-block shape that the UI was tuned for).
+    codexAuthMock.loggedIn = true;
+
+    const fakeFinal = fakeAssistantMessage({ responseId: 'resp_thinking', stopReason: 'stop' });
+    streamFactory.value = () => makeFakeStream(
+      [
+        { type: 'thinking_start', contentIndex: 0, partial: fakeAssistantMessage() },
+        { type: 'thinking_delta', contentIndex: 0, delta: 'I ', partial: fakeAssistantMessage() },
+        { type: 'thinking_delta', contentIndex: 0, delta: 'need ', partial: fakeAssistantMessage() },
+        { type: 'thinking_delta', contentIndex: 0, delta: 'to ', partial: fakeAssistantMessage() },
+        { type: 'thinking_delta', contentIndex: 0, delta: 'reason', partial: fakeAssistantMessage() },
+        { type: 'thinking_end', contentIndex: 0, content: 'I need to reason', partial: fakeAssistantMessage() },
+        { type: 'text_delta', contentIndex: 0, delta: 'Answer.', partial: fakeAssistantMessage() },
+      ],
+      fakeFinal,
+    );
+
+    const runtime = new CodexRuntime();
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+    // Exactly ONE thinking_delta should appear, carrying the full
+    // accumulated reasoning — NOT four separate ones (one per token).
+    const thinkingEvents = events.filter((e) => e.type === 'thinking_delta');
+    expect(thinkingEvents).toHaveLength(1);
+    expect(thinkingEvents[0]).toEqual({ type: 'thinking_delta', text: 'I need to reason' });
+
+    // Text deltas are unaffected — they still pass through 1:1.
+    const textEvents = events.filter((e) => e.type === 'text_delta');
+    expect(textEvents).toEqual([{ type: 'text_delta', text: 'Answer.' }]);
+  });
+
+  it('flushes the thinking buffer if the stream ends mid-block (defensive)', async () => {
+    // Edge case: pi-ai's contract guarantees thinking_end after every
+    // thinking_start, but defense in depth — if we'd somehow end mid-
+    // block (provider failure, transport hiccup), the user should see
+    // whatever was reasoned so far rather than silently losing it.
+    codexAuthMock.loggedIn = true;
+
+    const fakeFinal = fakeAssistantMessage({ responseId: 'resp_no_end', stopReason: 'stop' });
+    streamFactory.value = () => makeFakeStream(
+      [
+        { type: 'thinking_start', contentIndex: 0, partial: fakeAssistantMessage() },
+        { type: 'thinking_delta', contentIndex: 0, delta: 'partial thought', partial: fakeAssistantMessage() },
+        // NOTE: no thinking_end before stream drains.
+      ],
+      fakeFinal,
+    );
+
+    const runtime = new CodexRuntime();
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+    const thinkingEvents = events.filter((e) => e.type === 'thinking_delta');
+    expect(thinkingEvents).toHaveLength(1);
+    expect(thinkingEvents[0]).toEqual({ type: 'thinking_delta', text: 'partial thought' });
+  });
+
   it('skips session/usage emit when the final message has no responseId (degraded provider)', async () => {
     // Defensive case: pi-ai's contract has responseId as optional. If
     // it's missing, we shouldn't pretend to capture a session id (would

@@ -335,16 +335,44 @@ export class CodexRuntime implements AgentRuntime {
     }
 
     // Stream consumer — translate each pi-ai event into our normalized
-    // shape. We deliberately drop start/text_start/text_end and
-    // thinking_start/thinking_end events (they don't carry payload
-    // we need; deltas + done are sufficient). The translation table
-    // mirrors what's documented in shared/multi-provider-pr-e-phase2-plan.
+    // shape. text_delta events pass through 1:1 (pi-ai gives true
+    // deltas already), but thinking_* events get BUFFERED here:
+    // pi-ai sends one thinking_delta per token, which would render as
+    // ~hundreds of micro-blocks in the UI (one card per word). We
+    // accumulate inside a thinking_start/thinking_end pair and emit a
+    // single consolidated thinking_delta when the block closes — that
+    // gives one card per logical reasoning chunk, matching the Claude
+    // path's per-block shape that the UI was tuned for.
+    let thinkingBuffer: string | null = null;
     try {
       for await (const event of stream) {
+        // Per-block thinking buffering (Codex-specific; pure passthrough
+        // would flood the UI with single-token cards).
+        if (event.type === 'thinking_start') {
+          thinkingBuffer = '';
+          continue;
+        }
+        if (event.type === 'thinking_delta' && thinkingBuffer !== null) {
+          thinkingBuffer += event.delta;
+          continue;
+        }
+        if (event.type === 'thinking_end') {
+          if (thinkingBuffer && thinkingBuffer.length > 0) {
+            yield { type: 'thinking_delta', text: thinkingBuffer };
+          }
+          thinkingBuffer = null;
+          continue;
+        }
+
         const translated = translatePiEvent(event);
         if (translated) {
           yield translated;
         }
+      }
+      // Safety: if the stream ended mid-thinking-block (rare; defensive),
+      // flush the buffer so the user sees what was reasoned so far.
+      if (thinkingBuffer && thinkingBuffer.length > 0) {
+        yield { type: 'thinking_delta', text: thinkingBuffer };
       }
 
       // After the stream drains, the result() promise carries the final
