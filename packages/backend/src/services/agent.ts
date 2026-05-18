@@ -2,8 +2,9 @@ import { query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
 import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
-import type { AgentRuntime } from './runtimes/types.js';
-import { buildProviderHandoff, renderProviderHandoffAsPrompt } from './handoff.js';
+import { CodexRuntime } from './runtimes/codex.js';
+import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
+import { buildProviderHandoff, renderProviderHandoffAsPrompt, type ProviderHandoff } from './handoff.js';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
@@ -275,6 +276,7 @@ export function resolveConfiguredClaudeSdkModel(tier: AgentModelTier): string {
  * `resolveConfiguredRuntime` returns the same object each call).
  */
 const claudeRuntime = new ClaudeAgentRuntime();
+const codexRuntime = new CodexRuntime();
 
 /**
  * Resolved runtime dispatch packet — what `resolveConfiguredRuntime`
@@ -330,6 +332,13 @@ export function resolveConfiguredRuntime(tier: AgentModelTier): ResolvedRuntime 
       runtime = claudeRuntime;
       break;
     case 'codex':
+      // PR E2: Codex runtime wired. Selecting a Codex model now
+      // dispatches via CodexRuntime → pi-ai's streamOpenAICodexResponses
+      // (requires a logged-in OAuth session; CodexRuntime emits
+      // `auth_required` if not, which AgentService translates into a
+      // friendly chat message).
+      runtime = codexRuntime;
+      break;
     case 'openai-compat':
     case 'ollama-native':
       throw new Error(
@@ -1016,10 +1025,29 @@ export class AgentService {
     // just see... nothing.
     const tier = isPulseOrientation ? 'pulse' : (isAutonomous ? 'autonomous' : 'interactive');
     let model: string;
+    let modelRef: ModelRef;
     try {
-      model = isPulseOrientation
-        ? getConfiguredPulseModel()
-        : getConfiguredModel(isAutonomous);
+      if (isPulseOrientation) {
+        // Pulse stays Claude-only (Codex not in pulse tier hints; pulse
+        // PULSE_OK reliability requires Haiku-class). `getConfiguredPulseModel`
+        // throws if the configured pulse model is non-Claude.
+        model = getConfiguredPulseModel();
+        modelRef = normalizeModelRef(model);
+      } else {
+        // PR E2: don't unwrap-to-Claude here. Resolve the canonical
+        // model ref, then guard that the runtime is wired up. Codex now
+        // flows through; non-Claude/non-Codex runtimes (ollama-native,
+        // openai-compat) still throw the friendly "not wired up" error.
+        modelRef = resolveConfiguredModelRef(isAutonomous ? 'autonomous' : 'interactive');
+        if (modelRef.runtime !== 'claude-sdk' && modelRef.runtime !== 'codex') {
+          throw new Error(
+            `Model "${modelRef.canonical}" requires the ${modelRef.runtime} runtime, ` +
+            `which is not wired up yet. Switch the ${isAutonomous ? 'autonomous' : 'interactive'} ` +
+            `tier back to a Claude or Codex model in Settings.`,
+          );
+        }
+        model = modelRef.model;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const friendly = `⚠️ Model configuration error (${tier} tier): ${message}`;
@@ -1053,11 +1081,10 @@ export class AgentService {
       registry.broadcast({ type: 'presence', status: 'dormant' });
       return friendly;
     }
-    // PR C: hoist `modelRef` out of the inner try block so the finally
-    // block's session-bookkeeping (which writes to the per-provider
-    // sidecar via `setProviderSession`) can read it. Computed once
-    // immediately after `model` is resolved.
-    const modelRef = normalizeModelRef(model);
+    // PR E2: `modelRef` is now resolved inside the model-resolution try
+    // block above (covers both Claude path via `normalizeModelRef(model)`
+    // and Codex path via `resolveConfiguredModelRef(tier)`), so the
+    // finally block's session-bookkeeping below can still read it.
 
     // Effort resolves AFTER model selection so `auto` can pick the right
     // value per model class (high for Opus/Sonnet, medium for Haiku).
@@ -1229,6 +1256,15 @@ export class AgentService {
       //  - Internal: `buildProviderHandoff` itself returns null when the
       //    thread has no prior assistant messages (fresh thread).
       let handoffBlock = '';
+      // PR E2 fix: hoist the typed handoff packet itself so the Codex
+      // dispatch branch below can pass it through to CodexRuntime's
+      // `input.handoff` field. Pre-fix this PR set
+      // `codexHandoff = handoffBlock ? undefined : undefined` (a
+      // placeholder Codex bot caught) — Codex turns silently skipped
+      // the memory-tier summary bridge. With this hoist, Claude →
+      // Codex switches get the same handoff narrative Claude → Claude
+      // switches get.
+      let handoff: ProviderHandoff | null = null;
       const clearPendingForHandoff = this.clearPendingForThread.has(threadId);
       if (!isPulseOrientation && !resumeSessionId && !clearPendingForHandoff) {
         try {
@@ -1258,7 +1294,7 @@ export class AgentService {
           const priorSessions = listProviderSessionsForThread(thread.id);
           const fromModelRef = priorSessions[0]?.model_ref;
 
-          const handoff = await buildProviderHandoff({
+          handoff = await buildProviderHandoff({
             thread,
             targetRuntime: modelRef.runtime,
             targetProvider: modelRef.provider,
@@ -1352,6 +1388,187 @@ export class AgentService {
         });
       };
 
+      // PR E2: dispatcher branches on resolved runtime. Claude path is
+      // unchanged from PR B3 (~200 lines of event handler below). Codex
+      // path is a parallel, simpler handler in `dispatchCodexTurn`
+      // below — no MCP, no compaction, no Claude-specific context usage,
+      // and `auth_required` translates to a friendly chat-visible
+      // message instead of bubbling raw error text. Both paths share
+      // the same outer try/catch + finally, so session bookkeeping +
+      // sidecar writes happen for both via the existing
+      // `setProviderSession` call in finally.
+      if (modelRef.runtime === 'codex') {
+        // Codex history is rebuilt from DB each turn (pi-ai's
+        // openai-codex-responses provider is stateless — sends full
+        // `input: messages` array each request, doesn't chain via
+        // previous_response_id). 30-message window matches what we
+        // send to a fresh Claude session via the historyBlock.
+        const dbMessages = getMessages({ threadId, limit: 30 });
+        // getMessages returns DESC (newest first); flip for chronological order.
+        const chronological = dbMessages.slice().reverse();
+        const normalizedMessages: NormalizedMessage[] = chronological
+          .filter((m) => m.role === 'user' || m.role === 'companion')
+          .map((m) => ({
+            role: m.role === 'companion' ? 'assistant' as const : 'user' as const,
+            content: m.content,
+            createdAt: m.created_at,
+          }));
+
+        // PR E2 fix (Codex bot catch): the filter above drops `system`
+        // and other non-owner roles. The caller writes the current user
+        // message to the DB before invoking _processQuery, but some
+        // inbound channels (or future role types) might store it under
+        // a role we filter out — in which case GPT would be asked to
+        // respond without ever seeing what was just said.
+        //
+        // Defensive: if the chronologically-last user-role message in
+        // the replay doesn't match the current prompt, append it
+        // explicitly. Idempotent in the common case (DB user-role row
+        // matches), defensive against future weird role mappings.
+        const lastMsg = normalizedMessages[normalizedMessages.length - 1];
+        const currentPromptPresent = lastMsg?.role === 'user'
+          && lastMsg.content === content;
+        if (!currentPromptPresent) {
+          normalizedMessages.push({
+            role: 'user',
+            content,
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        // System prompt folds CLAUDE.md + tool rules + orientation into
+        // one block. Codex doesn't have a system-vs-developer-vs-user
+        // distinction we care about, and pi-ai's openai-codex-responses
+        // takes a single systemPrompt field.
+        const systemPromptText = `${appendText}\n\n[Context]\n${orientation}\n[/Context]`;
+
+        // Handoff packet — built earlier in the dispatcher. Claude path
+        // consumes the rendered text via `handoffBlock` (prepended to
+        // the enriched prompt). Codex path gets the typed packet
+        // directly — CodexRuntime renders it as a system-note prefix
+        // (see `handoffNote` in runtimes/codex.ts). This is the bridge
+        // that lets a Claude → Codex switch carry the memory-tier
+        // summary cleanly. `handoff` is `null` when there's no prior
+        // assistant turn, when a session resumed cleanly, or when
+        // /clear was just used — all the same skip conditions the
+        // Claude path respects.
+        const codexHandoff = handoff ?? undefined;
+
+        const codexInput: AgentTurnInput = {
+          thread,
+          tier: isAutonomous ? 'autonomous' : 'interactive',
+          modelRef,
+          platform,
+          isAutonomous,
+          orientation,
+          systemPrompt: { kind: 'text', value: systemPromptText },
+          messages: normalizedMessages,
+          handoff: codexHandoff,
+          sessionId: resumeSessionId ?? undefined,
+          cwd: AGENT_CWD,
+          thinkingEffort: effectiveEffort,
+          abortSignal: activeAbortController.signal,
+        };
+
+        try {
+          for await (const event of codexRuntime.runTurn(codexInput)) {
+            if (event.type === 'start') continue;
+            if (event.type === 'session') {
+              if (event.sessionId !== sessionId) {
+                sessionId = event.sessionId;
+                hookContext.sessionId = sessionId;
+              }
+              continue;
+            }
+            if (event.type === 'text_delta') {
+              // pi-ai gives true deltas — concatenate, don't join with newlines
+              // (the Claude path joins with `\n\n` because Claude SDK emits
+              // discrete assistant messages; pi-ai emits chunked tokens).
+              if (!responseTruncated) {
+                fullResponse += event.text;
+                if (fullResponse.length > MAX_RESPONSE_LENGTH) {
+                  fullResponse = fullResponse.slice(0, MAX_RESPONSE_LENGTH) + '\n[Response truncated due to length]';
+                  responseTruncated = true;
+                }
+                if (autonomousOpts.streamToClient !== false) {
+                  registry.broadcast({
+                    type: 'stream_token',
+                    messageId: streamMsgId,
+                    token: fullResponse,
+                  });
+                }
+              }
+              continue;
+            }
+            if (event.type === 'thinking_delta') {
+              thinkingBlocks.push({
+                textOffset: fullResponse.length,
+                content: event.text,
+                summary: event.summary ?? '',
+              });
+              registry.broadcast({ type: 'thinking', content: event.text, summary: event.summary ?? '' });
+              continue;
+            }
+            if (event.type === 'auth_required') {
+              // Friendly chat-visible message. Set as the response so
+              // the standard persistence + broadcast pipeline turns it
+              // into a normal companion turn. User sees actionable text
+              // instead of a stack trace; clicking Settings → System
+              // → Codex (ChatGPT) OAuth re-logs them in.
+              fullResponse =
+                `Codex needs you to log in again — head to **Settings → System → Codex (ChatGPT) OAuth** ` +
+                `and click **Login to Codex**. Once you're signed back in, send your message again.`;
+              console.warn(`[Codex] auth_required: ${event.message}`);
+              continue;
+            }
+            if (event.type === 'rate_limit') {
+              const retryHint = event.retryAfterMs
+                ? ` (retry in ~${Math.ceil(event.retryAfterMs / 1000)}s)`
+                : '';
+              console.warn(`[Codex] rate-limited${retryHint}`);
+              registry.broadcast({
+                type: 'rate_limit',
+                status: 'rate_limited',
+                resetsAt: (event.retryAfterMs
+                  ? (Date.now() + event.retryAfterMs) / 1000
+                  : undefined) as unknown as number | undefined,
+                rateLimitType: 'codex',
+                utilization: undefined,
+              });
+              continue;
+            }
+            if (event.type === 'provider_diagnostic') {
+              console.log(`[Codex diagnostic ${event.code}] ${event.message}`);
+              continue;
+            }
+            if (event.type === 'done') {
+              if (event.finishReason === 'aborted') {
+                console.log('[Agent] Codex generation stopped by user');
+                registry.broadcast({ type: 'generation_stopped' });
+              }
+              continue;
+            }
+            if (event.type === 'error') {
+              console.error('[Codex] error:', event.message);
+              if (!event.recoverable) {
+                fullResponse = fullResponse || `[Codex error: ${event.message}]`;
+              }
+              continue;
+            }
+            // usage, text_snapshot, tool_*, compaction_notice, suppressed —
+            // not emitted by CodexRuntime in E2 (no tools, no compaction,
+            // no snapshot mode). Quietly ignore.
+          }
+        } catch (error) {
+          // Same safety-net catch as the Claude path — runtime SHOULD
+          // emit error/done events instead of throwing, but defense in
+          // depth.
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error('Codex stream error:', errMsg, error);
+          fullResponse = fullResponse || `[Codex error: ${errMsg}]`;
+        }
+        // Skip the Claude event handler below — already done.
+      } else {
       // PR B3: normalized event-stream loop. `runClaudeTurn` translates
       // SDK message shapes into `AgentRuntimeEvent`s; this loop maps
       // each event type to the appropriate side effects (broadcast /
@@ -1564,6 +1781,7 @@ export class AgentService {
           continue;
         }
       }
+      } // PR E2: close the `else` for the Claude branch (Codex branch above)
     } catch (error) {
       // Safety net for genuinely unexpected exceptions. The runtime
       // catches SDK errors and emits {type: 'error'} events, so we

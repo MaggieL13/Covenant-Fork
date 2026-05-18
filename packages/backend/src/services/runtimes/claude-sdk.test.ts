@@ -109,11 +109,17 @@ describe('resolveConfiguredRuntime — runtime dispatch packet (PR B1)', () => {
     expect(resolved.modelRef.model).toBe('claude-sonnet-4-6');
   });
 
-  it('throws friendly error for a Codex ref (runtime not wired yet)', () => {
-    setConfig('agent.model', 'openai-codex/gpt-5-1');
-    expect(() => resolveConfiguredRuntime('interactive')).toThrow(/codex runtime/);
-    expect(() => resolveConfiguredRuntime('interactive')).toThrow(/not wired up yet/);
-    expect(() => resolveConfiguredRuntime('interactive')).toThrow(/interactive tier/);
+  it('resolves a Codex ref to the wired CodexRuntime (PR E2)', () => {
+    // PR E0 placed Codex entries in the manifest; PR E1 added the OAuth
+    // surface; PR E2 wires the runtime. Selecting a Codex ref now
+    // resolves cleanly to a runtime with id='codex'. Auth gating
+    // happens INSIDE the runtime's runTurn (emits auth_required event
+    // when not logged in), not at resolve time.
+    setConfig('agent.model', 'openai-codex/gpt-5.5');
+    const resolved = resolveConfiguredRuntime('interactive');
+    expect(resolved.runtime.id).toBe('codex');
+    expect(resolved.runtime.providerId).toBe('openai-codex');
+    expect(resolved.modelRef.canonical).toBe('openai-codex/gpt-5.5');
   });
 
   it('throws friendly error for an OpenRouter ref', () => {
