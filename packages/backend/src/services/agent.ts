@@ -1,6 +1,6 @@
 import { query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
+import { MODELS, resolveEffortForModel, coerceEffortForProvider, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import { CodexRuntime } from './runtimes/codex.js';
 import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
@@ -1152,9 +1152,19 @@ export class AgentService {
     const configuredEffort = isPulseOrientation
       ? 'low'  // unused; pulse path passes thinking: disabled
       : getConfiguredThinkingEffort(isAutonomous ? 'autonomous' : 'interactive');
+    // Provider-mismatch safety belt: when autonomous "Match Chat" lets a
+    // chat-tier effort bleed into an autonomous turn whose model lives on
+    // a different provider (chat = Codex with `none`, autonomous =
+    // Claude), the inherited value can be invalid for the dispatch
+    // model. Coerce the configured value to the resolved model's
+    // provider — `auto` is the safe fallback that `resolveEffortForModel`
+    // then turns into a sensible per-model-class default.
+    const coercedEffort = isPulseOrientation
+      ? 'low'
+      : coerceEffortForProvider(modelRef.provider, configuredEffort);
     const effectiveEffort = isPulseOrientation
       ? 'low'
-      : resolveEffortForModel(model, configuredEffort);
+      : resolveEffortForModel(model, coercedEffort);
     console.log(`[Agent] Model: ${model} (${tier}, effort: ${effectiveEffort})`);
 
     // Tool-behavior rule prepended to the system prompt. Lives here
