@@ -89,7 +89,11 @@ vi.mock('@earendil-works/pi-ai', async () => {
   };
 });
 
-import { translatePiEvent, CodexRuntime } from './codex.js';
+import {
+  translatePiEvent,
+  summarizeCodexPiEventForDebug,
+  CodexRuntime,
+} from './codex.js';
 import type { AssistantMessageEvent, AssistantMessage } from '@earendil-works/pi-ai';
 import type { AgentRuntimeEvent, AgentTurnInput, NormalizedMessage } from './types.js';
 import { normalizeModelRef } from '@resonant/shared';
@@ -142,6 +146,8 @@ beforeEach(() => {
   codexAuthMock.loggedIn = false;
   streamFactory.value = null;
   setProviderSessionSpy.mockReset();
+  delete process.env.CODEX_EVENT_LOG;
+  delete process.env.CODEX_EVENT_LOG_CONTENT;
 });
 
 /**
@@ -253,6 +259,64 @@ describe('translatePiEvent — pi-ai → AgentRuntimeEvent', () => {
 // CodexRuntime.runTurn — gating paths (don't require mocking pi-ai's stream)
 // ─────────────────────────────────────────────────────────────────────────
 
+describe('summarizeCodexPiEventForDebug', () => {
+  const fakePartial = fakeAssistantMessage({ responseId: 'resp_partial' });
+
+  it('summarizes text deltas without leaking content by default', () => {
+    const summary = summarizeCodexPiEventForDebug({
+      type: 'text_delta',
+      contentIndex: 0,
+      delta: 'secret final text',
+      partial: fakePartial,
+    });
+
+    expect(summary).toEqual({
+      type: 'text_delta',
+      contentIndex: 0,
+      deltaChars: 17,
+      partialContentBlocks: 1,
+      partialResponseIdPresent: true,
+    });
+    expect(summary).not.toHaveProperty('deltaPreview');
+  });
+
+  it('can include short previews when explicitly enabled for local debugging', () => {
+    const summary = summarizeCodexPiEventForDebug({
+      type: 'thinking_delta',
+      contentIndex: 1,
+      delta: 'planning text that should never become assistant content',
+      partial: fakePartial,
+    }, true);
+
+    expect(summary).toMatchObject({
+      type: 'thinking_delta',
+      contentIndex: 1,
+      deltaChars: 56,
+      deltaPreview: 'planning text that should never become assistant content',
+    });
+  });
+
+  it('summarizes done events by shape, not transcript payload', () => {
+    const summary = summarizeCodexPiEventForDebug({
+      type: 'done',
+      reason: 'stop',
+      message: fakeAssistantMessage({
+        responseId: 'resp_done',
+        content: [{ type: 'text', text: 'done text' }],
+      }),
+    });
+
+    expect(summary).toEqual({
+      type: 'done',
+      reason: 'stop',
+      messageContentBlocks: 1,
+      messageResponseIdPresent: true,
+      stopReason: 'stop',
+      usagePresent: true,
+    });
+  });
+});
+
 describe('CodexRuntime.runTurn — auth + model-resolution gating', () => {
   it('emits start → auth_required → done(error) when not logged in', async () => {
     codexAuthMock.loggedIn = false;
@@ -304,6 +368,44 @@ describe('CodexRuntime.runTurn — auth + model-resolution gating', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('CodexRuntime.runTurn — successful stream end-to-end', () => {
+  it('batches debug delta logs so CODEX_EVENT_LOG stays readable', async () => {
+    codexAuthMock.loggedIn = true;
+    process.env.CODEX_EVENT_LOG = 'true';
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      streamFactory.value = () => makeFakeStream(
+        [
+          { type: 'start', partial: fakeAssistantMessage() },
+          { type: 'text_start', contentIndex: 0, partial: fakeAssistantMessage() },
+          { type: 'text_delta', contentIndex: 0, delta: 'Hello ', partial: fakeAssistantMessage() },
+          { type: 'text_delta', contentIndex: 0, delta: 'world', partial: fakeAssistantMessage() },
+          { type: 'text_end', contentIndex: 0, content: 'Hello world', partial: fakeAssistantMessage() },
+        ],
+        fakeAssistantMessage({ responseId: 'resp_debug_batch', stopReason: 'stop' }),
+      );
+
+      const runtime = new CodexRuntime();
+      await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+      const eventPayloads = consoleSpy.mock.calls
+        .filter(([label]) => label === '[CodexRuntime:event]')
+        .map(([, payload]) => payload as Record<string, unknown>);
+
+      expect(eventPayloads).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text_delta_batch',
+          contentIndex: 0,
+          chunks: 2,
+          chars: 11,
+        }),
+      ]));
+      expect(eventPayloads.some((payload) => payload.type === 'text_delta')).toBe(false);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
   it('emits start → text_delta(s) → session → usage → done(stop) and persists the session id', async () => {
     codexAuthMock.loggedIn = true;
 

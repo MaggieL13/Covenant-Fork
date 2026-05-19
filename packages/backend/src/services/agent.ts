@@ -1403,10 +1403,12 @@ export class AgentService {
         // `input: messages` array each request, doesn't chain via
         // previous_response_id). 30-message window matches what we
         // send to a fresh Claude session via the historyBlock.
+        // getMessages already returns chronological order (oldest -> newest).
+        // Codex replays the full message array each turn, so preserving this
+        // order is load-bearing: newest-first replay makes old scene anchors
+        // look current to the model.
         const dbMessages = getMessages({ threadId, limit: 30 });
-        // getMessages returns DESC (newest first); flip for chronological order.
-        const chronological = dbMessages.slice().reverse();
-        const normalizedMessages: NormalizedMessage[] = chronological
+        const normalizedMessages: NormalizedMessage[] = dbMessages
           .filter((m) => m.role === 'user' || m.role === 'companion')
           .map((m) => ({
             role: m.role === 'companion' ? 'assistant' as const : 'user' as const,

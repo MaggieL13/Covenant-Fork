@@ -162,6 +162,143 @@ function resolveCodexPiModel(modelId: string): Model<'openai-codex-responses'> {
   return model;
 }
 
+function envFlag(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+function preview(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > 120 ? `${compact.slice(0, 120)}...` : compact;
+}
+
+function contentBlockCount(message: { content?: unknown } | undefined): number | undefined {
+  if (!message || !Array.isArray(message.content)) return undefined;
+  return message.content.length;
+}
+
+type CodexDebugDeltaBatch = {
+  deltaType: 'text_delta' | 'thinking_delta';
+  contentIndex: number;
+  chunks: number;
+  chars: number;
+  partialContentBlocks?: number;
+  partialResponseIdPresent?: boolean;
+};
+
+/**
+ * Sanitized pi-ai event summary for local Codex debugging.
+ *
+ * This is intentionally not the normalized AgentRuntimeEvent shape. It is a
+ * native-stream "black box recorder" used when debugging provider drift:
+ * event ordering, content indexes, response id presence, usage presence, etc.
+ * By default it logs sizes only, not model text/reasoning content.
+ */
+export function summarizeCodexPiEventForDebug(
+  event: AssistantMessageEvent,
+  includeContent = false,
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = { type: event.type };
+
+  if ('contentIndex' in event) {
+    summary.contentIndex = event.contentIndex;
+  }
+  if ('reason' in event) {
+    summary.reason = event.reason;
+  }
+  if ('delta' in event && typeof event.delta === 'string') {
+    summary.deltaChars = event.delta.length;
+    if (includeContent) summary.deltaPreview = preview(event.delta);
+  }
+  if ('content' in event && typeof event.content === 'string') {
+    summary.contentChars = event.content.length;
+    if (includeContent) summary.contentPreview = preview(event.content);
+  }
+  if ('partial' in event) {
+    summary.partialContentBlocks = contentBlockCount(event.partial);
+    summary.partialResponseIdPresent = Boolean(event.partial.responseId);
+  }
+  if (event.type === 'done') {
+    summary.messageContentBlocks = contentBlockCount(event.message);
+    summary.messageResponseIdPresent = Boolean(event.message.responseId);
+    summary.stopReason = event.message.stopReason;
+    summary.usagePresent = Boolean(event.message.usage);
+  }
+  if (event.type === 'error') {
+    summary.errorMessageChars = event.error.errorMessage?.length ?? 0;
+    if (includeContent && event.error.errorMessage) {
+      summary.errorMessagePreview = preview(event.error.errorMessage);
+    }
+  }
+
+  return summary;
+}
+
+function flushCodexPiEventDebugBatch(batch: CodexDebugDeltaBatch | null): void {
+  if (!batch || !envFlag('CODEX_EVENT_LOG')) return;
+  console.log('[CodexRuntime:event]', {
+    type: `${batch.deltaType}_batch`,
+    contentIndex: batch.contentIndex,
+    chunks: batch.chunks,
+    chars: batch.chars,
+    partialContentBlocks: batch.partialContentBlocks,
+    partialResponseIdPresent: batch.partialResponseIdPresent,
+  });
+}
+
+function logCodexPiEvent(
+  event: AssistantMessageEvent,
+  deltaBatch: CodexDebugDeltaBatch | null,
+): CodexDebugDeltaBatch | null {
+  if (!envFlag('CODEX_EVENT_LOG')) return null;
+
+  if (event.type === 'text_delta' || event.type === 'thinking_delta') {
+    if (
+      deltaBatch
+      && deltaBatch.deltaType === event.type
+      && deltaBatch.contentIndex === event.contentIndex
+    ) {
+      return {
+        ...deltaBatch,
+        chunks: deltaBatch.chunks + 1,
+        chars: deltaBatch.chars + event.delta.length,
+        partialContentBlocks: contentBlockCount(event.partial),
+        partialResponseIdPresent: Boolean(event.partial.responseId),
+      };
+    }
+
+    flushCodexPiEventDebugBatch(deltaBatch);
+    return {
+      deltaType: event.type,
+      contentIndex: event.contentIndex,
+      chunks: 1,
+      chars: event.delta.length,
+      partialContentBlocks: contentBlockCount(event.partial),
+      partialResponseIdPresent: Boolean(event.partial.responseId),
+    };
+  }
+
+  flushCodexPiEventDebugBatch(deltaBatch);
+  const includeContent = envFlag('CODEX_EVENT_LOG_CONTENT');
+  console.log('[CodexRuntime:event]', summarizeCodexPiEventForDebug(event, includeContent));
+  return null;
+}
+
+function logCodexFinalMessage(final: {
+  responseId?: string;
+  stopReason?: unknown;
+  usage?: unknown;
+  content?: unknown;
+}): void {
+  if (!envFlag('CODEX_EVENT_LOG')) return;
+  console.log('[CodexRuntime:final]', {
+    responseIdPresent: Boolean(final.responseId),
+    stopReason: final.stopReason,
+    usagePresent: Boolean(final.usage),
+    contentBlocks: contentBlockCount(final),
+  });
+}
+
 export class CodexRuntime implements AgentRuntime {
   readonly id: RuntimeId = 'codex';
   readonly providerId: ProviderId = 'openai-codex';
@@ -344,8 +481,11 @@ export class CodexRuntime implements AgentRuntime {
     // gives one card per logical reasoning chunk, matching the Claude
     // path's per-block shape that the UI was tuned for.
     let thinkingBuffer: string | null = null;
+    let debugDeltaBatch: CodexDebugDeltaBatch | null = null;
     try {
       for await (const event of stream) {
+        debugDeltaBatch = logCodexPiEvent(event, debugDeltaBatch);
+
         // Per-block thinking buffering (Codex-specific; pure passthrough
         // would flood the UI with single-token cards).
         if (event.type === 'thinking_start') {
@@ -371,6 +511,8 @@ export class CodexRuntime implements AgentRuntime {
       }
       // Safety: if the stream ended mid-thinking-block (rare; defensive),
       // flush the buffer so the user sees what was reasoned so far.
+      flushCodexPiEventDebugBatch(debugDeltaBatch);
+      debugDeltaBatch = null;
       if (thinkingBuffer && thinkingBuffer.length > 0) {
         yield { type: 'thinking_delta', text: thinkingBuffer };
       }
@@ -379,6 +521,7 @@ export class CodexRuntime implements AgentRuntime {
       // AssistantMessage with usage + responseId + stopReason. Capture
       // session id for sidecar persistence + emit our usage event.
       const final = await stream.result();
+      logCodexFinalMessage(final);
       if (final.responseId) {
         yield { type: 'session', sessionId: final.responseId };
         // Persist for next turn's prompt-cache affinity.
@@ -396,6 +539,8 @@ export class CodexRuntime implements AgentRuntime {
       }
       yield { type: 'done', finishReason: mapStopReasonForDone(final.stopReason) };
     } catch (err) {
+      flushCodexPiEventDebugBatch(debugDeltaBatch);
+      debugDeltaBatch = null;
       const msg = err instanceof Error ? err.message : String(err);
       // Abort path — `signal: aborted` throws inside the iteration.
       if (runtimeController.signal.aborted) {
