@@ -236,6 +236,31 @@ export function normalizeThinkingSegment(raw: RawThinkingSegment): ThinkingSegme
   return { type: 'thinking', providerShape: 'generic', content: raw.content };
 }
 
+/**
+ * Coerce a raw `segments` array — typically `message.metadata?.segments`
+ * read straight off a persisted companion row — into a strict
+ * `MessageSegment[]`. Applies `normalizeThinkingSegment` to thinking
+ * entries (so legacy claude-produced segments without `providerShape`
+ * default to the claude variant per D1) and passes text/tool segments
+ * through unchanged.
+ *
+ * Returns `null` when the input isn't an array (no segments stored,
+ * legacy text-only message, etc.) so the caller can stay
+ * `MessageSegment[] | null`-shaped without inventing an empty array.
+ *
+ * This is the read boundary that lets renderer dispatch on
+ * `providerShape` rely on the field being present.
+ */
+export function normalizeMessageSegments(raw: unknown): MessageSegment[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.map((seg): MessageSegment => {
+    if (seg && typeof seg === 'object' && (seg as { type?: unknown }).type === 'thinking') {
+      return normalizeThinkingSegment(seg as RawThinkingSegment);
+    }
+    return seg as MessageSegment;
+  });
+}
+
 export interface ThreadSummary {
   id: string;
   name: string;
