@@ -523,7 +523,11 @@ function handleMessage(event: MessageEvent) {
             ...thinkingEvents,
             [streamingMessageId]: [...existing, {
               content: msg.content,
-              summary: msg.summary,
+              // WS frame's `summary` is optional (Codex doesn't surface one).
+              // Coerce to empty string for ThinkingEvent's strict type.
+              // T14 will route the empty-summary case through the codex/generic
+              // renderer instead of an empty Claude header.
+              summary: msg.summary ?? '',
               textOffset: streamingTokens.length,
             }],
           };
@@ -906,8 +910,12 @@ export function getStreamingSegments(): MessageSegment[] | null {
         isError: ev?.isError,
       });
     } else {
+      // T12 minimal-fit: default to claude shape (legacy-default rule per
+      // per-provider-rendering-spec D1). T14 will read providerShape from
+      // the WS frame and stamp it here instead of the hardcoded default.
       segments.push({
         type: 'thinking',
+        providerShape: 'claude',
         content: ins.content,
         summary: ins.summary,
       });

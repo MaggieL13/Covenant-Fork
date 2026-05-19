@@ -83,7 +83,7 @@ export type ServerMessage =
   | { type: 'canvas_updated'; canvasId: string; content: string; updatedAt: string; title?: string; tags?: string[] }
   | { type: 'canvas_deleted'; canvasId: string }
   | { type: 'canvas_list'; canvases: Canvas[] }
-  | { type: 'thinking'; content: string; summary: string }
+  | { type: 'thinking'; content: string; summary?: string; providerShape?: import('./types.js').ProviderShape }
   | { type: 'message_reaction_added'; messageId: string; emoji: string; user: string; createdAt: string }
   | { type: 'message_reaction_removed'; messageId: string; emoji: string; user: string }
   | { type: 'generation_stopped' }

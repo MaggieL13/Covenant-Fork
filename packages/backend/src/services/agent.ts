@@ -694,8 +694,12 @@ function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], th
         isError: ins.data.isError,
       });
     } else {
+      // T12 minimal-fit: default to claude shape (legacy-default rule per
+      // per-provider-rendering-spec D1). T13 will stamp the correct shape
+      // via resolveProviderShape(modelRef.runtime) here.
       segments.push({
         type: 'thinking',
+        providerShape: 'claude',
         content: ins.data.content,
         summary: ins.data.summary,
       });
