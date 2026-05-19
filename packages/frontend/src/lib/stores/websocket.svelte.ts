@@ -1,4 +1,5 @@
-import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry, Reaction } from '@resonant/shared';
+import type { ServerMessage, ClientMessage, Message, Canvas, ThreadSummary, PresenceStatus, SystemStatus, MessageSegment, CommandRegistryEntry, Reaction, ProviderShape } from '@resonant/shared';
+import { normalizeThinkingSegment } from '@resonant/shared';
 import { setSystemStatus } from './settings.svelte';
 import { apiFetch } from '$lib/utils/api';
 import { showToast } from './toast.svelte';
@@ -42,8 +43,16 @@ export type ToolEvent = {
 let toolEvents = $state<Record<string, ToolEvent[]>>({});
 let toolOffsets = $state<Record<string, Array<{ toolId: string; textOffset: number }>>>({});
 
-// Thinking events per streaming message
-export type ThinkingEvent = { content: string; summary: string; textOffset: number };
+// Thinking events per streaming message. `providerShape` is captured from
+// the incoming WS frame and threaded through the streaming-view producer
+// so the live bubble renders with the same per-provider component the
+// persisted segment will use after the turn completes.
+export type ThinkingEvent = {
+  content: string;
+  summary: string;
+  textOffset: number;
+  providerShape: ProviderShape;
+};
 let thinkingEvents = $state<Record<string, ThinkingEvent[]>>({});
 
 // Voice state
@@ -523,11 +532,13 @@ function handleMessage(event: MessageEvent) {
             ...thinkingEvents,
             [streamingMessageId]: [...existing, {
               content: msg.content,
-              // WS frame's `summary` is optional (Codex doesn't surface one).
-              // Coerce to empty string for ThinkingEvent's strict type.
-              // T14 will route the empty-summary case through the codex/generic
-              // renderer instead of an empty Claude header.
+              // Both fields are optional on the WS frame: `summary` because
+              // Codex doesn't surface one, `providerShape` because legacy
+              // pre-arc broadcasts omit it. Default `providerShape` to
+              // 'claude' (legacy default — every pre-arc thinking event
+              // came from the Claude SDK); coerce missing summary to ''.
               summary: msg.summary ?? '',
+              providerShape: msg.providerShape ?? 'claude',
               textOffset: streamingTokens.length,
             }],
           };
@@ -882,12 +893,18 @@ export function getStreamingSegments(): MessageSegment[] | null {
   // Merge all insertions into one sorted list
   type Insertion = { textOffset: number } & (
     | { kind: 'tool'; toolId: string }
-    | { kind: 'thinking'; content: string; summary: string }
+    | { kind: 'thinking'; content: string; summary: string; providerShape: ProviderShape }
   );
 
   const allInsertions: Insertion[] = [
     ...offsets.map(o => ({ textOffset: o.textOffset, kind: 'tool' as const, toolId: o.toolId })),
-    ...thinking.map(t => ({ textOffset: t.textOffset, kind: 'thinking' as const, content: t.content, summary: t.summary })),
+    ...thinking.map(t => ({
+      textOffset: t.textOffset,
+      kind: 'thinking' as const,
+      content: t.content,
+      summary: t.summary,
+      providerShape: t.providerShape,
+    })),
   ].sort((a, b) => a.textOffset - b.textOffset);
 
   const text = streamingTokens;
@@ -910,15 +927,17 @@ export function getStreamingSegments(): MessageSegment[] | null {
         isError: ev?.isError,
       });
     } else {
-      // T12 minimal-fit: default to claude shape (legacy-default rule per
-      // per-provider-rendering-spec D1). T14 will read providerShape from
-      // the WS frame and stamp it here instead of the hardcoded default.
-      segments.push({
+      // Read providerShape from the insertion (set when the WS thinking
+      // frame arrived — see the case 'thinking' handler above). normalize-
+      // ThinkingSegment picks the correct discriminated-union variant.
+      // This must match what the backend persists for the same turn —
+      // see the matching call in agent.ts's buildSegments.
+      segments.push(normalizeThinkingSegment({
         type: 'thinking',
-        providerShape: 'claude',
         content: ins.content,
+        providerShape: ins.providerShape,
         summary: ins.summary,
-      });
+      }));
     }
     cursor = offset;
   }
