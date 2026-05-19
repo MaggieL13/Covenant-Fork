@@ -190,11 +190,12 @@ describe('Message operations', () => {
   it('getMessages respects limit', () => {
     makeThread({ id: 'th-lim' });
     for (let i = 0; i < 10; i++) {
-      makeMessage('th-lim', { id: `msg-l${i}` });
+      makeMessage('th-lim', { id: `msg-l${i}`, content: `message ${i}` });
     }
 
     const messages = getMessages({ threadId: 'th-lim', limit: 3 });
     expect(messages.length).toBe(3);
+    expect(messages.map((m) => m.content)).toEqual(['message 7', 'message 8', 'message 9']);
   });
 
   it('creates message with metadata', () => {
