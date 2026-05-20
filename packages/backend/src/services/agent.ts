@@ -1483,6 +1483,10 @@ export class AgentService {
           dbMessages,
           currentContent: content,
           nowIso: new Date().toISOString(),
+          // Suppresses tail-image bridging + in-flight fallback
+          // annotation when the synthetic is a pulse/wake prompt
+          // rather than a synthesized form of the user's message.
+          isAutonomous,
         });
         const normalizedMessages: NormalizedMessage[] = codexHistory.messages;
         if (codexHistory.fallbackNotices.length > 0) {

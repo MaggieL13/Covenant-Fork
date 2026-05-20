@@ -35,14 +35,27 @@
  *    detach them from their original owners, attach the union to the
  *    synthetic. Earlier turns' images stay put.
  *
+ *    **Autonomous turns suppress the bridge** (PR E3a/3 Codex catch).
+ *    When `isAutonomous: true`, the synthetic represents a pulse /
+ *    wake / programmatic prompt that is NOT a synthesized form of
+ *    the user-role tail. The tail might be an old unanswered user
+ *    image — pulling its bytes onto the autonomous prompt would
+ *    attach an image the autonomous text never references. With
+ *    `isAutonomous` set, tail images stay on their DB-owner messages
+ *    and the synthetic appends image-less. Codex still sees the
+ *    historical image in its proper place; it just doesn't get
+ *    duplicated onto the wake prompt.
+ *
  * 5. **Fallback annotation.** Per-image-cap / per-turn-cap / missing
  *    / non-image-MIME drops surface as `fallbackNotices` from the
- *    extractor. For in-flight notices we append a bracketed line per
- *    drop to the message the model is actually reading (the
- *    synthetic if it exists, otherwise the last user replay entry)
- *    so the model still hears about the dropped image. Historical
- *    drops are not re-annotated each turn — they're low signal once
- *    the conversation has moved on.
+ *    extractor. For interactive turns, in-flight notices append a
+ *    bracketed line per drop to the message the model is actually
+ *    reading (the synthetic if it exists, otherwise the last user
+ *    replay entry) so the model still hears about the dropped image.
+ *    Autonomous turns skip in-flight annotation for the same reason
+ *    the bridge does — there is no "current turn" the synthetic
+ *    represents. Historical drops are not re-annotated each turn —
+ *    they're low signal once the conversation has moved on.
  */
 
 import type { Message } from '@resonant/shared';
@@ -58,6 +71,14 @@ export interface BuildCodexNormalizedOptions {
   /** ISO timestamp to stamp on the synthetic message when it's
    *  appended. The caller usually passes `new Date().toISOString()`. */
   nowIso: string;
+  /** Pulse / wake / programmatic invocation? When true, the synthetic
+   *  prompt is NOT a synthesized form of the user-role tail and must
+   *  not inherit tail images or in-flight fallback annotations. The
+   *  tail might be an old unanswered user-image message (Maggie sent
+   *  a photo and went to sleep; autonomous wake fires) — pulling its
+   *  bytes onto the wake prompt would attach an image the wake text
+   *  never references. */
+  isAutonomous: boolean;
 }
 
 export interface BuildCodexNormalizedResult {
@@ -81,7 +102,7 @@ function formatFallback(notice: ImageFallback): string {
 export function buildCodexNormalizedMessages(
   opts: BuildCodexNormalizedOptions,
 ): BuildCodexNormalizedResult {
-  const { dbMessages, currentContent, nowIso } = opts;
+  const { dbMessages, currentContent, nowIso, isAutonomous } = opts;
   const { imagesByMessageId, fallbackNotices } = extractImagesFromMessages(dbMessages);
 
   const messages: NormalizedMessage[] = dbMessages
@@ -104,11 +125,19 @@ export function buildCodexNormalizedMessages(
   // dbMessages so a stray `system` role between turns is treated as
   // a boundary). These are the DB rows the channel handler just
   // wrote for the current invocation.
+  //
+  // For autonomous turns the tail does NOT represent the in-flight
+  // turn — the synthetic is a pulse/wake prompt, not a synthesized
+  // form of any user message. Treat the in-flight set as empty so
+  // neither images nor fallback annotations leak from the tail onto
+  // the autonomous synthetic.
   const inFlightOwnerIds = new Set<string>();
-  for (let i = dbMessages.length - 1; i >= 0; i--) {
-    const m = dbMessages[i];
-    if (m.role !== 'user') break;
-    inFlightOwnerIds.add(m.id);
+  if (!isAutonomous) {
+    for (let i = dbMessages.length - 1; i >= 0; i--) {
+      const m = dbMessages[i];
+      if (m.role !== 'user') break;
+      inFlightOwnerIds.add(m.id);
+    }
   }
   const currentTurnFallbacks = fallbackNotices.filter((f) =>
     inFlightOwnerIds.has(f.ownerMessageId),
@@ -125,13 +154,20 @@ export function buildCodexNormalizedMessages(
     // from contiguous user-role tail entries, and detach them. The
     // synthetic about to be appended will carry the union — so pi-ai
     // sees the descriptive text + bytes on the same message.
+    //
+    // Autonomous suppresses this entirely (see comment on the in-flight
+    // set above). The tail images stay attached to their original
+    // DB-owner messages so Codex still sees them in their proper
+    // place; they just don't get duplicated onto the wake prompt.
     const transferredImages: NormalizedImage[] = [];
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const nm = messages[i];
-      if (nm.role !== 'user') break;
-      if (nm.images && nm.images.length > 0) {
-        transferredImages.unshift(...nm.images);
-        nm.images = undefined;
+    if (!isAutonomous) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const nm = messages[i];
+        if (nm.role !== 'user') break;
+        if (nm.images && nm.images.length > 0) {
+          transferredImages.unshift(...nm.images);
+          nm.images = undefined;
+        }
       }
     }
 
@@ -151,7 +187,9 @@ export function buildCodexNormalizedMessages(
     appendedSynthetic = true;
   } else if (lastMsg && currentTurnFallbacks.length > 0) {
     // Current prompt already replayed verbatim from DB — annotate it
-    // in place so the model hears about dropped images.
+    // in place so the model hears about dropped images. (Autonomous
+    // never reaches this branch because the in-flight set is empty,
+    // so currentTurnFallbacks is also empty.)
     lastMsg.content =
       lastMsg.content + '\n\n' + currentTurnFallbacks.map(formatFallback).join('\n');
   }

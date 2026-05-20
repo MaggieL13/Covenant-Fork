@@ -194,6 +194,7 @@ describe('buildCodexNormalizedMessages — Telegram (single attachment)', () => 
       dbMessages,
       currentContent: content,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     expect(result.appendedSynthetic).toBe(false);
@@ -269,6 +270,7 @@ describe('buildCodexNormalizedMessages — batched upload (web)', () => {
       dbMessages,
       currentContent: synthesizedAgentPrompt,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     // The synthetic-prompt path fired (raw caption on parent doesn't
@@ -327,6 +329,7 @@ describe('buildCodexNormalizedMessages — batched upload (web)', () => {
       dbMessages,
       currentContent: synthesizedAgentPrompt,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
     const piMessages = toPiMessages(built.messages);
 
@@ -383,6 +386,7 @@ describe('buildCodexNormalizedMessages — fallback annotation', () => {
       dbMessages,
       currentContent: synthesized,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     const last = result.messages[result.messages.length - 1];
@@ -416,6 +420,7 @@ describe('buildCodexNormalizedMessages — fallback annotation', () => {
       dbMessages,
       currentContent: content,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     expect(result.appendedSynthetic).toBe(false);
@@ -474,6 +479,7 @@ describe('buildCodexNormalizedMessages — fallback annotation', () => {
       dbMessages,
       currentContent: newSynthesized,
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     const last = result.messages[result.messages.length - 1];
@@ -504,6 +510,7 @@ describe('buildCodexNormalizedMessages — synthetic without images (pre-E3a beh
       dbMessages,
       currentContent: 'pulse check',
       nowIso: '2026-05-20T08:00:00.000Z',
+      isAutonomous: true,
     });
 
     expect(result.appendedSynthetic).toBe(true);
@@ -515,6 +522,130 @@ describe('buildCodexNormalizedMessages — synthetic without images (pre-E3a beh
     });
     expect(result.messages[1].images).toBeUndefined();
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// buildCodexNormalizedMessages — autonomous-mode bridge suppression
+//
+// Codex review of PR E3a/3 caught a real correctness bug: the original
+// bridge moved images from the contiguous user-role tail onto ANY
+// appended synthetic. That's correct for interactive batched uploads
+// (the tail IS the in-flight turn). But if an autonomous Codex wake
+// fires while the tail is an unanswered user-image message — Maggie
+// sent a photo, went to sleep, autonomous pulse fires — the bridge
+// would yank that image onto the pulse prompt. The wake text never
+// references the image; attaching it would be a misleading hallucination
+// trigger. Below tests pin the suppression.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('buildCodexNormalizedMessages — autonomous bridge suppression', () => {
+  it('does NOT move tail user images onto an autonomous synthetic prompt', () => {
+    // Tail: unanswered user image message (Maggie sent a photo,
+    // went to sleep). Then autonomous wake fires with a pulse prompt
+    // that has nothing to do with the photo.
+    registerImageFile('unanswered-img', { binarySize: 1024, mimeType: 'image/png' });
+
+    const dbMessages: Message[] = [
+      makeMessage({
+        id: 'user-photo',
+        created_at: '2026-05-19T23:00:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] late night\nImage saved at: data/files/unanswered-img.png',
+        metadata: { fileId: 'unanswered-img', photoFileId: 'unanswered-img', mimeType: 'image/png' },
+      }),
+    ];
+
+    const autonomousPrompt =
+      "Maggie's probably waking up soon. Anything you'd like to say to her?";
+
+    const result = buildCodexNormalizedMessages({
+      dbMessages,
+      currentContent: autonomousPrompt,
+      nowIso: '2026-05-20T07:00:00.000Z',
+      isAutonomous: true,
+    });
+
+    // Synthetic was appended (pulse prompt doesn't match the DB tail).
+    expect(result.appendedSynthetic).toBe(true);
+    const synthetic = result.messages[result.messages.length - 1];
+    expect(synthetic.content).toBe(autonomousPrompt);
+
+    // **Load-bearing assertion**: the photo did NOT migrate onto the
+    // autonomous synthetic. With `isAutonomous: false` the bridge
+    // would have grabbed it; with `true` it stays on the DB-owner.
+    expect(synthetic.images).toBeUndefined();
+
+    // The original photo message still carries its image so Codex
+    // sees it in proper chronological place if it scans history.
+    const photoNm = result.messages.find((m) => m.createdAt === '2026-05-19T23:00:00.000Z');
+    expect(photoNm).toBeDefined();
+    expect(photoNm!.images).toHaveLength(1);
+  });
+
+  it('does NOT annotate autonomous synthetic with fallback notices from tail over-cap images', () => {
+    // Tail: over-cap user image. Interactive mode would annotate the
+    // synthetic with `[image not attached — ...]`. Autonomous mode
+    // must not — the wake prompt isn't ABOUT the image.
+    registerImageFile('too-big', { binarySize: 6 * 1024 * 1024, mimeType: 'image/png' });
+
+    const dbMessages: Message[] = [
+      makeMessage({
+        id: 'user-big-photo',
+        created_at: '2026-05-19T23:00:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] huge file',
+        metadata: { fileId: 'too-big', filename: 'huge.png', mimeType: 'image/png' },
+      }),
+    ];
+
+    const result = buildCodexNormalizedMessages({
+      dbMessages,
+      currentContent: 'pulse — say hi',
+      nowIso: '2026-05-20T07:00:00.000Z',
+      isAutonomous: true,
+    });
+
+    const synthetic = result.messages[result.messages.length - 1];
+    expect(synthetic.content).toBe('pulse — say hi');
+    expect(synthetic.content).not.toContain('[image not attached');
+
+    // The fallback notice is still surfaced via the result for
+    // diagnostics — the caller (agent.ts) logs it. We just don't
+    // weave it into autonomous synthetic text.
+    expect(result.fallbackNotices).toHaveLength(1);
+    expect(result.fallbackNotices[0].fileId).toBe('too-big');
+  });
+
+  it('interactive mode still bridges in the same scenario (regression guard)', () => {
+    // Symmetric to the autonomous test above: same DB shape, but
+    // isAutonomous: false. The bridge should fire — confirms the
+    // suppression is conditional, not a blanket disable.
+    registerImageFile('unanswered-img', { binarySize: 1024, mimeType: 'image/png' });
+
+    const dbMessages: Message[] = [
+      makeMessage({
+        id: 'user-photo',
+        created_at: '2026-05-19T23:00:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] check this',
+        metadata: { fileId: 'unanswered-img', photoFileId: 'unanswered-img', mimeType: 'image/png' },
+      }),
+    ];
+
+    // Caller-synthesized prompt (e.g. a prosody-injected version) —
+    // doesn't match DB content verbatim, so synthetic appends.
+    const result = buildCodexNormalizedMessages({
+      dbMessages,
+      currentContent: '[Voice tone - calm: 0.8]\n[Photo from Maggie] check this',
+      nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
+    });
+
+    expect(result.appendedSynthetic).toBe(true);
+    const synthetic = result.messages[result.messages.length - 1];
+    // Interactive: bridge fires, image rides onto the synthetic.
+    expect(synthetic.images).toHaveLength(1);
+  });
 
   it('does NOT append synthetic when last user content matches verbatim', () => {
     const dbMessages: Message[] = [
@@ -525,6 +656,7 @@ describe('buildCodexNormalizedMessages — synthetic without images (pre-E3a beh
       dbMessages,
       currentContent: 'hello',
       nowIso: '2026-05-20T00:01:00.000Z',
+      isAutonomous: false,
     });
 
     expect(result.appendedSynthetic).toBe(false);
