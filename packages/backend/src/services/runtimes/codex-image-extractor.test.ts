@@ -294,9 +294,7 @@ describe('extractImagesFromMessages — budgets', () => {
     });
   });
 
-  it('rejects non-image MIME types loudly', () => {
-    // File exists, but declared MIME is not image/*. We should NOT
-    // attach it — even if it could be base64-encoded fine.
+  it('rejects when both declared and disk MIME are non-image', () => {
     getFileFixture.set('pdf', {
       path: '/data/files/pdf.pdf',
       mimeType: 'application/pdf',
@@ -317,7 +315,71 @@ describe('extractImagesFromMessages — budgets', () => {
     expect(result.fallbackNotices).toHaveLength(1);
     expect(result.fallbackNotices[0]).toMatchObject({
       fileId: 'pdf',
-      reason: expect.stringContaining('non-image MIME type'),
+      ownerMessageId: 'msg',
+      reason: expect.stringContaining('non-image file on disk'),
+    });
+  });
+
+  it('rejects when declared MIME lies — claims image/png but disk file is application/pdf', () => {
+    // The on-disk MIME from `getFile()` is authoritative — declared
+    // metadata is advisory only. This pins the attack the spec calls
+    // out: an inbound channel could set metadata.mimeType to image/png
+    // against a PDF on disk; without the disk-MIME check we'd encode
+    // PDF bytes and ship them to pi-ai labeled as a PNG.
+    getFileFixture.set('lying-pdf', {
+      path: '/data/files/lying-pdf.pdf',
+      mimeType: 'application/pdf',
+      filename: 'lying-pdf.pdf',
+    });
+    fsFixture.files.set('/data/files/lying-pdf.pdf', {
+      size: 1024,
+      bytes: Buffer.alloc(1024),
+    });
+
+    const messages: Message[] = [
+      makeMessage({
+        id: 'msg',
+        content_type: 'image',
+        metadata: { fileId: 'lying-pdf', filename: 'screenshot.png', mimeType: 'image/png' },
+      }),
+    ];
+
+    const result = extractImagesFromMessages(messages);
+    expect(result.imagesByMessageId.size).toBe(0);
+    expect(result.fallbackNotices).toHaveLength(1);
+    expect(result.fallbackNotices[0]).toMatchObject({
+      fileId: 'lying-pdf',
+      ownerMessageId: 'msg',
+      filename: 'screenshot.png',
+      reason: expect.stringContaining('non-image file on disk'),
+    });
+    // The reason must surface the disk MIME AND the declared MIME so a
+    // user reading the fallback can see what was claimed vs. what's real.
+    expect(result.fallbackNotices[0].reason).toContain('application/pdf');
+    expect(result.fallbackNotices[0].reason).toContain('image/png');
+  });
+
+  it('rejects when declared MIME is non-image even if disk MIME is image/*', () => {
+    // Defense in depth: catches a desync where someone uploaded a real
+    // PNG but the channel-side metadata mislabeled it as a PDF. We
+    // refuse rather than silently override — the desync is itself a
+    // signal something is off, and refusing surfaces it via fallback.
+    registerFile('clean-png', { binarySize: 256, mimeType: 'image/png' });
+
+    const messages: Message[] = [
+      makeMessage({
+        id: 'msg',
+        content_type: 'image',
+        metadata: { fileId: 'clean-png', mimeType: 'application/pdf' },
+      }),
+    ];
+
+    const result = extractImagesFromMessages(messages);
+    expect(result.imagesByMessageId.size).toBe(0);
+    expect(result.fallbackNotices).toHaveLength(1);
+    expect(result.fallbackNotices[0]).toMatchObject({
+      fileId: 'clean-png',
+      reason: expect.stringContaining('declared MIME is non-image'),
     });
   });
 
@@ -327,15 +389,52 @@ describe('extractImagesFromMessages — budgets', () => {
       makeMessage({
         id: 'msg',
         content_type: 'image',
-        metadata: { fileId: 'missing', mimeType: 'image/png' },
+        metadata: { fileId: 'missing', filename: 'lost.png', mimeType: 'image/png' },
       }),
     ];
 
     const result = extractImagesFromMessages(messages);
     expect(result.imagesByMessageId.size).toBe(0);
     expect(result.fallbackNotices).toEqual([
-      { fileId: 'missing', reason: 'file not found on disk' },
+      {
+        fileId: 'missing',
+        ownerMessageId: 'msg',
+        filename: 'lost.png',
+        reason: 'file not found on disk',
+      },
     ]);
+  });
+
+  it('fallback notices carry ownerMessageId so the caller can place them precisely', () => {
+    // Two over-cap images on different owner messages; each notice
+    // must reference its own owner.
+    const oversize = __TEST_INTERNALS__.MAX_BINARY_BYTES_PER_IMAGE + 1;
+    registerFile('big-a', { binarySize: oversize });
+    registerFile('big-b', { binarySize: oversize });
+
+    const messages: Message[] = [
+      makeMessage({
+        id: 'parent-old',
+        created_at: '2026-05-19T00:00:00.000Z',
+        content_type: 'text',
+        metadata: {
+          attachments: [{ fileId: 'big-a', contentType: 'image', mimeType: 'image/png', filename: 'old.png' }],
+        },
+      }),
+      makeMessage({
+        id: 'parent-new',
+        created_at: '2026-05-20T00:00:00.000Z',
+        content_type: 'text',
+        metadata: {
+          attachments: [{ fileId: 'big-b', contentType: 'image', mimeType: 'image/png', filename: 'new.png' }],
+        },
+      }),
+    ];
+
+    const result = extractImagesFromMessages(messages);
+    expect(result.fallbackNotices).toHaveLength(2);
+    expect(result.fallbackNotices[0]).toMatchObject({ fileId: 'big-a', ownerMessageId: 'parent-old', filename: 'old.png' });
+    expect(result.fallbackNotices[1]).toMatchObject({ fileId: 'big-b', ownerMessageId: 'parent-new', filename: 'new.png' });
   });
 });
 

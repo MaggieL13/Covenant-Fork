@@ -59,9 +59,17 @@ const MAX_ENCODED_BYTES_PER_TURN = 15 * 1024 * 1024;
  * One reason-for-skip per file id. Surfaced to the caller so over-cap
  * / missing / wrong-type attachments can still be acknowledged in the
  * prompt text (the model otherwise wouldn't know the image existed).
+ *
+ * `ownerMessageId` is the DB message id of the message that referenced
+ * the file — lets the caller place the fallback notice on (or near)
+ * the message the model is reading, instead of dumping every notice
+ * into the latest prompt. `filename` is best-effort: set when message
+ * metadata carried it, otherwise undefined.
  */
 export interface ImageFallback {
   fileId: string;
+  ownerMessageId: string;
+  filename?: string;
   reason: string;
 }
 
@@ -84,9 +92,15 @@ interface BatchAttachment {
 interface ImageRef {
   ownerMessageId: string;
   fileId: string;
-  /** Declared MIME from message metadata; resolved against the file's
-   *  on-disk MIME at the budget pass. */
+  /** Declared MIME from message metadata. Advisory only — the on-disk
+   *  MIME from `getFile()` is the authoritative value, because metadata
+   *  can be manipulated by inbound channels (a Telegram caption claiming
+   *  image/png against an actual PDF on disk must not slip through). */
   declaredMimeType?: string;
+  /** Declared filename from message metadata, when available. Surfaced
+   *  in fallback notices so the user-visible "couldn't include foo.png"
+   *  message is meaningful. */
+  declaredFilename?: string;
 }
 
 /**
@@ -125,6 +139,7 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
           ownerMessageId: msg.id,
           fileId: att.fileId,
           declaredMimeType: att.mimeType,
+          declaredFilename: att.filename,
         });
         claimedAny = true;
       }
@@ -143,6 +158,7 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
       ownerMessageId: msg.id,
       fileId: fileIdRaw,
       declaredMimeType: typeof meta.mimeType === 'string' ? meta.mimeType : undefined,
+      declaredFilename: typeof meta.filename === 'string' ? meta.filename : undefined,
     });
   }
 
@@ -151,30 +167,55 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
   let totalEncoded = 0;
 
   for (const ref of refs) {
+    const noticeBase = {
+      fileId: ref.fileId,
+      ownerMessageId: ref.ownerMessageId,
+      filename: ref.declaredFilename,
+    };
+
     const file = getFile(ref.fileId);
     if (!file) {
-      fallbackNotices.push({
-        fileId: ref.fileId,
-        reason: 'file not found on disk',
-      });
+      fallbackNotices.push({ ...noticeBase, reason: 'file not found on disk' });
       continue;
     }
 
-    const mimeType = ref.declaredMimeType ?? file.mimeType;
-    if (!mimeType.startsWith('image/')) {
+    // MIME trust rule (Codex review of PR E3a/2):
+    //   - The on-disk MIME from `getFile()` is AUTHORITATIVE. It's
+    //     derived from the file's saved extension, which `files.ts`
+    //     controls at write time against the ALLOWED_TYPES table.
+    //   - The declared MIME from message metadata is ADVISORY only —
+    //     it can be set by any inbound channel (web client, Telegram
+    //     caption, etc.) and is therefore untrusted for content-type
+    //     decisions.
+    //   - Both must independently be image/* for the attachment to
+    //     proceed. If declared MIME exists and disagrees with disk
+    //     MIME, the disk value wins (and is what's used downstream).
+    //
+    // This blocks the "metadata says image/png, disk says
+    // application/pdf" attack — without this check, PDF bytes would
+    // be base64-encoded and shipped to pi-ai labeled as image/png.
+    if (!file.mimeType.startsWith('image/')) {
       fallbackNotices.push({
-        fileId: ref.fileId,
-        reason: `non-image MIME type rejected (${mimeType})`,
+        ...noticeBase,
+        reason: `non-image file on disk (${file.mimeType}); declared MIME was ${ref.declaredMimeType ?? '<absent>'}`,
       });
       continue;
     }
+    if (ref.declaredMimeType && !ref.declaredMimeType.startsWith('image/')) {
+      fallbackNotices.push({
+        ...noticeBase,
+        reason: `declared MIME is non-image (${ref.declaredMimeType})`,
+      });
+      continue;
+    }
+    const mimeType = file.mimeType;
 
     let binarySize: number;
     try {
       binarySize = statSync(file.path).size;
     } catch (err) {
       fallbackNotices.push({
-        fileId: ref.fileId,
+        ...noticeBase,
         reason: `stat failed: ${err instanceof Error ? err.message : String(err)}`,
       });
       continue;
@@ -184,7 +225,7 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
       const sizeMb = (binarySize / 1024 / 1024).toFixed(1);
       const capMb = (MAX_BINARY_BYTES_PER_IMAGE / 1024 / 1024).toFixed(0);
       fallbackNotices.push({
-        fileId: ref.fileId,
+        ...noticeBase,
         reason: `image too large to include — ${sizeMb}MB exceeds ${capMb}MB per-image cap`,
       });
       continue;
@@ -195,7 +236,7 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
       base64 = readFileSync(file.path).toString('base64');
     } catch (err) {
       fallbackNotices.push({
-        fileId: ref.fileId,
+        ...noticeBase,
         reason: `read failed: ${err instanceof Error ? err.message : String(err)}`,
       });
       continue;
@@ -204,7 +245,7 @@ export function extractImagesFromMessages(messages: Message[]): ExtractionResult
     if (totalEncoded + base64.length > MAX_ENCODED_BYTES_PER_TURN) {
       const capMb = (MAX_ENCODED_BYTES_PER_TURN / 1024 / 1024).toFixed(0);
       fallbackNotices.push({
-        fileId: ref.fileId,
+        ...noticeBase,
         reason: `image dropped — turn total would exceed ${capMb}MB encoded cap`,
       });
       continue;
