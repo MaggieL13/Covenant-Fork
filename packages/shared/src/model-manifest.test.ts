@@ -302,6 +302,24 @@ describe('findModelByRef', () => {
     expect(findModelByRef('claude/sonnet')?.id).toBe('sonnet');
   });
 
+  it('finds a Codex model by both bare id and canonical ref (regression — P1 from PR #22 review)', () => {
+    // Pins the exact lookup shape behind the per-provider rendering arc's
+    // P1 bugs: the frontend vision gate + effort coercion path stores
+    // `agent.model` as either form, and a bare-id-only lookup silently
+    // fell back to defaults for canonical refs. findModelByRef must
+    // resolve both forms to the same Codex entry with the right provider
+    // and capabilities — otherwise vision gating becomes inert and
+    // Codex configs see Claude effort options.
+    const byBare = findModelByRef('gpt-5.5');
+    const byCanonical = findModelByRef('openai-codex/gpt-5.5');
+    expect(byBare?.id).toBe('gpt-5.5');
+    expect(byBare?.provider).toBe('openai-codex');
+    expect(byBare?.ref).toBe('openai-codex/gpt-5.5');
+    expect(byCanonical).toEqual(byBare);
+    // T18 manifest fix — Codex vision is false until E3a wires image bytes.
+    expect(byCanonical?.capabilities.vision).toBe(false);
+  });
+
   it('returns undefined for unknown model ids', () => {
     expect(findModelByRef('claude-opus-99')).toBeUndefined();
     expect(findModelByRef('claude/claude-opus-99')).toBeUndefined();
