@@ -4,6 +4,7 @@ import { MODELS, resolveEffortForModel, coerceEffortForProvider, normalizeModelR
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import { CodexRuntime } from './runtimes/codex.js';
 import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
+import { buildCodexNormalizedMessages } from './runtimes/codex-history.js';
 import { buildProviderHandoff, renderProviderHandoffAsPrompt, type ProviderHandoff } from './handoff.js';
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
@@ -1472,35 +1473,23 @@ export class AgentService {
         // Codex replays the full message array each turn, so preserving this
         // order is load-bearing: newest-first replay makes old scene anchors
         // look current to the model.
+        // PR E3a: history construction (DB → normalized + image extraction
+        // + synthetic-prompt append + image bridge to synthetic) factored
+        // into `buildCodexNormalizedMessages`. Pure function, fully unit
+        // tested in `codex-history.test.ts`. Comments inside that helper
+        // explain the load-bearing synthetic + image-bridge behavior.
         const dbMessages = getMessages({ threadId, limit: 30 });
-        const normalizedMessages: NormalizedMessage[] = dbMessages
-          .filter((m) => m.role === 'user' || m.role === 'companion')
-          .map((m) => ({
-            role: m.role === 'companion' ? 'assistant' as const : 'user' as const,
-            content: m.content,
-            createdAt: m.created_at,
-          }));
-
-        // PR E2 fix (Codex bot catch): the filter above drops `system`
-        // and other non-owner roles. The caller writes the current user
-        // message to the DB before invoking _processQuery, but some
-        // inbound channels (or future role types) might store it under
-        // a role we filter out — in which case GPT would be asked to
-        // respond without ever seeing what was just said.
-        //
-        // Defensive: if the chronologically-last user-role message in
-        // the replay doesn't match the current prompt, append it
-        // explicitly. Idempotent in the common case (DB user-role row
-        // matches), defensive against future weird role mappings.
-        const lastMsg = normalizedMessages[normalizedMessages.length - 1];
-        const currentPromptPresent = lastMsg?.role === 'user'
-          && lastMsg.content === content;
-        if (!currentPromptPresent) {
-          normalizedMessages.push({
-            role: 'user',
-            content,
-            createdAt: new Date().toISOString(),
-          });
+        const codexHistory = buildCodexNormalizedMessages({
+          dbMessages,
+          currentContent: content,
+          nowIso: new Date().toISOString(),
+        });
+        const normalizedMessages: NormalizedMessage[] = codexHistory.messages;
+        if (codexHistory.fallbackNotices.length > 0) {
+          console.warn(
+            `[Codex] image attachment fallbacks (${codexHistory.fallbackNotices.length}):`,
+            codexHistory.fallbackNotices.map((f) => `${f.fileId} -> ${f.reason}`),
+          );
         }
 
         // System prompt folds CLAUDE.md + tool rules + orientation into
