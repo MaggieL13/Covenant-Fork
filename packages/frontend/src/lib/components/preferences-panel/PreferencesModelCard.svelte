@@ -1,16 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { resolveEffortForModel, getEffortOptionsForProvider, coerceEffortForProvider, MODELS, type ProviderId } from '@resonant/shared';
+  import { resolveEffortForModel, getEffortOptionsForProvider, coerceEffortForProvider, findModelByRef, type ProviderId } from '@resonant/shared';
 
   /**
-   * Provider for a bare model id (e.g. `claude-sonnet-4-6`, `gpt-5.5`)
-   * looked up via the shared manifest. Falls back to `'claude'` for
-   * unknown ids — that's the pre-arc default and keeps the dropdown
-   * showing something sensible if the manifest hasn't caught up to
-   * an experimental id the user pasted in.
+   * Provider for a model reference looked up via the shared manifest.
+   * Accepts BOTH formats `agent.model` can be stored as: bare ids
+   * (`claude-sonnet-4-6`, `gpt-5.5`) AND provider-qualified canonical
+   * refs (`openai-codex/gpt-5.5`, `claude/claude-sonnet-4-6`). The
+   * earlier bare-id-only implementation silently fell back to `'claude'`
+   * for any config that stored canonical refs, which made Codex configs
+   * see Claude effort options and miscoerce on mount.
+   *
+   * Falls back to `'claude'` for genuinely unknown ids (e.g. an
+   * experimental id the user pasted in that the manifest doesn't have).
    */
   function providerForModelId(id: string): ProviderId {
-    return MODELS.find((m) => m.id === id)?.provider ?? 'claude';
+    return findModelByRef(id)?.provider ?? 'claude';
   }
 
   let {
@@ -79,11 +84,14 @@
   // this future-proofs for chat/instruct entries that don't support
   // extended thinking (see manifest comment near CODEX_CHAT_CAPABILITIES).
   // Unknown ids default to true so the dropdown stays visible.
+  // Capability lookups use findModelByRef so both bare ids and canonical
+  // provider-qualified refs resolve correctly (see providerForModelId
+  // doc above for the same bug shape).
   let chatReasoningCapable = $derived(
-    MODELS.find((m) => m.id === model)?.capabilities.reasoning ?? true,
+    findModelByRef(model)?.capabilities.reasoning ?? true,
   );
   let autonomousReasoningCapable = $derived(
-    MODELS.find((m) => m.id === modelAutonomous)?.capabilities.reasoning ?? true,
+    findModelByRef(modelAutonomous)?.capabilities.reasoning ?? true,
   );
 
   // Model-change handlers that sanitize the effort selection when the

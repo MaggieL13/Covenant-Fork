@@ -1,11 +1,15 @@
 <script lang="ts">
   import { getConfig, updateSetting } from '$lib/stores/settings.svelte';
   import { MODELS } from '$lib/models';
+  import { findModelByRef } from '@resonant/shared';
   import { apiFetch } from '$lib/utils/api';
 
   let config = $derived(getConfig());
   let currentModel = $derived(config['agent.model'] || 'claude-sonnet-4-6');
-  let currentLabel = $derived(MODELS.find(m => m.id === currentModel)?.label || 'Sonnet 4.6');
+  // findModelByRef handles both bare ids and canonical provider-qualified
+  // refs, so configs that store either form resolve correctly. Bare-id-
+  // only lookup silently fell back to a default label for canonical refs.
+  let currentLabel = $derived(findModelByRef(currentModel)?.label || 'Sonnet 4.6');
 
   let open = $state(false);
 
@@ -45,7 +49,7 @@
       {#each MODELS as model}
         <button
           class="model-option"
-          class:active={model.id === currentModel}
+          class:active={model.id === currentModel || model.ref === currentModel}
           onclick={() => selectModel(model.id)}
         >
           {model.label}

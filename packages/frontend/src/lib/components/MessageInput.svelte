@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
-  import { MODELS } from '@resonant/shared';
+  import { findModelByRef } from '@resonant/shared';
   import { getCompanionName, getConfig } from '$lib/stores/settings.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
   import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
@@ -19,11 +19,18 @@
   // model has `capabilities.vision === false`, ComposerPickers drops
   // `image/*` from its file `accept` list so the user can't attach
   // images the model won't read. All other attachment types stay
-  // available regardless of vision support. Unknown ids default to
-  // true so the picker stays useful for models not yet in the manifest.
+  // available regardless of vision support.
+  //
+  // Uses `findModelByRef` so the lookup handles BOTH bare ids
+  // (`gpt-5.5`, `claude-sonnet-4-6`) AND provider-qualified canonical
+  // refs (`openai-codex/gpt-5.5`) the backend stores in `agent.model`.
+  // The earlier bare-id-only lookup silently returned `true` for any
+  // config that stored canonical refs, letting Codex's vision-disabled
+  // gate be bypassed end-to-end. Unknown ids still default to true so
+  // the picker stays useful for models not yet in the manifest.
   let activeChatModelId = $derived(getConfig()['agent.model'] || 'claude-sonnet-4-6');
   let activeChatModelHasVision = $derived(
-    MODELS.find((m) => m.id === activeChatModelId)?.capabilities.vision ?? true,
+    findModelByRef(activeChatModelId)?.capabilities.vision ?? true,
   );
 
   interface FileUploadResult {
