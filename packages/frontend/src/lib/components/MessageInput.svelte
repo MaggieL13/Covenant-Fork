@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
-  import { getCompanionName } from '$lib/stores/settings.svelte';
+  import { findModelByRef } from '@resonant/shared';
+  import { getCompanionName, getConfig } from '$lib/stores/settings.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
   import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
   import { apiFetch } from '$lib/utils/api';
@@ -13,6 +14,24 @@
   import ComposerCommandPalette from './message-input/ComposerCommandPalette.svelte';
 
   let companionName = $derived(getCompanionName());
+
+  // Capability gating for the file-attach picker. When the active chat
+  // model has `capabilities.vision === false`, ComposerPickers drops
+  // `image/*` from its file `accept` list so the user can't attach
+  // images the model won't read. All other attachment types stay
+  // available regardless of vision support.
+  //
+  // Uses `findModelByRef` so the lookup handles BOTH bare ids
+  // (`gpt-5.5`, `claude-sonnet-4-6`) AND provider-qualified canonical
+  // refs (`openai-codex/gpt-5.5`) the backend stores in `agent.model`.
+  // The earlier bare-id-only lookup silently returned `true` for any
+  // config that stored canonical refs, letting Codex's vision-disabled
+  // gate be bypassed end-to-end. Unknown ids still default to true so
+  // the picker stays useful for models not yet in the manifest.
+  let activeChatModelId = $derived(getConfig()['agent.model'] || 'claude-sonnet-4-6');
+  let activeChatModelHasVision = $derived(
+    findModelByRef(activeChatModelId)?.capabilities.vision ?? true,
+  );
 
   interface FileUploadResult {
     fileId: string;
@@ -197,6 +216,18 @@
   function handleSend() {
     if (!canSend) return;
 
+    // Send-time vision guard. Catches the "I attached an image and THEN
+    // switched to a non-vision model" case — the attachment is sitting
+    // in `pendingAttachments`, uploadFile already accepted it (model
+    // had vision at that moment), but the active model now can't read
+    // it. Block the send with a clear error rather than letting the
+    // model receive an image it'll silently drop.
+    if (!activeChatModelHasVision && pendingAttachments.some((a) => a.contentType === 'image')) {
+      uploadError = 'Current model does not support image attachments. Remove image attachments or switch to a vision-capable model to send.';
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+
     const trimmed = content.trim();
 
     // ORDER: slash-command routing must finish before regular send logic so command text does not leak into the normal message path.
@@ -299,7 +330,23 @@
     }
   }
 
+  function isImageFile(file: File): boolean {
+    return file.type.startsWith('image/');
+  }
+
   async function uploadFile(file: File) {
+    // Central vision guard. This is the single chokepoint for every
+    // attachment path — file picker, drag-drop, clipboard paste,
+    // programmatic uploadFile() — so blocking here means images can't
+    // sneak in via any non-picker path when the active chat model has
+    // no vision support. The picker's `accept` filtering in
+    // ComposerPickers is the UI hint; this is the actual gate.
+    if (!activeChatModelHasVision && isImageFile(file)) {
+      uploadError = 'Current model does not support image attachments. Switch to a vision-capable model to attach images.';
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+
     uploading = true;
     uploadError = null;
 
@@ -480,6 +527,7 @@
     <ComposerPickers
       uploading={uploading}
       hasStickerPacks={hasStickerPacks}
+      visionEnabled={activeChatModelHasVision}
       onopenfilepicker={openFilePicker}
       onstickerselect={handleStickerSelect}
       ontranscript={handleTranscript}

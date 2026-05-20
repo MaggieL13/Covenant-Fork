@@ -1,5 +1,7 @@
 // Database types — mirror the SQLite schema
 
+import type { ProviderId, RuntimeId } from './model-manifest.js';
+
 export interface Thread {
   id: string;
   name: string;
@@ -158,10 +160,106 @@ export interface Sticker {
   created_at: string;
 }
 
+/**
+ * Per-provider rendering shape for thinking segments. The discriminant lets
+ * the renderer pick a provider-specific component without losing fidelity:
+ * the Claude SDK surfaces a short summary alongside extended reasoning;
+ * Codex (via pi-ai) does not (verified in
+ * `shared/codex-runtime-lab-findings-2026-05-19.md`); OR/Ollama are generic
+ * until specifically carved out in a future arc.
+ */
+export type ProviderShape = 'claude' | 'codex' | 'generic';
+
+/**
+ * Thinking segment, discriminated by providerShape. Claude variant carries
+ * the SDK's surfaced summary; Codex variant drops summary entirely; generic
+ * is the OR/Ollama fallback (also used for any unknown future shape).
+ *
+ * Persisted segments written before the per-provider rendering arc do NOT
+ * carry providerShape. Read sites must coerce via
+ * `normalizeThinkingSegment`; the default is `'claude'` because every
+ * stored thinking segment today was produced by the Claude SDK runtime.
+ * Defaulting to `'generic'` would render historically-correct Claude
+ * reasoning as a flattened block.
+ */
+export type ThinkingSegment =
+  | { type: 'thinking'; providerShape: 'claude'; content: string; summary: string }
+  | { type: 'thinking'; providerShape: 'codex'; content: string }
+  | { type: 'thinking'; providerShape: 'generic'; content: string };
+
 export type MessageSegment =
   | { type: 'text'; content: string }
   | { type: 'tool'; toolId: string; toolName: string; input?: string; output?: string; isError?: boolean }
-  | { type: 'thinking'; content: string; summary: string };
+  | ThinkingSegment;
+
+/**
+ * Provenance recorded on companion messages so legacy thinking segments
+ * (which lack providerShape) can fall back via the legacy-default rule,
+ * and so per-message renderer dispatch survives a model swap mid-thread
+ * (existing turns keep their producing-provider shape regardless of which
+ * model is active NOW). Persisted in `messages.metadata`.
+ */
+export interface MessageProvenance {
+  runtimeId: RuntimeId;
+  providerId: ProviderId;
+  /** Canonical provider-qualified ref, e.g. `claude/claude-sonnet-4-6`. */
+  modelRef: string;
+}
+
+/**
+ * Raw thinking-segment shape as it appears in persisted metadata or on a
+ * WS frame, BEFORE per-provider discrimination. `providerShape` and
+ * `summary` are both optional because pre-arc data carries neither
+ * predictably; the normalizer below coerces to the strict union.
+ */
+export interface RawThinkingSegment {
+  type: 'thinking';
+  content: string;
+  providerShape?: ProviderShape;
+  summary?: string;
+}
+
+/**
+ * Coerce a raw thinking-segment object into the strict discriminated union.
+ * Missing `providerShape` defaults to `'claude'` (legacy rule above).
+ * A missing `summary` on a claude-shape segment becomes the empty string
+ * (legacy WS frames occasionally omit it).
+ */
+export function normalizeThinkingSegment(raw: RawThinkingSegment): ThinkingSegment {
+  const shape: ProviderShape = raw.providerShape ?? 'claude';
+  if (shape === 'claude') {
+    return { type: 'thinking', providerShape: 'claude', content: raw.content, summary: raw.summary ?? '' };
+  }
+  if (shape === 'codex') {
+    return { type: 'thinking', providerShape: 'codex', content: raw.content };
+  }
+  return { type: 'thinking', providerShape: 'generic', content: raw.content };
+}
+
+/**
+ * Coerce a raw `segments` array — typically `message.metadata?.segments`
+ * read straight off a persisted companion row — into a strict
+ * `MessageSegment[]`. Applies `normalizeThinkingSegment` to thinking
+ * entries (so legacy claude-produced segments without `providerShape`
+ * default to the claude variant per D1) and passes text/tool segments
+ * through unchanged.
+ *
+ * Returns `null` when the input isn't an array (no segments stored,
+ * legacy text-only message, etc.) so the caller can stay
+ * `MessageSegment[] | null`-shaped without inventing an empty array.
+ *
+ * This is the read boundary that lets renderer dispatch on
+ * `providerShape` rely on the field being present.
+ */
+export function normalizeMessageSegments(raw: unknown): MessageSegment[] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.map((seg): MessageSegment => {
+    if (seg && typeof seg === 'object' && (seg as { type?: unknown }).type === 'thinking') {
+      return normalizeThinkingSegment(seg as RawThinkingSegment);
+    }
+    return seg as MessageSegment;
+  });
+}
 
 export interface ThreadSummary {
   id: string;

@@ -29,4 +29,5 @@ docs/DESIGN-SPEC.md
 *.txt
 tmp/
 data/backups/
+lab-runs/
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import MessageBubble from '$lib/components/MessageBubble.svelte';
   import type { Message, MessageSegment } from '@resonant/shared';
+  import { normalizeMessageSegments } from '@resonant/shared';
 
   type ToolEvent = {
     toolId: string;
@@ -144,7 +145,7 @@
           <MessageBubble
             {message}
             toolEvents={toolEventsMap[message.id] || []}
-            segments={message.metadata?.segments as any || null}
+            segments={normalizeMessageSegments(message.metadata?.segments)}
             {companionName}
           />
         </div>

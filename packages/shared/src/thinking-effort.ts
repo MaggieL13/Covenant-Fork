@@ -16,9 +16,23 @@
  */
 
 /** Valid values for `agent.thinking_effort`. `'auto'` means "let the
- *  resolver pick per model." The other five map directly to the SDK's
- *  `EffortLevel` type. */
-export type ThinkingEffort = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+ *  resolver pick per model."
+ *
+ *  Provider mapping (Rev 2.2 — multi-provider effort vocabulary, see
+ *  `shared/per-provider-rendering-spec-2026-05-19.md` D4 and
+ *  `shared/codex-runtime-lab-findings-2026-05-19.md` followup #4):
+ *
+ *  - Claude SDK accepts: `low | medium | high | xhigh | max`
+ *  - Codex (pi-ai openai-codex-responses): `none | minimal | low | medium | high | xhigh`
+ *
+ *  This union is the SUPERSET — what any UI dropdown might surface. The
+ *  per-provider option lists (see `getEffortOptionsForProvider`) decide
+ *  which values are actually selectable for a given provider. UI gating
+ *  is the safeguard against picking provider-invalid values (e.g.
+ *  Claude can't accept `'none'`/`'minimal'`); the resolver passes the
+ *  configured value through verbatim and trusts the dropdown to have
+ *  filtered it. */
+export type ThinkingEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** Concrete effort level the SDK accepts. Strict subset of `ThinkingEffort`
  *  excluding `'auto'` — what the resolver returns. */
@@ -49,8 +63,14 @@ export function resolveEffortForModel(
   model: string,
   configured: ThinkingEffort | string | undefined,
 ): ResolvedEffort {
-  // Explicit non-auto choice: respect it as the user's intentional setting.
+  // Explicit non-auto choice: respect it as the user's intentional setting,
+  // including provider-specific values (`none`, `minimal`) that only Codex
+  // accepts. UI gating prevents Claude users from picking those; if they
+  // appear in config anyway (manual YAML edit), the Claude SDK rejects them
+  // at the wire — we don't second-guess the user here.
   if (
+    configured === 'none' ||
+    configured === 'minimal' ||
     configured === 'low' ||
     configured === 'medium' ||
     configured === 'high' ||
@@ -69,4 +89,105 @@ export function resolveEffortForModel(
   // the safe baseline. Solid reasoning, not a wallet hit, valid across
   // every current model generation.
   return 'high';
+}
+
+// ---------------------------------------------------------------------------
+// Provider-shaped effort dropdown options
+// ---------------------------------------------------------------------------
+
+/** One option in a reasoning-effort dropdown. */
+export interface EffortOption {
+  value: ThinkingEffort;
+  label: string;
+}
+
+/**
+ * Effort options as Claude's Agent SDK accepts them. Claude does NOT
+ * recognize `'none'` or `'minimal'` — they are deliberately absent.
+ */
+const CLAUDE_EFFORT_OPTIONS: readonly EffortOption[] = [
+  { value: 'auto',   label: 'Auto — picks safely per model (recommended)' },
+  { value: 'max',    label: 'Max — frontier reasoning, spend freely (Opus 4.6+ only)' },
+  { value: 'xhigh',  label: 'XHigh — deep agentic/coding work' },
+  { value: 'high',   label: 'High — solid reasoning' },
+  { value: 'medium', label: 'Medium — thinks when needed' },
+  { value: 'low',    label: 'Low — minimal thinking, fastest responses' },
+] as const;
+
+/**
+ * Effort options as pi-ai's `openai-codex-responses` provider accepts
+ * them. Codex does NOT recognize `'max'` — `mapEffortForCodex` silently
+ * coerces it to `'xhigh'`, but it's omitted here so the user doesn't
+ * pick a "phantom" tier. `'none'` and `'minimal'` are Codex-only.
+ *
+ * `'auto'` translates to `undefined` at the runtime boundary, which
+ * lets pi-ai pick the provider default (verified in lab findings as
+ * "open a structural reasoning span but emit no content" for gpt-5.5).
+ */
+const CODEX_EFFORT_OPTIONS: readonly EffortOption[] = [
+  { value: 'auto',    label: 'Auto — pi-ai picks the default' },
+  { value: 'xhigh',   label: 'XHigh — maximum reasoning' },
+  { value: 'high',    label: 'High — solid reasoning' },
+  { value: 'medium',  label: 'Medium — thinks when needed' },
+  { value: 'low',     label: 'Low — light reasoning' },
+  { value: 'minimal', label: 'Minimal — quick reasoning pass' },
+  { value: 'none',    label: 'None — skip reasoning entirely' },
+] as const;
+
+/**
+ * Conservative fallback for providers we haven't carved out yet
+ * (OpenRouter, Ollama). Three universally-recognized tiers + auto.
+ * When those providers actually ship, replace with provider-specific
+ * lists.
+ */
+const GENERIC_EFFORT_OPTIONS: readonly EffortOption[] = [
+  { value: 'auto',   label: 'Auto — provider default' },
+  { value: 'high',   label: 'High' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'low',    label: 'Low' },
+] as const;
+
+/**
+ * Return the ordered reasoning-effort options the UI should surface for
+ * a given provider. The dropdown reads from this — never from the
+ * `ThinkingEffort` union directly — so each provider's selectable
+ * tiers stay accurate (Codex has `none`/`minimal` and no `max`;
+ * Claude has `max` but no `none`/`minimal`). See lab findings #4 for
+ * why this exists.
+ */
+export function getEffortOptionsForProvider(
+  provider: import('./model-manifest.js').ProviderId,
+): readonly EffortOption[] {
+  switch (provider) {
+    case 'claude':       return CLAUDE_EFFORT_OPTIONS;
+    case 'openai-codex': return CODEX_EFFORT_OPTIONS;
+    case 'openrouter':
+    case 'ollama':
+      return GENERIC_EFFORT_OPTIONS;
+  }
+}
+
+/**
+ * Coerce a configured effort value to one valid for the given provider.
+ * If the value is missing, `'auto'`, or accepted by the provider's
+ * dropdown options, it passes through unchanged. Otherwise returns
+ * `'auto'` — the safe universal fallback.
+ *
+ * Use this AT EVERY POINT where the (model, effort) pair could become
+ * mismatched: UI model-change handlers (so a Claude → Codex switch
+ * doesn't leave `max` lingering), autonomous "Match Chat" inheritance
+ * (so chat's `none` doesn't bleed into a Claude autonomous turn), and
+ * the backend resolve site (belt and suspenders).
+ *
+ * Returns `'auto'` for an explicit `''` (empty string) input — UI
+ * "match other tier" semantics should NOT route through this helper;
+ * coerce only the resolved value, not the sentinel.
+ */
+export function coerceEffortForProvider(
+  provider: import('./model-manifest.js').ProviderId,
+  effort: ThinkingEffort | string | undefined | null,
+): ThinkingEffort {
+  if (!effort || effort === 'auto') return 'auto';
+  const valid = getEffortOptionsForProvider(provider).some((o) => o.value === effort);
+  return valid ? (effort as ThinkingEffort) : 'auto';
 }

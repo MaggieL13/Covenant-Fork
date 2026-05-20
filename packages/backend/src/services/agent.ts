@@ -1,6 +1,6 @@
 import { query, type McpServerConfig } from '@anthropic-ai/claude-agent-sdk';
 import type { McpServerInfo } from '@resonant/shared';
-import { MODELS, resolveEffortForModel, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
+import { MODELS, resolveEffortForModel, coerceEffortForProvider, normalizeModelRef, unwrapModelRefForClaudeSdk, findModelByRef, type ModelRef, type ModelCapabilities } from '@resonant/shared';
 import { ClaudeAgentRuntime } from './runtimes/claude-sdk.js';
 import { CodexRuntime } from './runtimes/codex.js';
 import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
@@ -8,7 +8,8 @@ import { buildProviderHandoff, renderProviderHandoffAsPrompt, type ProviderHando
 import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
-import type { MessageSegment } from '@resonant/shared';
+import type { MessageSegment, ProviderShape, RuntimeId, MessageProvenance } from '@resonant/shared';
+import { normalizeThinkingSegment } from '@resonant/shared';
 import type { PushService } from './push.js';
 import { getResonantConfig } from '../config.js';
 import crypto from 'crypto';
@@ -643,6 +644,30 @@ interface ThinkingInsertion {
   textOffset: number;
   content: string;
   summary: string;
+  providerShape: ProviderShape;
+}
+
+/**
+ * Map the resolved runtime to a thinking-segment provider shape. Single
+ * source of truth for the per-provider rendering discriminant. Future
+ * providers (openai-compat for OpenRouter, ollama-native for Ollama) fall
+ * through to `'generic'` until a future arc carves them out individually.
+ *
+ * Exported for unit tests. Production callers are the two thinking_delta
+ * handlers below — both compute `providerShape` ONCE and use the same
+ * value for `thinkingBlocks.push` AND `registry.broadcast`, which is the
+ * structural invariant that guarantees streaming and persisted thinking
+ * segments agree on shape (see per-provider-rendering-spec §4, Codex's
+ * T13/T14 pairing guardrail).
+ */
+export function resolveProviderShape(runtime: RuntimeId): ProviderShape {
+  switch (runtime) {
+    case 'claude-sdk': return 'claude';
+    case 'codex': return 'codex';
+    case 'openai-compat':
+    case 'ollama-native':
+      return 'generic';
+  }
 }
 
 // Options for autonomous (orchestrator-driven) queries. Pulse uses these to
@@ -661,8 +686,33 @@ export interface AutonomousOpts {
   orientationMode?: 'full' | 'pulse';
 }
 
-// Build interleaved text/tool/thinking segments from response text + insertions
-function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], thinkingBlocks: ThinkingInsertion[] = []): MessageSegment[] {
+/**
+ * Build the `metadata` blob persisted on a companion message. Always
+ * stamps `provenance` (so the renderer can dispatch per-provider
+ * components regardless of which model is active NOW); includes
+ * `segments` when present. Exported for unit tests.
+ *
+ * Legacy companion rows that predate this arc lack `provenance` —
+ * read-side coercion (normalizeThinkingSegment) defaults them to the
+ * claude shape, see shared/types.ts.
+ */
+export function buildCompanionMessageMetadata(
+  modelRef: ModelRef,
+  segments: MessageSegment[],
+): Record<string, unknown> {
+  const provenance: MessageProvenance = {
+    runtimeId: modelRef.runtime,
+    providerId: modelRef.provider,
+    modelRef: modelRef.canonical,
+  };
+  const meta: Record<string, unknown> = { provenance };
+  if (segments.length > 0) meta.segments = segments;
+  return meta;
+}
+
+// Build interleaved text/tool/thinking segments from response text + insertions.
+// Exported for unit tests; not intended for callers outside agent.ts.
+export function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], thinkingBlocks: ThinkingInsertion[] = []): MessageSegment[] {
   if (toolInsertions.length === 0 && thinkingBlocks.length === 0) return [];
 
   // Merge all insertions into one sorted list
@@ -694,11 +744,16 @@ function buildSegments(fullResponse: string, toolInsertions: ToolInsertion[], th
         isError: ins.data.isError,
       });
     } else {
-      segments.push({
+      // Read providerShape from the insertion (set at the thinking_delta
+      // capture site so it matches what we broadcast over WS). normalize-
+      // ThinkingSegment picks the correct discriminated-union variant —
+      // claude keeps summary, codex/generic drop it.
+      segments.push(normalizeThinkingSegment({
         type: 'thinking',
         content: ins.data.content,
+        providerShape: ins.data.providerShape,
         summary: ins.data.summary,
-      });
+      }));
     }
     cursor = offset;
   }
@@ -1097,9 +1152,19 @@ export class AgentService {
     const configuredEffort = isPulseOrientation
       ? 'low'  // unused; pulse path passes thinking: disabled
       : getConfiguredThinkingEffort(isAutonomous ? 'autonomous' : 'interactive');
+    // Provider-mismatch safety belt: when autonomous "Match Chat" lets a
+    // chat-tier effort bleed into an autonomous turn whose model lives on
+    // a different provider (chat = Codex with `none`, autonomous =
+    // Claude), the inherited value can be invalid for the dispatch
+    // model. Coerce the configured value to the resolved model's
+    // provider — `auto` is the safe fallback that `resolveEffortForModel`
+    // then turns into a sensible per-model-class default.
+    const coercedEffort = isPulseOrientation
+      ? 'low'
+      : coerceEffortForProvider(modelRef.provider, configuredEffort);
     const effectiveEffort = isPulseOrientation
       ? 'low'
-      : resolveEffortForModel(model, configuredEffort);
+      : resolveEffortForModel(model, coercedEffort);
     console.log(`[Agent] Model: ${model} (${tier}, effort: ${effectiveEffort})`);
 
     // Tool-behavior rule prepended to the system prompt. Lives here
@@ -1503,12 +1568,24 @@ export class AgentService {
               continue;
             }
             if (event.type === 'thinking_delta') {
+              // INVARIANT (Codex T13/T14 pairing): compute providerShape
+              // ONCE and use the same value for both `thinkingBlocks.push`
+              // (persistence path) and `registry.broadcast` (streaming
+              // path). Single source = streaming and persisted segments
+              // cannot disagree on shape.
+              const providerShape = resolveProviderShape(modelRef.runtime);
               thinkingBlocks.push({
                 textOffset: fullResponse.length,
                 content: event.text,
                 summary: event.summary ?? '',
+                providerShape,
               });
-              registry.broadcast({ type: 'thinking', content: event.text, summary: event.summary ?? '' });
+              registry.broadcast({
+                type: 'thinking',
+                content: event.text,
+                summary: event.summary ?? '',
+                providerShape,
+              });
               continue;
             }
             if (event.type === 'auth_required') {
@@ -1676,12 +1753,22 @@ export class AgentService {
         }
 
         if (event.type === 'thinking_delta') {
+          // INVARIANT (Codex T13/T14 pairing): single providerShape source
+          // for both push and broadcast — see same comment on the other
+          // thinking_delta site above.
+          const providerShape = resolveProviderShape(modelRef.runtime);
           thinkingBlocks.push({
             textOffset: fullResponse.length,
             content: event.text,
             summary: event.summary ?? '',
+            providerShape,
           });
-          registry.broadcast({ type: 'thinking', content: event.text, summary: event.summary ?? '' });
+          registry.broadcast({
+            type: 'thinking',
+            content: event.text,
+            summary: event.summary ?? '',
+            providerShape,
+          });
           continue;
         }
 
@@ -1897,8 +1984,8 @@ export class AgentService {
 
     // Build segments for interleaved tool/thinking display
     const segments = buildSegments(fullResponse, toolInsertions, thinkingBlocks);
-    const messageMetadata: Record<string, unknown> | undefined =
-      segments.length > 0 ? { segments } : undefined;
+
+    const messageMetadata = buildCompanionMessageMetadata(modelRef, segments);
 
     // Store final message
     const companionMessage = createMessage({

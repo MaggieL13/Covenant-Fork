@@ -7,6 +7,7 @@
   let {
     uploading,
     hasStickerPacks,
+    visionEnabled = true,
     onopenfilepicker,
     onstickerselect,
     ontranscript,
@@ -15,12 +16,27 @@
   } = $props<{
     uploading: boolean;
     hasStickerPacks: boolean;
+    /** When false, the file picker hides `image/*` from its `accept`
+     *  list — the active chat model doesn't support vision, so images
+     *  would be silently dropped (or worse, error at the wire) if
+     *  attached. Other file types stay attachable. Default true so
+     *  legacy callers preserve current behavior. */
+    visionEnabled?: boolean;
     onopenfilepicker?: () => void;
     onstickerselect?: (sticker: Sticker) => void;
     ontranscript?: (text: string, prosody?: Record<string, number> | null) => void;
     onfilechange?: (event: Event) => void;
     onregisterrefs?: (refs: { getFileInput: () => HTMLInputElement | null }) => void;
   }>();
+
+  // Provider-aware accept list. When vision is disabled, drop `image/*`
+  // so the OS file picker doesn't offer images at all (the user can't
+  // attach what the model can't read).
+  let acceptList = $derived(
+    visionEnabled
+      ? 'image/*,audio/*,.pdf,.txt,.md,.json'
+      : 'audio/*,.pdf,.txt,.md,.json',
+  );
 
   let fileInput: HTMLInputElement | null = null;
   let showStickerPicker = $state(false);
@@ -40,7 +56,7 @@
 <input
   bind:this={fileInput}
   type="file"
-  accept="image/*,audio/*,.pdf,.txt,.md,.json"
+  accept={acceptList}
   multiple
   onchange={onfilechange}
   hidden
@@ -51,8 +67,8 @@
   class="attach-button"
   onclick={() => onopenfilepicker?.()}
   disabled={uploading}
-  aria-label="Attach file"
-  title="Attach file"
+  aria-label={visionEnabled ? 'Attach file' : 'Attach file (current model does not support images)'}
+  title={visionEnabled ? 'Attach file' : 'Attach file — images disabled (current model has no vision)'}
 >
   {#if uploading}
     <span class="upload-spinner"></span>

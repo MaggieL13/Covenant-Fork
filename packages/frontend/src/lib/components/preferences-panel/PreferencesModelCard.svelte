@@ -1,5 +1,22 @@
 <script lang="ts">
-  import { resolveEffortForModel } from '@resonant/shared';
+  import { onMount } from 'svelte';
+  import { resolveEffortForModel, getEffortOptionsForProvider, coerceEffortForProvider, findModelByRef, type ProviderId } from '@resonant/shared';
+
+  /**
+   * Provider for a model reference looked up via the shared manifest.
+   * Accepts BOTH formats `agent.model` can be stored as: bare ids
+   * (`claude-sonnet-4-6`, `gpt-5.5`) AND provider-qualified canonical
+   * refs (`openai-codex/gpt-5.5`, `claude/claude-sonnet-4-6`). The
+   * earlier bare-id-only implementation silently fell back to `'claude'`
+   * for any config that stored canonical refs, which made Codex configs
+   * see Claude effort options and miscoerce on mount.
+   *
+   * Falls back to `'claude'` for genuinely unknown ids (e.g. an
+   * experimental id the user pasted in that the manifest doesn't have).
+   */
+  function providerForModelId(id: string): ProviderId {
+    return findModelByRef(id)?.provider ?? 'claude';
+  }
 
   let {
     models,
@@ -44,18 +61,105 @@
     return /opus/i.test(id);
   }
 
-  // The autonomous-tier effort that's actually in effect right now.
-  // When the override is unset (empty string), autonomous inherits from
-  // chat — that's the back-compat fallback PR #10 preserves. Used for
-  // both the dynamic resolution display and the Max-warning logic.
-  let effectiveAutonomousEffort = $derived(
-    thinkingEffortAutonomous || thinkingEffort,
-  );
-
   // Auto resolution display per tier — driven by `$derived` so values
   // update live as the user changes either model dropdown.
   let autoChatResolved = $derived(resolveEffortForModel(model, 'auto'));
   let autoAutonomousResolved = $derived(resolveEffortForModel(modelAutonomous, 'auto'));
+
+  // Provider-shaped effort options per tier. When the user switches the
+  // model dropdown to a Codex entry, the effort dropdown re-renders with
+  // Codex's vocabulary (none / minimal / low / medium / high / xhigh,
+  // no `max`); Claude entries keep Claude's vocabulary (low / medium /
+  // high / xhigh / max, no `none` / `minimal`). See
+  // `shared/codex-runtime-lab-findings-2026-05-19.md` followup #4.
+  let chatProvider = $derived(providerForModelId(model));
+  let autonomousProvider = $derived(providerForModelId(modelAutonomous));
+  let chatEffortOptions = $derived(getEffortOptionsForProvider(chatProvider));
+  let autonomousEffortOptions = $derived(getEffortOptionsForProvider(autonomousProvider));
+
+  // Capability gating per tier — when the selected model has
+  // `capabilities.reasoning === false`, hide the effort dropdown
+  // entirely rather than showing a control that can't actually take
+  // effect. Today all UI-selectable models have reasoning: true, but
+  // this future-proofs for chat/instruct entries that don't support
+  // extended thinking (see manifest comment near CODEX_CHAT_CAPABILITIES).
+  // Unknown ids default to true so the dropdown stays visible.
+  // Capability lookups use findModelByRef so both bare ids and canonical
+  // provider-qualified refs resolve correctly (see providerForModelId
+  // doc above for the same bug shape).
+  let chatReasoningCapable = $derived(
+    findModelByRef(model)?.capabilities.reasoning ?? true,
+  );
+  let autonomousReasoningCapable = $derived(
+    findModelByRef(modelAutonomous)?.capabilities.reasoning ?? true,
+  );
+
+  // Model-change handlers that sanitize the effort selection when the
+  // new provider's vocabulary doesn't include the previously-selected
+  // value. Without this, switching from Claude to Codex would leave
+  // `max` lingering in `thinkingEffort` (Codex has no `max`) and a
+  // subsequent save would send a provider-mismatched value the runtime
+  // silently re-maps. See `coerceEffortForProvider` doc.
+  function handleChatModelChange(newModel: string) {
+    onmodelchange?.(newModel);
+    const newProvider = providerForModelId(newModel);
+    const coerced = coerceEffortForProvider(newProvider, thinkingEffort);
+    if (coerced !== thinkingEffort) {
+      onthinkingeffortchange?.(coerced);
+    }
+  }
+
+  function handleAutonomousModelChange(newModel: string) {
+    onautonomousmodelchange?.(newModel);
+    // Empty string is the "Match Chat" sentinel — that's user intent and
+    // shouldn't be sanitized as if it were a real effort value. The
+    // effective-effort computation below handles the mismatch case.
+    if (thinkingEffortAutonomous === '') return;
+    const newProvider = providerForModelId(newModel);
+    const coerced = coerceEffortForProvider(newProvider, thinkingEffortAutonomous);
+    if (coerced !== thinkingEffortAutonomous) {
+      onautonomouseffortchange?.(coerced);
+    }
+  }
+
+  // Self-heal on mount: if the saved config carries an effort that's
+  // invalid for its tier's current model provider (e.g. config has
+  // `thinking_effort: max` but the user's chat model is now Codex),
+  // the dropdown would otherwise show no selection and a stale Save
+  // would persist the invalid value. Fire the coerce-to-auto change
+  // once on load so the UI lands in a self-consistent state. The
+  // user-facing trade-off is a single immediate dirty-form mark on
+  // open, which is the right behavior — the saved config WAS stale.
+  onMount(() => {
+    if (thinkingEffort) {
+      const coerced = coerceEffortForProvider(chatProvider, thinkingEffort);
+      if (coerced !== thinkingEffort) onthinkingeffortchange?.(coerced);
+    }
+    if (thinkingEffortAutonomous !== '') {
+      const coerced = coerceEffortForProvider(autonomousProvider, thinkingEffortAutonomous);
+      if (coerced !== thinkingEffortAutonomous) onautonomouseffortchange?.(coerced);
+    }
+  });
+
+  // The autonomous-tier effort that's actually in effect right now.
+  // When the override is unset (empty string), autonomous inherits from
+  // chat — that's the back-compat fallback PR #10 preserves. When the
+  // inherited value isn't valid for the autonomous provider (chat =
+  // Codex with `none`, autonomous = Claude), the coercion downgrades to
+  // `'auto'` so the user's display matches what the backend will
+  // actually dispatch. `matchChatMismatchWarning` below surfaces the
+  // mismatch so the user knows `none` won't carry over verbatim.
+  let effectiveAutonomousEffort = $derived(
+    thinkingEffortAutonomous || coerceEffortForProvider(autonomousProvider, thinkingEffort),
+  );
+  let matchChatMismatchWarning = $derived(
+    thinkingEffortAutonomous === ''
+      && thinkingEffort !== 'auto'
+      && coerceEffortForProvider(autonomousProvider, thinkingEffort) === 'auto'
+      && coerceEffortForProvider(chatProvider, thinkingEffort) === thinkingEffort
+      ? `Chat effort "${thinkingEffort}" isn't valid on ${labelFor(modelAutonomous)} — autonomous wakes will use Auto.`
+      : null,
+  );
 
   // Max-effort warnings PER TIER. The dilemma the warning surfaced in
   // PR #9 (one tier wants Max, another can't accept it) is now resolvable
@@ -98,7 +202,7 @@
           id="pref-chat-model"
           class="field-select"
           value={model}
-          onchange={(event) => onmodelchange?.((event.currentTarget as HTMLSelectElement).value)}
+          onchange={(event) => handleChatModelChange((event.currentTarget as HTMLSelectElement).value)}
         >
           {#each models as m}
             <option value={m.id}>{m.label}</option>
@@ -106,30 +210,29 @@
         </select>
       </div>
 
-      <div class="field">
-        <label class="field-label" for="pref-chat-effort">Thinking Effort</label>
-        <select
-          id="pref-chat-effort"
-          class="field-select"
-          value={thinkingEffort}
-          onchange={(event) => onthinkingeffortchange?.((event.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value="auto">Auto — picks safely per model (recommended)</option>
-          <option value="max">Max — frontier reasoning, spend freely (Opus 4.6+ only)</option>
-          <option value="xhigh">XHigh — deep agentic/coding work</option>
-          <option value="high">High — solid reasoning</option>
-          <option value="medium">Medium — thinks when needed</option>
-          <option value="low">Low — minimal thinking, fastest responses</option>
-        </select>
-        {#if thinkingEffort === 'auto'}
-          <span class="field-hint resolved-hint">
-            Auto on <strong>{labelFor(model)}</strong> → {autoChatResolved}
-          </span>
-        {/if}
-        {#if chatMaxWarning}
-          <span class="field-hint warning-hint">⚠️ {chatMaxWarning}</span>
-        {/if}
-      </div>
+      {#if chatReasoningCapable}
+        <div class="field">
+          <label class="field-label" for="pref-chat-effort">Thinking Effort</label>
+          <select
+            id="pref-chat-effort"
+            class="field-select"
+            value={thinkingEffort}
+            onchange={(event) => onthinkingeffortchange?.((event.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each chatEffortOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+          {#if thinkingEffort === 'auto'}
+            <span class="field-hint resolved-hint">
+              Auto on <strong>{labelFor(model)}</strong> → {autoChatResolved}
+            </span>
+          {/if}
+          {#if chatMaxWarning}
+            <span class="field-hint warning-hint">⚠️ {chatMaxWarning}</span>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <div class="tier-col">
@@ -142,7 +245,7 @@
           id="pref-auto-model"
           class="field-select"
           value={modelAutonomous}
-          onchange={(event) => onautonomousmodelchange?.((event.currentTarget as HTMLSelectElement).value)}
+          onchange={(event) => handleAutonomousModelChange((event.currentTarget as HTMLSelectElement).value)}
         >
           {#each models as m}
             <option value={m.id}>{m.label}</option>
@@ -150,33 +253,37 @@
         </select>
       </div>
 
-      <div class="field">
-        <label class="field-label" for="pref-auto-effort">Thinking Effort</label>
-        <select
-          id="pref-auto-effort"
-          class="field-select"
-          value={thinkingEffortAutonomous}
-          onchange={(event) => onautonomouseffortchange?.((event.currentTarget as HTMLSelectElement).value)}
-        >
-          <!-- Empty string = "match chat tier" — preserves pre-PR-#10
-               back-compat behavior when the user hasn't customized. -->
-          <option value="">Match Chat (currently {thinkingEffort})</option>
-          <option value="auto">Auto — picks safely per model (recommended)</option>
-          <option value="max">Max — frontier reasoning, spend freely (Opus 4.6+ only)</option>
-          <option value="xhigh">XHigh — deep agentic/coding work</option>
-          <option value="high">High — solid reasoning</option>
-          <option value="medium">Medium — thinks when needed</option>
-          <option value="low">Low — minimal thinking, fastest responses</option>
-        </select>
-        {#if effectiveAutonomousEffort === 'auto'}
-          <span class="field-hint resolved-hint">
-            Auto on <strong>{labelFor(modelAutonomous)}</strong> → {autoAutonomousResolved}
-          </span>
-        {/if}
-        {#if autonomousMaxWarning}
-          <span class="field-hint warning-hint">⚠️ {autonomousMaxWarning}</span>
-        {/if}
-      </div>
+      {#if autonomousReasoningCapable}
+        <div class="field">
+          <label class="field-label" for="pref-auto-effort">Thinking Effort</label>
+          <select
+            id="pref-auto-effort"
+            class="field-select"
+            value={thinkingEffortAutonomous}
+            onchange={(event) => onautonomouseffortchange?.((event.currentTarget as HTMLSelectElement).value)}
+          >
+            <!-- Empty string = "match chat tier" — preserves pre-PR-#10
+                 back-compat behavior when the user hasn't customized.
+                 Stays first regardless of provider; options below are
+                 provider-shaped per the autonomous-tier model selection. -->
+            <option value="">Match Chat (currently {thinkingEffort})</option>
+            {#each autonomousEffortOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+          {#if effectiveAutonomousEffort === 'auto'}
+            <span class="field-hint resolved-hint">
+              Auto on <strong>{labelFor(modelAutonomous)}</strong> → {autoAutonomousResolved}
+            </span>
+          {/if}
+          {#if autonomousMaxWarning}
+            <span class="field-hint warning-hint">⚠️ {autonomousMaxWarning}</span>
+          {/if}
+          {#if matchChatMismatchWarning}
+            <span class="field-hint warning-hint">⚠️ {matchChatMismatchWarning}</span>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
 

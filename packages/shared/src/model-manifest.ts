@@ -201,7 +201,19 @@ const CODEX_AUTH: ModelAuth = { type: 'codex-oauth' };
 
 const CODEX_CHAT_CAPABILITIES: ModelCapabilities = {
   tools: false,
-  vision: true,
+  // Forward-looking GPT-5.x models DO support vision at the API level,
+  // but CodexRuntime today does not pass image bytes through pi-ai — it
+  // only sends the message text plus attachment filenames. Until E3a
+  // lands (NormalizedMessage carries image content + CodexRuntime
+  // converts it into pi-ai's ImageContent), the honest current state is
+  // `vision: false` so the UI capability gate actually fires:
+  //   - file picker drops image/*
+  //   - paste / drag-drop / programmatic uploadFile reject images
+  //   - send-time guard catches the model-swap race
+  // Flip this back to true when E3a wires the runtime end-to-end and
+  // a smoke confirms a real image round-trip. See lab-findings #4 →
+  // per-provider-rendering-spec D4 → T18 review (2026-05-19).
+  vision: false,
   reasoning: false,
   mcp: false,
   sessionResume: true,

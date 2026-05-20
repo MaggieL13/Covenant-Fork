@@ -2,6 +2,9 @@
   import type { MessageSegment } from '@resonant/shared';
   import type { ToolEvent } from '$lib/stores/websocket.svelte';
   import MessageContent from '$lib/components/message-bubble/MessageContent.svelte';
+  import ClaudeThinkingBlock from '$lib/components/message-bubble/ClaudeThinkingBlock.svelte';
+  import CodexThinkingBlock from '$lib/components/message-bubble/CodexThinkingBlock.svelte';
+  import GenericThinkingBlock from '$lib/components/message-bubble/GenericThinkingBlock.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
 
   let {
@@ -61,24 +64,32 @@
       {#if seg.type === 'text'}
         <MessageContent html={renderMarkdown(seg.content)} />
       {:else if seg.type === 'thinking'}
-        <div class="thinking-block">
-          <button class="thinking-header" onclick={(e) => { e.stopPropagation(); ontogglethinking?.(i); }}>
-            <span class="thinking-icon">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            </span>
-            <span class="thinking-summary">{seg.summary}</span>
-            <span class="thinking-chevron">{expandedThinking.has(i) ? '▾' : '▸'}</span>
-          </button>
-          {#if expandedThinking.has(i)}
-            <div
-              class="thinking-content"
-              role="button"
-              tabindex="0"
-              onclick={(e) => { e.stopPropagation(); openDetail('Thinking', seg.content); }}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail('Thinking', seg.content); } }}
-            >{seg.content}</div>
-          {/if}
-        </div>
+        {#if seg.providerShape === 'claude'}
+          <ClaudeThinkingBlock
+            content={seg.content}
+            summary={seg.summary}
+            index={i}
+            isExpanded={expandedThinking.has(i)}
+            ontoggle={ontogglethinking}
+            onopenDetail={openDetail}
+          />
+        {:else if seg.providerShape === 'codex'}
+          <CodexThinkingBlock
+            content={seg.content}
+            index={i}
+            isExpanded={expandedThinking.has(i)}
+            ontoggle={ontogglethinking}
+            onopenDetail={openDetail}
+          />
+        {:else}
+          <GenericThinkingBlock
+            content={seg.content}
+            index={i}
+            isExpanded={expandedThinking.has(i)}
+            ontoggle={ontogglethinking}
+            onopenDetail={openDetail}
+          />
+        {/if}
       {:else}
         {@const isAgentTool = seg.toolName.startsWith('Agent')}
         {@const formatted = seg.output ? formatToolOutput(seg.output, seg.toolName) : ''}
@@ -396,68 +407,8 @@
     cursor: default;
   }
 
-  .thinking-block {
-    margin: 0.375rem 0;
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-  }
-
-  .thinking-header {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.5rem;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-    cursor: pointer;
-    text-align: left;
-    border-radius: 0.25rem;
-    transition: background 0.15s;
-    width: 100%;
-  }
-
-  .thinking-header:hover {
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-  }
-
-  .thinking-icon {
-    flex-shrink: 0;
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-  }
-
-  .thinking-summary {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-secondary);
-  }
-
-  .thinking-chevron {
-    flex-shrink: 0;
-    font-size: 0.625rem;
-    color: var(--text-muted);
-  }
-
-  .thinking-content {
-    margin: 0.25rem 0 0.25rem 0;
-    padding: 0.5rem 0.625rem;
-    background: var(--bg-primary);
-    border-radius: 0 0 0.25rem 0.25rem;
-    color: var(--text-muted);
-    font-size: 0.6875rem;
-    line-height: 1.5;
-    max-height: 300px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    cursor: zoom-in;
-  }
+  /* `.thinking-*` rules moved to ClaudeThinkingBlock / CodexThinkingBlock /
+     GenericThinkingBlock — each component is self-contained now. */
 
   .detail-backdrop {
     position: fixed;
