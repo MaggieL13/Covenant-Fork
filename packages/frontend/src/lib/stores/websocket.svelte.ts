@@ -55,6 +55,22 @@ export type ThinkingEvent = {
 };
 let thinkingEvents = $state<Record<string, ThinkingEvent[]>>({});
 
+// PR E3a.5 — backend image attachment fallbacks surfaced from the
+// Codex dispatch branch's `attachment_warning` WS event. Keyed by the
+// DB message id of the message that owned the dropped attachment so
+// per-message UI can render inline pills near the offender rather
+// than into the latest turn. Multiple drops per message are possible
+// (rare but real — a batched upload could lose two attachments to
+// the same per-turn cap), so we store an array per id.
+export type AttachmentWarning = {
+  fileId: string;
+  filename?: string;
+  reason: string;
+  /** When the WS frame arrived. Lets the UI optionally fade or sort. */
+  receivedAt: string;
+};
+let attachmentWarnings = $state<Record<string, AttachmentWarning[]>>({});
+
 // Voice state
 let voiceModeEnabled = $state(false);
 let transcriptionStatus = $state<'idle' | 'processing' | 'complete' | 'error'>('idle');
@@ -691,6 +707,24 @@ function handleMessage(event: MessageEvent) {
         // Auto-clear error after 10 seconds
         setTimeout(() => { lastError = null; }, 10000);
         break;
+
+      case 'attachment_warning': {
+        // PR E3a.5 — append to per-message list. Multiple drops per
+        // owner message are possible (one upload may hit per-turn cap
+        // for multiple attachments), so we never replace.
+        const entry: AttachmentWarning = {
+          fileId: msg.fileId,
+          filename: msg.filename,
+          reason: msg.reason,
+          receivedAt: new Date().toISOString(),
+        };
+        const prev = attachmentWarnings[msg.messageId] ?? [];
+        attachmentWarnings = {
+          ...attachmentWarnings,
+          [msg.messageId]: [...prev, entry],
+        };
+        break;
+      }
     }
   } catch (err) {
     console.error('Failed to parse WebSocket message:', err);
@@ -876,6 +910,10 @@ export function getLastError() { return lastError; }
 export function getPendingCount() { return pendingMessages.length; }
 export function clearError() { lastError = null; }
 export function getToolEvents() { return toolEvents; }
+export function getAttachmentWarnings() { return attachmentWarnings; }
+export function getAttachmentWarningsFor(messageId: string): AttachmentWarning[] {
+  return attachmentWarnings[messageId] ?? [];
+}
 
 // Compute interleaved segments for the currently streaming message.
 // Returns null when the stream is for a non-active thread so the
