@@ -35,6 +35,7 @@ import {
   assertPathInScope,
   CovenantToolPermissionError,
 } from '../path-guard.js';
+import { applyOutputBudget } from '../output-budget.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
 const MAX_ENTRIES = 500;
@@ -171,7 +172,10 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     ? `\n[... ${filtered.length - MAX_ENTRIES} more entries omitted; use pattern to narrow ...]`
     : '';
 
-  return `${header}\n${lines.join('\n')}${suffix}`;
+  // PR E3b/2 review — defense-in-depth output cap. The 500-entry
+  // limit usually fits well under 50KB, but pathological filename
+  // lengths could push it over.
+  return applyOutputBudget(`${header}\n${lines.join('\n')}${suffix}`);
 }
 
 export const listFilesTool: CovenantTool = {

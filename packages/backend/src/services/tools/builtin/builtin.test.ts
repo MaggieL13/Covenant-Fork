@@ -10,6 +10,7 @@ import {
 } from './index.js';
 import { basenameGlobToRegex } from './list_files.js';
 import { ToolRegistry } from '../registry.js';
+import { MAX_TOOL_OUTPUT_CHARS } from '../output-budget.js';
 import type { ToolContext } from '../registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -77,6 +78,24 @@ beforeAll(async () => {
   );
 
   await writeFile(join(scopeRoot, 'longline.txt'), 'a'.repeat(5000));
+
+  // PR E3b/2 review fixtures — output-budget overflow probes.
+  //
+  // huge.txt: 2000 lines × 1500 chars each ≈ 3MB raw text, well
+  // over the 50KB output budget even after line-numbering. Codex
+  // review's probe found ~3.83MB on a similar shape; this is the
+  // regression we're pinning.
+  const hugeLine = 'x'.repeat(1500);
+  const hugeContent = Array(2000).fill(hugeLine).join('\n');
+  await writeFile(join(scopeRoot, 'huge.txt'), hugeContent);
+
+  // hugematches.txt: a file with many matching lines, each long.
+  // Search_text was previously unbounded on per-match line length;
+  // we now cap each match at 500 chars and the total via budget.
+  const matchLine =
+    'NEEDLE ' + 'padding-to-make-line-very-long '.repeat(60); // ~1800 chars
+  const hugeMatchContent = Array(100).fill(matchLine).join('\n');
+  await writeFile(join(scopeRoot, 'hugematches.txt'), hugeMatchContent);
 });
 
 afterAll(async () => {
@@ -195,6 +214,16 @@ describe('read_file', () => {
       type: 'object',
       required: ['path'],
     });
+  });
+
+  // PR E3b/2 review catch: 2000 lines × 2000 chars per line = up to
+  // 4MB. Without the tool-side output cap, all 4MB would land in the
+  // loop driver to be truncated, wasting CPU + memory + tokens. The
+  // tool now caps at MAX_TOOL_OUTPUT_CHARS at the return boundary.
+  it('total output stays under the budget even for huge files', async () => {
+    const out = await readFileTool.execute({ path: 'huge.txt' }, ctx);
+    expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
+    expect(out).toContain('[tool output truncated');
   });
 });
 
@@ -349,6 +378,33 @@ describe('search_text', () => {
     );
     expect(out).not.toMatch(/binary\.bin:/);
     expect(out).toContain('binary');
+  });
+
+  // PR E3b/2 review catch: 200 matches × unbounded line length was
+  // the second class of blowup. Per-match-line cap (500 chars) is the
+  // first defense; total output cap is the safety net.
+  it('truncates individual match lines to keep per-hit size bounded', async () => {
+    const out = await searchTextTool.execute(
+      { pattern: 'NEEDLE', glob: 'hugematches.txt' },
+      ctx,
+    );
+    // No single rendered match should carry more than the per-line
+    // cap + the truncation suffix. We check by inspecting the
+    // longest line of output (after the header).
+    const lines = out.split('\n');
+    const longest = lines.reduce((m, l) => Math.max(m, l.length), 0);
+    // Cap is 500 chars + truncation suffix length + file:line: prefix.
+    // Allow some slack for the prefix and `[line truncated]` suffix.
+    expect(longest).toBeLessThan(700);
+    expect(out).toContain('[line truncated]');
+  });
+
+  it('total output stays under the budget even with many long matches', async () => {
+    const out = await searchTextTool.execute(
+      { pattern: 'NEEDLE', glob: 'hugematches.txt' },
+      ctx,
+    );
+    expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
   });
 });
 

@@ -35,6 +35,7 @@ import {
   assertPathInScope,
   CovenantToolPermissionError,
 } from '../path-guard.js';
+import { applyOutputBudget } from '../output-budget.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
 const DEFAULT_LIMIT = 2000;
@@ -145,7 +146,11 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
       ? `(no lines in range; file has ${totalLines} lines total)`
       : `(showing lines ${shownStart}-${shownEnd} of ${totalLines})`;
 
-  return `${header}\n${rendered.join('\n')}`;
+  // PR E3b/2 review catch: cap at the tool boundary even though the
+  // line-count + per-line-length limits already prevent most blowups.
+  // 2000 lines × 2000 chars = ~4MB worst case (probe-confirmed by
+  // Codex review); applyOutputBudget brings that down to ~50KB.
+  return applyOutputBudget(`${header}\n${rendered.join('\n')}`);
 }
 
 export const readFileTool: CovenantTool = {

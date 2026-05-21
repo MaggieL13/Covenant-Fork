@@ -37,12 +37,20 @@ import {
   assertPathInScope,
   CovenantToolPermissionError,
 } from '../path-guard.js';
+import { applyOutputBudget } from '../output-budget.js';
 import { basenameGlobToRegex } from './list_files.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
 const MAX_MATCHES = 200;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const SKIP_DIRS = new Set(['node_modules', '.git']);
+// Per-match line truncation. The file-size skip protects against
+// minified-bundle whole-file blowups, but a single huge LINE inside
+// an otherwise-normal-sized file (e.g. a one-line JSON config that's
+// also 200KB) would still produce a 200KB match. Cap each rendered
+// line so individual matches stay readable AND the total output
+// budget isn't blown by a handful of huge hits. (E3b/2 review catch.)
+const MAX_MATCH_LINE_CHARS = 500;
 
 interface SearchTextArgs {
   pattern: string;
@@ -131,7 +139,12 @@ async function walk(
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       if (pattern.test(lines[i])) {
-        result.matches.push({ file: relPath, lineNo: i + 1, line: lines[i] });
+        // Per-match-line cap — see comment on MAX_MATCH_LINE_CHARS.
+        const line =
+          lines[i].length > MAX_MATCH_LINE_CHARS
+            ? lines[i].slice(0, MAX_MATCH_LINE_CHARS) + '[line truncated]'
+            : lines[i];
+        result.matches.push({ file: relPath, lineNo: i + 1, line });
         if (result.matches.length >= MAX_MATCHES) {
           result.truncated = true;
           return;
@@ -224,7 +237,12 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   }
 
   const suffix = notes.length > 0 ? '\n' + notes.join('\n') : '';
-  return `${header}\n${lines.join('\n')}${suffix}`;
+  // PR E3b/2 review — total-output cap as the last line of defense
+  // for cases that slip past MAX_MATCHES + MAX_MATCH_LINE_CHARS
+  // (e.g. 199 matches × 500 chars + headers + notes happens to be
+  // close to the cap; pathological filename lengths could push it
+  // over).
+  return applyOutputBudget(`${header}\n${lines.join('\n')}${suffix}`);
 }
 
 export const searchTextTool: CovenantTool = {
