@@ -6,6 +6,6 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "scripts": { "clean": "node -e \"const fs=require('fs');['dist','tsconfig.tsbuildinfo'].forEach(p=>{try{fs.rmSync(p,{recursive:true,force:true})}catch{}})\"", "build": "tsc -b --force", "check": "tsc --noEmit" },
+  "scripts": { "clean": "node -e \"const fs=require('fs');['dist','tsconfig.tsbuildinfo'].forEach(p=>{try{fs.rmSync(p,{recursive:true,force:true})}catch{}})\"", "build": "tsc -b --force", "watch": "tsc -b --watch --preserveWatchOutput", "check": "tsc --noEmit" },
   "devDependencies": { "typescript": "^5.7.0" }
 }
