@@ -10,9 +10,10 @@
   ],
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "dev": "npm run dev --workspace=packages/backend",
+    "dev": "npm run build --workspace=packages/shared && concurrently --names \"shared,backend,frontend\" --prefix-colors \"cyan,magenta,green\" --kill-others-on-fail \"npm run watch --workspace=packages/shared\" \"npm run dev --workspace=packages/backend\" \"npm run dev --workspace=packages/frontend\"",
+    "dev:backend": "npm run dev --workspace=packages/backend",
     "dev:frontend": "npm run dev --workspace=packages/frontend",
-    "dev:all": "concurrently \"npm run dev\" \"npm run dev:frontend\"",
+    "dev:shared": "npm run watch --workspace=packages/shared",
     "build": "npm run build --workspace=packages/shared && npm run build --workspace=packages/frontend && npm run build --workspace=packages/backend",
     "start": "npm run start --workspace=packages/backend",
     "check": "npm run check --workspaces --if-present",
