@@ -3,7 +3,11 @@
   "version": "2.1.2",
   "private": true,
   "description": "Relational AI companion framework built on Claude Code Agent SDK",
-  "workspaces": ["packages/shared", "packages/backend", "packages/frontend"],
+  "workspaces": [
+    "packages/shared",
+    "packages/backend",
+    "packages/frontend"
+  ],
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "dev": "npm run dev --workspace=packages/backend",
@@ -22,6 +26,7 @@
   },
   "license": "Apache-2.0",
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "vitest": "^3.0.0"
   },
   "overrides": {
