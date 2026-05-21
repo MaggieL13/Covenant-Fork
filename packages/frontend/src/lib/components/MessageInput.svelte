@@ -1,6 +1,12 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
-  import { findModelByRef } from '@resonant/shared';
+  import {
+    findModelByRef,
+    MAX_IMAGES_PER_MESSAGE,
+    MAX_BINARY_BYTES_PER_IMAGE,
+    MAX_ENCODED_BYTES_PER_TURN,
+    estimateBase64Length,
+  } from '@resonant/shared';
   import { getCompanionName, getConfig } from '$lib/stores/settings.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
   import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
@@ -75,11 +81,67 @@
   let commandRegistry = $derived(getCommandRegistry());
   let commandPaletteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
+  // PR E3a.5 — pre-send image cap accounting.
+  // Numbers come from `@resonant/shared/attachment-caps.ts` so the
+  // pre-send UI hints can never disagree with the backend extractor's
+  // per-image / per-turn budgets. `estimateBase64Length` returns the
+  // exact `ceil(n/3)*4` post-encoding size so the projected total
+  // matches what the backend would actually count.
+  let pendingImages = $derived(
+    pendingAttachments.filter((a) => a.contentType === 'image'),
+  );
+  let pendingImageCount = $derived(pendingImages.length);
+  let pendingEncodedSize = $derived(
+    pendingImages.reduce((sum, a) => sum + estimateBase64Length(a.size), 0),
+  );
+
+  // PR E3a.5/2 review (multi-select race): when a user picks 11 files
+  // at once, the synchronous for-loop in handleFileSelect calls
+  // uploadFile() for each before any of them have appended to
+  // pendingAttachments — every check sees pendingImageCount=0 and all
+  // 11 race past the cap. Track in-flight image uploads so the cap
+  // check uses (pending + in-flight) projected state. Cleared on
+  // success and failure via try/finally.
+  let inFlightImageSizes = $state<number[]>([]);
+  let inFlightImageEncodedSize = $derived(
+    inFlightImageSizes.reduce((sum, size) => sum + estimateBase64Length(size), 0),
+  );
+
+  // Projected = what we'd have if every in-flight upload succeeds.
+  // This is the value the cap checks AND the UI hint read from, so
+  // pressing "select 11 files" makes the hint jump to 11/10 red
+  // immediately instead of crawling up as each upload resolves.
+  let projectedImageCount = $derived(pendingImageCount + inFlightImageSizes.length);
+  let projectedEncodedSize = $derived(pendingEncodedSize + inFlightImageEncodedSize);
+
+  let overImageCountCap = $derived(projectedImageCount > MAX_IMAGES_PER_MESSAGE);
+  let overEncodedSizeCap = $derived(projectedEncodedSize > MAX_ENCODED_BYTES_PER_TURN);
+  let hasImageAttachments = $derived(projectedImageCount > 0);
+  // Surface a softer "approaching the cap" warning at 80% so the user
+  // gets a heads-up before they bump into the wall.
+  let nearImageCountCap = $derived(
+    !overImageCountCap && projectedImageCount >= Math.ceil(MAX_IMAGES_PER_MESSAGE * 0.8),
+  );
+  let nearEncodedSizeCap = $derived(
+    !overEncodedSizeCap && projectedEncodedSize >= MAX_ENCODED_BYTES_PER_TURN * 0.8,
+  );
+
+  // Pretty MB string for the size hint. The cap is 15MB so we never
+  // need more than one decimal of precision.
+  function formatMb(bytes: number): string {
+    return (bytes / 1024 / 1024).toFixed(1);
+  }
+  let projectedEncodedMb = $derived(formatMb(projectedEncodedSize));
+  const ENCODED_CAP_MB = (MAX_ENCODED_BYTES_PER_TURN / 1024 / 1024).toFixed(0);
+  const PER_IMAGE_CAP_MB = (MAX_BINARY_BYTES_PER_IMAGE / 1024 / 1024).toFixed(0);
+
   let canSend = $derived(
-    content.trim().length > 0 ||
-    pendingAttachments.length > 0 ||
-    pendingCanvasRefs.length > 0 ||
-    pendingSticker !== null
+    (content.trim().length > 0 ||
+      pendingAttachments.length > 0 ||
+      pendingCanvasRefs.length > 0 ||
+      pendingSticker !== null) &&
+      !overImageCountCap &&
+      !overEncodedSizeCap,
   );
 
   function autoResize() {
@@ -214,6 +276,26 @@
   }
 
   function handleSend() {
+    // ORDER: cap guards run BEFORE the canSend early-return because
+    // `canSend` is itself false when either image cap is exceeded
+    // (so the send button is disabled). A keyboard-Enter route or
+    // any future programmatic send entry point would otherwise bail
+    // silently at the canSend check, leaving the user with no
+    // feedback about WHY their send didn't go through. Surfacing the
+    // cap error first means Enter behaves the same as a click on the
+    // (visually disabled) button — explicit failure mode rather than
+    // a no-op. (E3a.5/2 Codex review catch.)
+    if (overImageCountCap) {
+      uploadError = `Too many image attachments (${projectedImageCount} / ${MAX_IMAGES_PER_MESSAGE}). Remove some to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+    if (overEncodedSizeCap) {
+      uploadError = `Image attachments total ~${projectedEncodedMb}MB, over the ${ENCODED_CAP_MB}MB per-message cap. Remove an image to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+
     if (!canSend) return;
 
     // Send-time vision guard. Catches the "I attached an image and THEN
@@ -347,8 +429,53 @@
       return;
     }
 
+    // PR E3a.5 — pre-send image caps. Block at the same central
+    // chokepoint so picker/drag-drop/paste all enforce uniformly.
+    // The backend extractor enforces the same numbers as a structural
+    // safety net; surfacing the limit here means the user removes the
+    // offender BEFORE pressing send instead of discovering a silent
+    // drop after the model has already responded.
+    const fileIsImage = isImageFile(file);
+
+    if (fileIsImage) {
+      // Per-image binary cap (Codex E3a.5/2 review catch). A single
+      // 6MB image would pass both the count cap and the encoded
+      // total cap but get silently dropped by the backend extractor —
+      // exactly the silent-drop the UX is meant to prevent.
+      if (file.size > MAX_BINARY_BYTES_PER_IMAGE) {
+        uploadError = `Image "${file.name}" is ${formatMb(file.size)}MB, over the ${PER_IMAGE_CAP_MB}MB per-image cap. Use a smaller image.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
+      // Count + encoded total caps read PROJECTED state (pending +
+      // in-flight). Multi-select fires uploadFile synchronously per
+      // file before any of them resolves, so reading pendingImageCount
+      // alone would let every file in the picker race past the cap.
+      // (Codex E3a.5/2 review — multi-select race.)
+      if (projectedImageCount >= MAX_IMAGES_PER_MESSAGE) {
+        uploadError = `Image limit reached (${MAX_IMAGES_PER_MESSAGE} per message). Remove one to add another.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
+      const projectedAfterThis = projectedEncodedSize + estimateBase64Length(file.size);
+      if (projectedAfterThis > MAX_ENCODED_BYTES_PER_TURN) {
+        uploadError = `Adding this image would push the message past ${ENCODED_CAP_MB}MB encoded (~${formatMb(projectedAfterThis)}MB). Remove an image to add this one.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
+    }
+
     uploading = true;
     uploadError = null;
+
+    // Reserve a slot in the in-flight tracker BEFORE awaiting the
+    // POST so the next synchronous uploadFile() call (e.g. the next
+    // file in handleFileSelect's for-loop) sees this size counted
+    // in projectedImageCount / projectedEncodedSize. Cleared in the
+    // finally below regardless of upload success/failure.
+    if (fileIsImage) {
+      inFlightImageSizes = [...inFlightImageSizes, file.size];
+    }
 
     try {
       const formData = new FormData();
@@ -374,6 +501,18 @@
       }, 5000);
     } finally {
       uploading = false;
+      if (fileIsImage) {
+        // Remove ONE matching size — handles the case where two
+        // identically-sized images upload concurrently (don't drop
+        // both slots from the in-flight tracker).
+        const idx = inFlightImageSizes.indexOf(file.size);
+        if (idx >= 0) {
+          inFlightImageSizes = [
+            ...inFlightImageSizes.slice(0, idx),
+            ...inFlightImageSizes.slice(idx + 1),
+          ];
+        }
+      }
     }
   }
 
@@ -510,6 +649,23 @@
     }}
   />
 
+  {#if hasImageAttachments}
+    <div
+      class="attachment-caps"
+      class:warning={nearImageCountCap || nearEncodedSizeCap}
+      class:over={overImageCountCap || overEncodedSizeCap}
+      aria-live="polite"
+    >
+      <span class:cap-hit={overImageCountCap}>
+        {projectedImageCount} / {MAX_IMAGES_PER_MESSAGE} images
+      </span>
+      <span class="separator">·</span>
+      <span class:cap-hit={overEncodedSizeCap}>
+        ~{projectedEncodedMb}MB / {ENCODED_CAP_MB}MB
+      </span>
+    </div>
+  {/if}
+
   <CanvasRefTray pendingCanvasRefs={pendingCanvasRefs} onremove={removeCanvasRef} />
 
   <ComposerCommandPalette
@@ -606,6 +762,42 @@
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.2);
     border-bottom: none;
+  }
+
+  /* PR E3a.5 — pre-send image cap status. Lives between the
+     AttachmentTray (which shows the pending attachment cards) and
+     the input bar. Three states:
+       - default: subtle muted text, "you're under the caps"
+       - .warning: amber, "you're approaching a cap" (≥80% of either)
+       - .over: red, "you can't send this — fix it"
+     A per-span `.cap-hit` class highlights specifically which cap
+     is the offender when only one is over. */
+  .attachment-caps {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 1rem 0.45rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .attachment-caps .separator {
+    opacity: 0.5;
+  }
+
+  .attachment-caps.warning {
+    color: #d97706;
+  }
+
+  .attachment-caps.over {
+    color: var(--error, #ef4444);
+    font-weight: 500;
+  }
+
+  .attachment-caps .cap-hit {
+    font-weight: 600;
   }
 
   .input-bar {

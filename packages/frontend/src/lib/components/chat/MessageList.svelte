@@ -2,6 +2,13 @@
   import MessageBubble from '$lib/components/MessageBubble.svelte';
   import type { Message, MessageSegment } from '@resonant/shared';
   import { normalizeMessageSegments } from '@resonant/shared';
+  import { getAttachmentWarnings } from '$lib/stores/websocket.svelte';
+
+  // PR E3a.5 — backend image-attachment-drop notices, keyed by the DB
+  // message id that owned the dropped attachment. Reads the
+  // ws-store-backed $state map so warnings render reactively as they
+  // arrive. Empty map (no warnings) is the steady state.
+  let attachmentWarnings = $derived(getAttachmentWarnings());
 
   type ToolEvent = {
     toolId: string;
@@ -148,6 +155,19 @@
             segments={normalizeMessageSegments(message.metadata?.segments)}
             {companionName}
           />
+          {#if attachmentWarnings[message.id]?.length}
+            <div class="attachment-warnings" role="status" aria-live="polite">
+              {#each attachmentWarnings[message.id] as warning (warning.fileId)}
+                <div class="attachment-warning-pill">
+                  <span class="warning-icon" aria-hidden="true">⚠</span>
+                  <span class="warning-text">
+                    <span class="warning-filename">{warning.filename ?? warning.fileId}</span>
+                    <span class="warning-reason">{warning.reason}</span>
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
 
@@ -237,6 +257,54 @@
     overflow-y: auto;
     overflow-x: hidden;
     background: var(--bg-primary);
+  }
+
+  /* PR E3a.5 — attachment_warning pills. Render inline below the
+     message that owned the dropped attachment, so the user sees which
+     image got skipped and why without correlating across the
+     conversation. Amber by design: this is a "you should know" notice,
+     not a "something is broken" error. */
+  .attachment-warnings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0.25rem 0 0.5rem;
+    padding-left: 0.5rem;
+  }
+
+  .attachment-warning-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.65rem;
+    background: rgba(217, 119, 6, 0.08);
+    border: 1px solid rgba(217, 119, 6, 0.25);
+    border-radius: 0.75rem;
+    font-size: 0.75rem;
+    color: #b45309;
+    max-width: fit-content;
+  }
+
+  .attachment-warning-pill .warning-icon {
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+
+  .attachment-warning-pill .warning-text {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+
+  .attachment-warning-pill .warning-filename {
+    font-weight: 600;
+    font-family: var(--font-mono, ui-monospace, monospace);
+  }
+
+  .attachment-warning-pill .warning-reason {
+    opacity: 0.85;
   }
 
   .messages-list {

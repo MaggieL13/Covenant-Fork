@@ -91,7 +91,16 @@ export type ServerMessage =
   | { type: 'tool_progress'; toolId: string; toolName: string; elapsed: number }
   | { type: 'mcp_status_updated'; servers: import('./types.js').McpServerInfo[] }
   | { type: 'rewind_result'; canRewind: boolean; filesChanged?: string[]; insertions?: number; deletions?: number; error?: string }
-  | { type: 'command_result'; name: string; success: boolean; data?: Record<string, unknown>; error?: string; display?: 'toast' | 'panel' | 'silent' };
+  | { type: 'command_result'; name: string; success: boolean; data?: Record<string, unknown>; error?: string; display?: 'toast' | 'panel' | 'silent' }
+  // PR E3a.5 — surfaces a backend-side image attachment drop to the
+  // UI. Fires when the Codex image extractor produces a fallback
+  // notice (per-image cap, per-turn encoded cap, missing file, or
+  // non-image MIME). `messageId` is the DB id of the message that
+  // owned the dropped attachment so the frontend can render the
+  // warning pill inline near that message rather than dumping it
+  // into the latest turn. `filename` is best-effort: set when the
+  // attachment's metadata carried a filename, otherwise undefined.
+  | { type: 'attachment_warning'; messageId: string; fileId: string; filename?: string; reason: string };
 
 // --- Message type guards ---
 

@@ -92,6 +92,10 @@ export interface BuildCodexNormalizedResult {
    *  for diagnostics (already folded into message text where it
    *  matters). */
   fallbackNotices: ImageFallback[];
+  /** Fallback notices for DB rows that belong to the current invocation.
+   *  Use this for user-visible UI warnings so historical drops do not
+   *  get rebroadcast on later turns. */
+  currentTurnFallbackNotices: ImageFallback[];
 }
 
 function formatFallback(notice: ImageFallback): string {
@@ -259,5 +263,10 @@ export function buildCodexNormalizedMessages(
       lastMsg.content + '\n\n' + currentTurnFallbacks.map(formatFallback).join('\n');
   }
 
-  return { messages, appendedSynthetic, fallbackNotices };
+  return {
+    messages,
+    appendedSynthetic,
+    fallbackNotices,
+    currentTurnFallbackNotices: currentTurnFallbacks,
+  };
 }

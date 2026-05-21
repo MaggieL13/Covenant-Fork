@@ -485,6 +485,9 @@ describe('buildCodexNormalizedMessages — fallback annotation', () => {
     const last = result.messages[result.messages.length - 1];
     // Both fallback notices surface in fallbackNotices for diagnostics.
     expect(result.fallbackNotices).toHaveLength(2);
+    // But only current-turn fallbacks should be broadcast or annotated.
+    expect(result.currentTurnFallbackNotices).toHaveLength(1);
+    expect(result.currentTurnFallbackNotices[0].fileId).toBe('new-big');
     // But only the current-turn one is woven into message text.
     expect(last.content).toContain('new.png');
     expect(last.content).not.toContain('old.png');
