@@ -3,6 +3,7 @@
   import {
     findModelByRef,
     MAX_IMAGES_PER_MESSAGE,
+    MAX_BINARY_BYTES_PER_IMAGE,
     MAX_ENCODED_BYTES_PER_TURN,
     estimateBase64Length,
   } from '@resonant/shared';
@@ -112,6 +113,7 @@
   }
   let pendingEncodedMb = $derived(formatMb(pendingEncodedSize));
   const ENCODED_CAP_MB = (MAX_ENCODED_BYTES_PER_TURN / 1024 / 1024).toFixed(0);
+  const PER_IMAGE_CAP_MB = (MAX_BINARY_BYTES_PER_IMAGE / 1024 / 1024).toFixed(0);
 
   let canSend = $derived(
     (content.trim().length > 0 ||
@@ -254,6 +256,26 @@
   }
 
   function handleSend() {
+    // ORDER: cap guards run BEFORE the canSend early-return because
+    // `canSend` is itself false when either image cap is exceeded
+    // (so the send button is disabled). A keyboard-Enter route or
+    // any future programmatic send entry point would otherwise bail
+    // silently at the canSend check, leaving the user with no
+    // feedback about WHY their send didn't go through. Surfacing the
+    // cap error first means Enter behaves the same as a click on the
+    // (visually disabled) button — explicit failure mode rather than
+    // a no-op. (E3a.5/2 Codex review catch.)
+    if (overImageCountCap) {
+      uploadError = `Too many image attachments (${pendingImageCount} / ${MAX_IMAGES_PER_MESSAGE}). Remove some to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+    if (overEncodedSizeCap) {
+      uploadError = `Image attachments total ~${pendingEncodedMb}MB, over the ${ENCODED_CAP_MB}MB per-message cap. Remove an image to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+
     if (!canSend) return;
 
     // Send-time vision guard. Catches the "I attached an image and THEN
@@ -264,22 +286,6 @@
     // model receive an image it'll silently drop.
     if (!activeChatModelHasVision && pendingAttachments.some((a) => a.contentType === 'image')) {
       uploadError = 'Current model does not support image attachments. Remove image attachments or switch to a vision-capable model to send.';
-      setTimeout(() => { uploadError = null; }, 5000);
-      return;
-    }
-
-    // PR E3a.5 — send-time image cap guards. Belt-and-suspenders on
-    // top of uploadFile's preventative checks: `canSend` already goes
-    // false when either cap is exceeded (disabling the button), but
-    // keyboard-Enter routes through here too and a defensive bail with
-    // a clear error beats a silent drop server-side.
-    if (overImageCountCap) {
-      uploadError = `Too many image attachments (${pendingImageCount} / ${MAX_IMAGES_PER_MESSAGE}). Remove some to send.`;
-      setTimeout(() => { uploadError = null; }, 5000);
-      return;
-    }
-    if (overEncodedSizeCap) {
-      uploadError = `Image attachments total ~${pendingEncodedMb}MB, over the ${ENCODED_CAP_MB}MB per-message cap. Remove an image to send.`;
       setTimeout(() => { uploadError = null; }, 5000);
       return;
     }
@@ -410,6 +416,15 @@
     // offender BEFORE pressing send instead of discovering a silent
     // drop after the model has already responded.
     if (isImageFile(file)) {
+      // Per-image binary cap (Codex E3a.5/2 review catch). A single
+      // 6MB image would pass both the count cap and the encoded
+      // total cap but get silently dropped by the backend extractor —
+      // exactly the silent-drop the UX is meant to prevent.
+      if (file.size > MAX_BINARY_BYTES_PER_IMAGE) {
+        uploadError = `Image "${file.name}" is ${formatMb(file.size)}MB, over the ${PER_IMAGE_CAP_MB}MB per-image cap. Use a smaller image.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
       if (pendingImageCount >= MAX_IMAGES_PER_MESSAGE) {
         uploadError = `Image limit reached (${MAX_IMAGES_PER_MESSAGE} per message). Remove one to add another.`;
         setTimeout(() => { uploadError = null; }, 5000);
