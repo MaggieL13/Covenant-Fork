@@ -49,11 +49,12 @@
 
 import { statSync, readFileSync } from 'fs';
 import type { Message } from '@resonant/shared';
+import {
+  MAX_BINARY_BYTES_PER_IMAGE,
+  MAX_ENCODED_BYTES_PER_TURN,
+} from '@resonant/shared';
 import { getFile } from '../files.js';
 import type { NormalizedImage } from './types.js';
-
-const MAX_BINARY_BYTES_PER_IMAGE = 5 * 1024 * 1024;
-const MAX_ENCODED_BYTES_PER_TURN = 15 * 1024 * 1024;
 
 /**
  * One reason-for-skip per file id. Surfaced to the caller so over-cap
