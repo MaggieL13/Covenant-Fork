@@ -81,9 +81,13 @@ export interface CovenantTool {
  * backend process; tools register at startup (manifest flip + bootstrap
  * lives in PR E3b/6) and stay registered for the process lifetime.
  *
- * The registry doesn't enforce policy beyond name uniqueness — safety
- * (path-confinement, output budgets, ceiling iterations) lives in the
- * tools themselves and in the loop driver. Registry is pure catalogue.
+ * The registry enforces two policies at registration time — name
+ * shape (OpenAI-compatible `[a-zA-Z0-9_-]{1,64}`) and uniqueness —
+ * so bad-name / duplicate-bootstrap bugs surface at the registration
+ * call site, not 30 minutes later as opaque 400s from the provider.
+ * Other safety (path-confinement, output budgets, ceiling iterations)
+ * lives in the tools themselves and in the loop driver — the registry
+ * is otherwise pure catalogue.
  */
 /**
  * OpenAI's function-name rule. pi-ai forwards `name` straight into
