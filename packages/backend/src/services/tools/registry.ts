@@ -25,6 +25,8 @@
  * permission policy.
  */
 
+import type { Tool as PiTool } from '@earendil-works/pi-ai';
+
 /**
  * Per-call context passed to a tool's `execute()`. The runtime
  * assembles this fresh for every invocation; tools should not retain
@@ -162,6 +164,33 @@ export class ToolRegistry {
   /** Number of currently-registered tools. Diagnostic. */
   size(): number {
     return this.tools.size;
+  }
+
+  /**
+   * Translate the registered tool set to pi-ai's `Tool` shape for
+   * inclusion in `streamOpenAICodexResponses({ tools })` calls
+   * (PR E3b/3).
+   *
+   * pi-ai's `Tool` is the simplest possible shape — name, description,
+   * parameters — and matches `CovenantTool` minus the `execute()`
+   * method. Parameters is typed as `TSchema` from TypeBox in pi-ai's
+   * types; at runtime it's just a JSON Schema object literal, which
+   * is what `CovenantTool.parameters` carries. We cast through
+   * `unknown` at the type-system boundary to satisfy TypeBox's
+   * branded-type check without dragging the TypeBox dependency into
+   * tool authoring.
+   *
+   * Result order matches `list()` insertion order so the model's
+   * tool-selection prompt sees tools in the same order across
+   * subsequent turns (helps with prompt-cache affinity at the
+   * provider's edge).
+   */
+  toCodexFormat(): PiTool[] {
+    return this.list().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters as unknown as PiTool['parameters'],
+    }));
   }
 }
 

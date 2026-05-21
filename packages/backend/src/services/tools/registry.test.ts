@@ -132,4 +132,45 @@ describe('ToolRegistry', () => {
     expect(result).toBe('ok');
     expect(calls).toEqual([{ args: { x: 1 }, cwd: '/tmp/scope' }]);
   });
+
+  // PR E3b/3 — pi-ai Tool format translation. The registered tool set
+  // gets handed to streamOpenAICodexResponses as-is each turn.
+  describe('toCodexFormat', () => {
+    it('returns an empty array when nothing is registered', () => {
+      expect(registry.toCodexFormat()).toEqual([]);
+    });
+
+    it('maps each registered tool to pi-ai Tool shape (name + description + parameters, no execute)', () => {
+      const parameters = {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false,
+      };
+      registry.register(
+        makeTool('read_file', {
+          description: 'Read a file',
+          parameters,
+        }),
+      );
+
+      const result = registry.toCodexFormat();
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        name: 'read_file',
+        description: 'Read a file',
+        parameters,
+      });
+      // The execute closure shouldn't leak into the pi-ai shape.
+      expect('execute' in result[0]).toBe(false);
+    });
+
+    it('preserves insertion order so prompt-cache stays consistent across turns', () => {
+      registry.register(makeTool('b'));
+      registry.register(makeTool('a'));
+      registry.register(makeTool('c'));
+      const result = registry.toCodexFormat();
+      expect(result.map((t) => t.name)).toEqual(['b', 'a', 'c']);
+    });
+  });
 });
