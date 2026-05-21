@@ -108,11 +108,33 @@ function mapStopReasonForDone(reason: PiStopReason): 'stop' | 'length' | 'tool_c
  * provider takes a top-level `systemPrompt`, not in-band system
  * messages), which is why we filter rather than translate.
  */
-function toPiMessages(messages: NormalizedMessage[]): PiMessage[] {
+export function toPiMessages(messages: NormalizedMessage[]): PiMessage[] {
   const out: PiMessage[] = [];
   for (const m of messages) {
     if (m.role === 'system') continue;  // folded into systemPrompt
     if (m.role === 'user') {
+      // PR E3a — vision: when a user message carries image bytes, emit
+      // pi-ai's mixed-content shape `[{type:'text', text}, ...images]`
+      // instead of the plain-string shorthand. pi-ai's
+      // openai-codex-responses provider converts each `ImageContent`
+      // entry into OpenAI's `input_image` wire shape internally — we
+      // never touch the raw OpenAI vocabulary. Text leads the array so
+      // the model sees the caption before each attached image.
+      if (m.images && m.images.length > 0) {
+        const content: Array<
+          | { type: 'text'; text: string }
+          | { type: 'image'; data: string; mimeType: string }
+        > = [{ type: 'text', text: m.content }];
+        for (const img of m.images) {
+          content.push({ type: 'image', data: img.base64, mimeType: img.mimeType });
+        }
+        out.push({
+          role: 'user',
+          content,
+          timestamp: Date.parse(m.createdAt) || Date.now(),
+        });
+        continue;
+      }
       out.push({
         role: 'user',
         content: m.content,

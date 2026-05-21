@@ -45,15 +45,38 @@ export type RuntimeSystemPrompt =
   | { kind: 'claude-preset'; preset: 'claude_code'; append: string };
 
 /**
+ * Image attachment carried on a `NormalizedMessage`. Raw base64 bytes
+ * (no `data:` prefix) plus MIME type tracked separately — matches
+ * pi-ai's `ImageContent` shape so vision-aware runtimes (Codex via
+ * pi-ai's openai-codex-responses provider) can translate without an
+ * intermediate decode/re-encode cycle. Text-only runtimes (Claude
+ * SDK reads `content` directly) ignore this field.
+ */
+export interface NormalizedImage {
+  /** Raw base64 bytes. No `data:image/...;base64,` prefix. */
+  base64: string;
+  /** MIME type, e.g. `image/png`, `image/jpeg`. */
+  mimeType: string;
+}
+
+/**
  * Minimal normalized message shape used in handoff packets and (later)
  * in conversation history replay for runtimes without native session
  * resume. Intentionally tiny — providers translate to their own
  * native shape inside `runTurn`.
+ *
+ * `images` is optional and only set on user messages that carry image
+ * attachments. Vision-capable runtimes translate to their native
+ * mixed-content shape; text-only runtimes read `content` and ignore
+ * `images`. The string in `content` remains the back-compat text
+ * representation so existing call sites that only read `content`
+ * keep working unchanged.
  */
 export interface NormalizedMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;        // ISO 8601
+  images?: NormalizedImage[];
 }
 
 /**
