@@ -27,6 +27,8 @@ import { DiscordService } from './services/discord/index.js';
 import { TelegramService } from './services/telegram/index.js';
 import { rateLimiter, securityHeaders } from './middleware/security.js';
 import apiRoutes, { initCcRoutes } from './routes/api.js';
+import { toolRegistry } from './services/tools/registry.js';
+import { registerBuiltinTools } from './services/tools/builtin/index.js';
 
 // Load .env from project root (not cwd, which npm workspaces may set to packages/backend)
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +66,14 @@ const db = initDb(DB_PATH);
 deleteExpiredSessions();
 loadVectorCache();
 console.log('Database initialized');
+
+// Register built-in Covenant tools on the singleton ToolRegistry
+// so CodexRuntime's tool-calling loop (PR E3b) can dispatch them.
+// Idempotent at the process level; throws on double-registration so
+// any future bootstrap-order drift surfaces loudly. Built-ins are
+// read-only over `agent.cwd` — read_file, list_files, search_text.
+registerBuiltinTools(toolRegistry);
+console.log(`Tool registry: ${toolRegistry.size()} built-in tool(s) registered`);
 
 // Create Express app
 const app = express();
