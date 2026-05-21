@@ -1494,6 +1494,20 @@ export class AgentService {
             `[Codex] image attachment fallbacks (${codexHistory.fallbackNotices.length}):`,
             codexHistory.fallbackNotices.map((f) => `${f.fileId} -> ${f.reason}`),
           );
+          // PR E3a.5 — surface each fallback to the UI as well as the
+          // log so the user can see WHICH image got dropped and why,
+          // not just discover the silent absence after the model's
+          // response lands. Frontend renders an inline pill near the
+          // message keyed by `ownerMessageId`.
+          for (const notice of codexHistory.fallbackNotices) {
+            registry.broadcast({
+              type: 'attachment_warning',
+              messageId: notice.ownerMessageId,
+              fileId: notice.fileId,
+              filename: notice.filename,
+              reason: notice.reason,
+            });
+          }
         }
 
         // System prompt folds CLAUDE.md + tool rules + orientation into
