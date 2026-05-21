@@ -1499,7 +1499,7 @@ export class AgentService {
           // not just discover the silent absence after the model's
           // response lands. Frontend renders an inline pill near the
           // message keyed by `ownerMessageId`.
-          for (const notice of codexHistory.fallbackNotices) {
+          for (const notice of codexHistory.currentTurnFallbackNotices) {
             registry.broadcast({
               type: 'attachment_warning',
               messageId: notice.ownerMessageId,
