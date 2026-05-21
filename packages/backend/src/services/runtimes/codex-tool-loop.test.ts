@@ -218,12 +218,24 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
     expect(toolResults).toHaveLength(3);
   });
 
-  it('caps parallel calls per iteration at MAX_PARALLEL=5', async () => {
+  it('chunks calls over MAX_PARALLEL into waves but executes ALL of them (no dropped fingers)', async () => {
+    // PR E3b/4 review (Codex P1 catch): the original
+    // slice(0, MAX_PARALLEL) approach dropped calls 6+ silently
+    // — but the assistant message in piMessages still listed all
+    // 7 toolCallIds, so the next pi-ai request would 400 with
+    // "No tool call found for function call output with call_id ..."
+    // (every toolCall in the prior turn must have a matching
+    // toolResult before the next request). Fix: chunk in waves of
+    // MAX_PARALLEL and execute all calls before re-asking the model.
+    let executed = 0;
     const tool: CovenantTool = {
       name: 'work',
       description: 'work',
       parameters: { type: 'object', additionalProperties: true },
-      execute: async () => 'ok',
+      execute: async () => {
+        executed++;
+        return 'ok';
+      },
     };
     registry.register(tool);
 
@@ -236,7 +248,7 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
           toolCallBlock('c3', 'work'),
           toolCallBlock('c4', 'work'),
           toolCallBlock('c5', 'work'),
-          toolCallBlock('c6', 'work'),  // ← over MAX_PARALLEL
+          toolCallBlock('c6', 'work'), // ← would have been dropped pre-fix
           toolCallBlock('c7', 'work'),
         ],
         stopReason: 'toolUse',
@@ -245,8 +257,24 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
     enqueueStream([], fakeAssistantMessage({ stopReason: 'stop' }));
 
     const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
-    const toolStarts = events.filter((e) => e.type === 'tool_start');
-    expect(toolStarts).toHaveLength(5);
+
+    // All 7 tools actually ran.
+    expect(executed).toBe(7);
+    expect(events.filter((e) => e.type === 'tool_start')).toHaveLength(7);
+    expect(events.filter((e) => e.type === 'tool_result')).toHaveLength(7);
+
+    // Protocol invariant: every toolCallId from the prior assistant
+    // message has a matching toolResult in the NEXT stream call's
+    // piMessages. Without this, OpenAI 400s.
+    expect(streamCalls).toHaveLength(2);
+    const nextTurnMessages = streamCalls[1].messages as Array<{
+      role: string;
+      toolCallId?: string;
+    }>;
+    const toolResults = nextTurnMessages.filter((m) => m.role === 'toolResult');
+    expect(toolResults).toHaveLength(7);
+    const resultIds = new Set(toolResults.map((m) => m.toolCallId));
+    expect(resultIds).toEqual(new Set(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']));
   });
 
   it('unknown tool name surfaces as structured tool_result error, loop continues', async () => {
@@ -301,9 +329,12 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
     }
   });
 
-  it('per-result truncation at 50KB applies as safety net when tool exceeds cap', async () => {
-    // Tool returns 60KB — the loop driver's MAX_SINGLE_OUTPUT_BYTES (50KB)
-    // should trim it to ~50KB + truncation suffix.
+  it('per-result truncation at the shared MAX_TOOL_OUTPUT_CHARS cap applies as safety net', async () => {
+    // Tool returns 60KB without self-capping. Loop driver routes
+    // through applyOutputBudget which guarantees the output length
+    // is ≤ MAX_TOOL_OUTPUT_CHARS (50KB chars) exactly. (E3b/4 review
+    // P2: the prior slice + suffix pattern overshot the cap by the
+    // suffix length; applyOutputBudget keeps it strictly inside.)
     registry.register({
       name: 'fat',
       description: 'fat',
@@ -325,8 +356,8 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
     expect(toolResult?.type).toBe('tool_result');
     if (toolResult?.type === 'tool_result') {
       const outputStr = String(toolResult.output);
-      expect(outputStr.length).toBeLessThan(60 * 1024);
-      expect(outputStr).toContain('truncated by loop driver');
+      expect(outputStr.length).toBeLessThanOrEqual(50_000);
+      expect(outputStr).toContain('[tool output truncated');
     }
   });
 
@@ -363,6 +394,52 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
       (e) => e.type === 'error' && /budget exceeded/.test(e.message),
     );
     expect(errEvent).toBeDefined();
+  });
+
+  it('budget tripped mid-chunk emits synthetic skipped results for remaining calls (protocol invariant)', async () => {
+    // PR E3b/4 review P1 follow-up: when the budget trips between
+    // chunks, the remaining calls would otherwise have no
+    // toolResult entries — which would 400 the (unreachable, but
+    // still protocol-correct) next pi-ai request. Verify each call
+    // in `final.content` gets a matching result either real or
+    // synthesized `skipped_budget`.
+    registry.register({
+      name: 'big',
+      description: 'big',
+      parameters: { type: 'object', additionalProperties: true },
+      execute: async () => 'z'.repeat(50 * 1024),
+    });
+
+    // 10 calls. Chunk 1 (5 calls × 50KB = 250KB) trips the 200KB
+    // budget. Remaining 5 should be synthesized as skipped.
+    const calls: ReturnType<typeof toolCallBlock>[] = [];
+    for (let i = 1; i <= 10; i++) calls.push(toolCallBlock(`c${i}`, 'big'));
+    enqueueStream(
+      [],
+      fakeAssistantMessage({ content: calls, stopReason: 'toolUse' }),
+    );
+
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+
+    const toolResults = events.filter((e) => e.type === 'tool_result');
+    expect(toolResults).toHaveLength(10);
+
+    // Calls 1-5 should be the real big outputs; 6-10 should be
+    // structured `skipped_budget` errors.
+    const skipped = toolResults
+      .filter((e) => {
+        if (e.type !== 'tool_result') return false;
+        const parsed = (() => {
+          try { return JSON.parse(String(e.output)); } catch { return null; }
+        })();
+        return parsed?.error?.code === 'skipped_budget';
+      });
+    expect(skipped.length).toBeGreaterThanOrEqual(5);
+
+    // Last events: error + done(length).
+    const last = events[events.length - 1];
+    expect(last.type).toBe('done');
+    if (last.type === 'done') expect(last.finishReason).toBe('length');
   });
 
   it('iteration ceiling at MAX_ITER=20 terminates with ceiling error', async () => {

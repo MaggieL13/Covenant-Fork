@@ -63,6 +63,10 @@ import {
   setProviderSession,
 } from '../db/provider-sessions.js';
 import { toolRegistry } from '../tools/registry.js';
+import {
+  applyOutputBudget,
+  MAX_TOOL_OUTPUT_CHARS,
+} from '../tools/output-budget.js';
 import type {
   AgentRuntime,
   AgentRuntimeEvent,
@@ -486,7 +490,9 @@ export class CodexRuntime implements AgentRuntime {
     const MAX_ITER = 20;
     const MAX_PARALLEL = 5;
     const MAX_OUTPUT_BYTES = 200 * 1024;
-    const MAX_SINGLE_OUTPUT_BYTES = 50 * 1024;
+    // Per-result cap lives in `output-budget.ts` as
+    // MAX_TOOL_OUTPUT_CHARS (50_000), shared with the built-in
+    // tools' self-cap so the same number bounds both surfaces.
     let iteration = 0;
     let totalOutputBytes = 0;
 
@@ -624,7 +630,17 @@ export class CodexRuntime implements AgentRuntime {
           // Normal completion path. Stuck-detection: an empty turn
           // (no text, no tools) AFTER a previous tool iteration is a
           // model bug — terminate rather than loop forever.
-          if (!producedText && iteration > 0) {
+          //
+          // Also check `final.content` for any non-empty text block
+          // (E3b/4 review P3): the stream's `text_delta` events can
+          // miss on transport hiccup or in test fixtures with an
+          // empty event list but a populated final message. The
+          // final message's text content is the authoritative truth
+          // for "did the model actually say something this turn?".
+          const producedTextFromFinal = final.content.some(
+            (c) => c.type === 'text' && c.text.length > 0,
+          );
+          if (!producedText && !producedTextFromFinal && iteration > 0) {
             yield {
               type: 'error',
               message: 'Codex produced an empty turn during tool loop (no text, no tool calls). Terminating.',
@@ -649,85 +665,135 @@ export class CodexRuntime implements AgentRuntime {
           return;
         }
 
-        // Tool dispatch path. Cap parallel calls per iteration.
-        const batch = toolCalls.slice(0, MAX_PARALLEL);
-        if (toolCalls.length > MAX_PARALLEL) {
-          console.warn(
-            `[CodexRuntime] capping ${toolCalls.length} parallel tool calls to ${MAX_PARALLEL}`,
-          );
-        }
+        // Tool dispatch path. PR E3b/4 review (Codex P1 catch):
+        // execute ALL requested tool calls in chunks of MAX_PARALLEL
+        // — never drop calls. Dropping them would push an assistant
+        // message containing N tool calls into piMessages but only
+        // M<N matching ToolResult entries, which the next pi-ai
+        // request rejects with "No tool call found for function call
+        // output with call_id ..." (OpenAI protocol invariant: every
+        // tool call must have a matching tool result before the next
+        // turn). Chunking executes all N in waves of MAX_PARALLEL
+        // bounded concurrency.
+        const executions: Array<{ call: ToolCall; outputText: string; isError: boolean }> = [];
+        let budgetTrippedDuringDispatch = false;
 
-        // (a) tool_start events — emitted from the outer loop BEFORE
-        //     dispatch. Async-generator rule: `yield` cannot live
-        //     inside the Promise.all map callback.
-        for (const call of batch) {
-          yield {
-            type: 'tool_start',
-            id: call.id,
-            name: call.name,
-            input: call.arguments,
-          };
-        }
+        for (let chunkStart = 0; chunkStart < toolCalls.length; chunkStart += MAX_PARALLEL) {
+          const chunk = toolCalls.slice(chunkStart, chunkStart + MAX_PARALLEL);
 
-        // (b) Execute in parallel, collecting plain return values.
-        const executions = await Promise.all(
-          batch.map(async (call) => {
-            try {
-              const tool = this.registry.get(call.name);
-              if (!tool) {
+          // (a) tool_start events — emitted from the outer loop
+          //     BEFORE dispatch (async-gen yield rule: yield can't
+          //     live inside Promise.all's map callback).
+          for (const call of chunk) {
+            yield {
+              type: 'tool_start',
+              id: call.id,
+              name: call.name,
+              input: call.arguments,
+            };
+          }
+
+          // (b) Execute the chunk in parallel, collecting plain values.
+          const chunkResults = await Promise.all(
+            chunk.map(async (call) => {
+              try {
+                const tool = this.registry.get(call.name);
+                if (!tool) {
+                  return {
+                    call,
+                    outputText: JSON.stringify({
+                      error: {
+                        code: 'unknown_tool',
+                        message: `Unknown tool: ${call.name}`,
+                      },
+                    }),
+                    isError: true,
+                  };
+                }
+                // Safety net via applyOutputBudget — tools already
+                // self-cap (E3b/2), but defense-in-depth catches
+                // any future tool that forgot to wrap. Using the
+                // helper guarantees length ≤ MAX_TOOL_OUTPUT_CHARS
+                // exactly (E3b/4 review P2: the old `slice + suffix`
+                // pattern overshot by the suffix length).
+                const raw = await tool.execute(call.arguments, toolCtx);
+                const outputText = applyOutputBudget(raw, MAX_TOOL_OUTPUT_CHARS);
+                return { call, outputText, isError: false };
+              } catch (err) {
                 return {
                   call,
                   outputText: JSON.stringify({
                     error: {
-                      code: 'unknown_tool',
-                      message: `Unknown tool: ${call.name}`,
+                      code: 'tool_threw',
+                      message: err instanceof Error ? err.message : String(err),
                     },
                   }),
                   isError: true,
                 };
               }
-              let outputText = await tool.execute(call.arguments, toolCtx);
-              // Safety net — tools self-cap at 50KB already via
-              // applyOutputBudget, but defense-in-depth catches any
-              // future tool that forgot to wrap. Same cap as
-              // MAX_SINGLE_OUTPUT_BYTES on the loop side.
-              if (outputText.length > MAX_SINGLE_OUTPUT_BYTES) {
-                outputText =
-                  outputText.slice(0, MAX_SINGLE_OUTPUT_BYTES) +
-                  '\n[... truncated by loop driver ...]';
-              }
-              return { call, outputText, isError: false };
-            } catch (err) {
-              return {
+            }),
+          );
+
+          // (c) tool_result events for this chunk, after dispatch.
+          for (const { call, outputText, isError } of chunkResults) {
+            totalOutputBytes += outputText.length;
+            yield {
+              type: 'tool_result',
+              id: call.id,
+              name: call.name,
+              output: outputText,
+              isError,
+            };
+          }
+
+          executions.push(...chunkResults);
+
+          // Mid-chunk budget check. If the total trips while we still
+          // have remaining chunks, mark and break — we'll synthesize
+          // "skipped due to budget" results for the unexecuted calls
+          // below so the next pi-ai request stays protocol-valid
+          // (every toolCallId from final.content gets a matching
+          // toolResult, even when the budget cut us short).
+          if (totalOutputBytes > MAX_OUTPUT_BYTES) {
+            budgetTrippedDuringDispatch = true;
+            // Synthesize skipped-result entries for any remaining
+            // calls beyond the current chunk so piMessages stays
+            // protocol-valid even though we never executed them.
+            const dispatchedIds = new Set(executions.map((e) => e.call.id));
+            for (const call of toolCalls) {
+              if (dispatchedIds.has(call.id)) continue;
+              const skipped = {
                 call,
                 outputText: JSON.stringify({
                   error: {
-                    code: 'tool_threw',
-                    message: err instanceof Error ? err.message : String(err),
+                    code: 'skipped_budget',
+                    message: 'Tool call skipped — turn output budget exceeded before this call ran.',
                   },
                 }),
                 isError: true,
               };
+              executions.push(skipped);
+              yield {
+                type: 'tool_result',
+                id: skipped.call.id,
+                name: skipped.call.name,
+                output: skipped.outputText,
+                isError: true,
+              };
             }
-          }),
-        );
+            break;
+          }
 
-        // (c) tool_result events from the outer loop after dispatch.
-        for (const { call, outputText, isError } of executions) {
-          totalOutputBytes += outputText.length;
-          yield {
-            type: 'tool_result',
-            id: call.id,
-            name: call.name,
-            output: outputText,
-            isError,
-          };
+          // Abort signal check between chunks — same idea, but we
+          // bail without synthesizing skipped results because the
+          // whole turn ends with done(aborted) below.
+          if (runtimeController.signal.aborted) break;
         }
 
-        // (d) Append pi-ai ToolResultMessage entries to the growing
-        //     context for the next iteration. NOT raw OpenAI
-        //     function_call_output — pi-ai's openai-codex-responses
-        //     provider converts to the wire shape internally.
+        // (d) Append pi-ai ToolResultMessage entries for EVERY dispatched
+        //     or synthesized result. The set of toolCallIds in
+        //     piMessages now exactly matches the set in final.content
+        //     — protocol invariant satisfied for the next pi-ai turn.
         for (const { call, outputText, isError } of executions) {
           piMessages.push({
             role: 'toolResult',
@@ -739,7 +805,7 @@ export class CodexRuntime implements AgentRuntime {
           });
         }
 
-        if (totalOutputBytes > MAX_OUTPUT_BYTES) {
+        if (budgetTrippedDuringDispatch || totalOutputBytes > MAX_OUTPUT_BYTES) {
           yield {
             type: 'error',
             message: `Codex tool output budget exceeded (${totalOutputBytes} / ${MAX_OUTPUT_BYTES} bytes). Ending turn.`,
