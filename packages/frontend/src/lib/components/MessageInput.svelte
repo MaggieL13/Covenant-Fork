@@ -1,6 +1,11 @@
 <script lang="ts">
   import type { Message, CommandRegistryEntry, Sticker } from '@resonant/shared';
-  import { findModelByRef } from '@resonant/shared';
+  import {
+    findModelByRef,
+    MAX_IMAGES_PER_MESSAGE,
+    MAX_ENCODED_BYTES_PER_TURN,
+    estimateBase64Length,
+  } from '@resonant/shared';
   import { getCompanionName, getConfig } from '$lib/stores/settings.svelte';
   import { getCommandRegistry, sendCommand, send } from '$lib/stores/websocket.svelte';
   import { getStickerPacks, getAllStickers } from '$lib/stores/stickers.svelte';
@@ -75,11 +80,46 @@
   let commandRegistry = $derived(getCommandRegistry());
   let commandPaletteApi = $state<{ handleKey: (event: KeyboardEvent) => boolean } | null>(null);
 
+  // PR E3a.5 — pre-send image cap accounting.
+  // Numbers come from `@resonant/shared/attachment-caps.ts` so the
+  // pre-send UI hints can never disagree with the backend extractor's
+  // per-image / per-turn budgets. `estimateBase64Length` returns the
+  // exact `ceil(n/3)*4` post-encoding size so the projected total
+  // matches what the backend would actually count.
+  let pendingImages = $derived(
+    pendingAttachments.filter((a) => a.contentType === 'image'),
+  );
+  let pendingImageCount = $derived(pendingImages.length);
+  let pendingEncodedSize = $derived(
+    pendingImages.reduce((sum, a) => sum + estimateBase64Length(a.size), 0),
+  );
+  let overImageCountCap = $derived(pendingImageCount > MAX_IMAGES_PER_MESSAGE);
+  let overEncodedSizeCap = $derived(pendingEncodedSize > MAX_ENCODED_BYTES_PER_TURN);
+  let hasImageAttachments = $derived(pendingImageCount > 0);
+  // Surface a softer "approaching the cap" warning at 80% so the user
+  // gets a heads-up before they bump into the wall.
+  let nearImageCountCap = $derived(
+    !overImageCountCap && pendingImageCount >= Math.ceil(MAX_IMAGES_PER_MESSAGE * 0.8),
+  );
+  let nearEncodedSizeCap = $derived(
+    !overEncodedSizeCap && pendingEncodedSize >= MAX_ENCODED_BYTES_PER_TURN * 0.8,
+  );
+
+  // Pretty MB string for the size hint. The cap is 15MB so we never
+  // need more than one decimal of precision.
+  function formatMb(bytes: number): string {
+    return (bytes / 1024 / 1024).toFixed(1);
+  }
+  let pendingEncodedMb = $derived(formatMb(pendingEncodedSize));
+  const ENCODED_CAP_MB = (MAX_ENCODED_BYTES_PER_TURN / 1024 / 1024).toFixed(0);
+
   let canSend = $derived(
-    content.trim().length > 0 ||
-    pendingAttachments.length > 0 ||
-    pendingCanvasRefs.length > 0 ||
-    pendingSticker !== null
+    (content.trim().length > 0 ||
+      pendingAttachments.length > 0 ||
+      pendingCanvasRefs.length > 0 ||
+      pendingSticker !== null) &&
+      !overImageCountCap &&
+      !overEncodedSizeCap,
   );
 
   function autoResize() {
@@ -228,6 +268,22 @@
       return;
     }
 
+    // PR E3a.5 — send-time image cap guards. Belt-and-suspenders on
+    // top of uploadFile's preventative checks: `canSend` already goes
+    // false when either cap is exceeded (disabling the button), but
+    // keyboard-Enter routes through here too and a defensive bail with
+    // a clear error beats a silent drop server-side.
+    if (overImageCountCap) {
+      uploadError = `Too many image attachments (${pendingImageCount} / ${MAX_IMAGES_PER_MESSAGE}). Remove some to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+    if (overEncodedSizeCap) {
+      uploadError = `Image attachments total ~${pendingEncodedMb}MB, over the ${ENCODED_CAP_MB}MB per-message cap. Remove an image to send.`;
+      setTimeout(() => { uploadError = null; }, 5000);
+      return;
+    }
+
     const trimmed = content.trim();
 
     // ORDER: slash-command routing must finish before regular send logic so command text does not leak into the normal message path.
@@ -345,6 +401,26 @@
       uploadError = 'Current model does not support image attachments. Switch to a vision-capable model to attach images.';
       setTimeout(() => { uploadError = null; }, 5000);
       return;
+    }
+
+    // PR E3a.5 — pre-send image caps. Block at the same central
+    // chokepoint so picker/drag-drop/paste all enforce uniformly.
+    // The backend extractor enforces the same numbers as a structural
+    // safety net; surfacing the limit here means the user removes the
+    // offender BEFORE pressing send instead of discovering a silent
+    // drop after the model has already responded.
+    if (isImageFile(file)) {
+      if (pendingImageCount >= MAX_IMAGES_PER_MESSAGE) {
+        uploadError = `Image limit reached (${MAX_IMAGES_PER_MESSAGE} per message). Remove one to add another.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
+      const projectedEncoded = pendingEncodedSize + estimateBase64Length(file.size);
+      if (projectedEncoded > MAX_ENCODED_BYTES_PER_TURN) {
+        uploadError = `Adding this image would push the message past ${ENCODED_CAP_MB}MB encoded (~${formatMb(projectedEncoded)}MB). Remove an image to add this one.`;
+        setTimeout(() => { uploadError = null; }, 5000);
+        return;
+      }
     }
 
     uploading = true;
@@ -510,6 +586,23 @@
     }}
   />
 
+  {#if hasImageAttachments}
+    <div
+      class="attachment-caps"
+      class:warning={nearImageCountCap || nearEncodedSizeCap}
+      class:over={overImageCountCap || overEncodedSizeCap}
+      aria-live="polite"
+    >
+      <span class:cap-hit={overImageCountCap}>
+        {pendingImageCount} / {MAX_IMAGES_PER_MESSAGE} images
+      </span>
+      <span class="separator">·</span>
+      <span class:cap-hit={overEncodedSizeCap}>
+        ~{pendingEncodedMb}MB / {ENCODED_CAP_MB}MB
+      </span>
+    </div>
+  {/if}
+
   <CanvasRefTray pendingCanvasRefs={pendingCanvasRefs} onremove={removeCanvasRef} />
 
   <ComposerCommandPalette
@@ -606,6 +699,42 @@
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.2);
     border-bottom: none;
+  }
+
+  /* PR E3a.5 — pre-send image cap status. Lives between the
+     AttachmentTray (which shows the pending attachment cards) and
+     the input bar. Three states:
+       - default: subtle muted text, "you're under the caps"
+       - .warning: amber, "you're approaching a cap" (≥80% of either)
+       - .over: red, "you can't send this — fix it"
+     A per-span `.cap-hit` class highlights specifically which cap
+     is the offender when only one is over. */
+  .attachment-caps {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 1rem 0.45rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .attachment-caps .separator {
+    opacity: 0.5;
+  }
+
+  .attachment-caps.warning {
+    color: #d97706;
+  }
+
+  .attachment-caps.over {
+    color: var(--error, #ef4444);
+    font-weight: 500;
+  }
+
+  .attachment-caps .cap-hit {
+    font-weight: 600;
   }
 
   .input-bar {
