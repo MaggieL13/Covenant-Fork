@@ -316,8 +316,10 @@ describe('findModelByRef', () => {
     expect(byBare?.provider).toBe('openai-codex');
     expect(byBare?.ref).toBe('openai-codex/gpt-5.5');
     expect(byCanonical).toEqual(byBare);
-    // T18 manifest fix — Codex vision is false until E3a wires image bytes.
-    expect(byCanonical?.capabilities.vision).toBe(false);
+    // PR E3a — vision flipped to true after image bytes wire through
+    // pi-ai end-to-end (NormalizedMessage.images +
+    // buildCodexNormalizedMessages + toPiMessages's ImageContent shape).
+    expect(byCanonical?.capabilities.vision).toBe(true);
   });
 
   it('returns undefined for unknown model ids', () => {

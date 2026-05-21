@@ -164,56 +164,51 @@ function claudeEntry(
 }
 
 // ---------------------------------------------------------------------------
-// Codex (ChatGPT OAuth) preview entries — PR E0
+// Codex (ChatGPT OAuth) entries
 // ---------------------------------------------------------------------------
 //
-// These are **preview/scaffold entries** that surface Codex models in the
-// Settings + chat-header dropdowns so users can see the multi-provider
-// architecture has landed. **Selecting one today produces the existing
-// friendly error** from `resolveConfiguredRuntime` ("requires the codex
-// runtime, which is not wired up yet") — there is no CodexRuntime
-// implementation, no OAuth flow, no actual ChatGPT request. PR E proper
-// (next) lands the runtime + auth + event-translation work that makes
-// these entries usable.
+// Live as of PR E2 (CodexRuntime + dispatcher branch) + PR E3a (vision).
+// Selecting a Codex entry from Settings or the chat-header dropdown runs
+// a real turn through `CodexRuntime` via pi-ai's
+// `streamOpenAICodexResponses`, with OAuth credentials managed by
+// `services/auth/codex-oauth.ts`.
 //
-// Capability profile reflects what Codex via the responses API actually
-// supports / will support once wired:
-//  - tools: false  — MCP-to-OpenAI tool-schema bridge is a separate PR
-//  - vision: true  — gpt-5 supports image inputs natively
+// Capability profile:
+//  - tools: false — Covenant-owned tool-calling loop is PR E3b (deferred
+//    until live smoke proves E3a's vision path)
+//  - vision: true — PR E3a wires NormalizedMessage image bytes through
+//    `buildCodexNormalizedMessages` + `toPiMessages` into pi-ai's
+//    ImageContent shape. UI capability gate stays defensive (file
+//    picker, uploadFile, send-time guard all check this flag).
 //  - reasoning: true for o-series, false for chat/instruct models
-//  - mcp: false  — Codex has no MCP equivalent
-//  - sessionResume: true — Codex maintains a conversation_id per
-//    response chain (will be persisted in `thread_provider_sessions`)
+//  - mcp: false — Codex has no MCP equivalent (E3c may bridge Covenant's
+//    MCP servers once E3b's tool loop is proven)
+//  - sessionResume: true — pi-ai's openai-codex-responses provider is
+//    stateless, but we persist `responseId` in
+//    `thread_provider_sessions` for prompt-cache affinity hints
 //  - fileCheckpointing: false — Claude-SDK-specific
 //
 // Tier hints: interactive / autonomous / memory.
 // NOT pulse — pulse needs literal `PULSE_OK` reliability across cycles;
-// Codex is new + has different output conventions, Haiku stays the pulse
-// default. Users can override per Settings if they really want.
+// Codex has different output conventions, Haiku stays the pulse default.
+// Users can override per Settings if they really want.
 //
 // Auth: `codex-oauth` — runtime-health card surfaces "Logged in" /
-// "Login required" once PR E adds the auth state machine.
-//
-// Exact model list will be refined when PR E runtime model-discovery
-// lands; these entries are a curated starting set.
+// "Login required" via the PR E1 auth state machine.
 
 const CODEX_AUTH: ModelAuth = { type: 'codex-oauth' };
 
 const CODEX_CHAT_CAPABILITIES: ModelCapabilities = {
   tools: false,
-  // Forward-looking GPT-5.x models DO support vision at the API level,
-  // but CodexRuntime today does not pass image bytes through pi-ai — it
-  // only sends the message text plus attachment filenames. Until E3a
-  // lands (NormalizedMessage carries image content + CodexRuntime
-  // converts it into pi-ai's ImageContent), the honest current state is
-  // `vision: false` so the UI capability gate actually fires:
-  //   - file picker drops image/*
-  //   - paste / drag-drop / programmatic uploadFile reject images
-  //   - send-time guard catches the model-swap race
-  // Flip this back to true when E3a wires the runtime end-to-end and
-  // a smoke confirms a real image round-trip. See lab-findings #4 →
-  // per-provider-rendering-spec D4 → T18 review (2026-05-19).
-  vision: false,
+  // PR E3a — vision wired end-to-end. NormalizedMessage carries
+  // `images?: NormalizedImage[]`; `buildCodexNormalizedMessages`
+  // extracts image bytes from Covenant's dual-shape attachment storage
+  // (batched-upload parent/child + Telegram single-message photoFileId);
+  // `toPiMessages` emits pi-ai's mixed-content shape
+  // `[{type:'text'}, {type:'image', data, mimeType}, ...]` which pi-ai
+  // converts to OpenAI's `input_image` wire form internally.
+  // See shared/codex-tools-vision-spec-2026-05-18.md (PR E3a).
+  vision: true,
   reasoning: false,
   mcp: false,
   sessionResume: true,
@@ -267,13 +262,10 @@ export const MODELS: readonly ModelEntry[] = [
   claudeEntry('sonnet', 'Sonnet (latest, auto-updates)', ['interactive', 'autonomous', 'memory']),
   claudeEntry('haiku', 'Haiku (latest, auto-updates)', ['interactive', 'autonomous', 'pulse', 'memory']),
 
-  // Codex (ChatGPT OAuth) — PREVIEW entries. Selecting any of these
-  // today produces a friendly "codex runtime not wired up yet" error
-  // from `resolveConfiguredRuntime`. PR E lands the runtime.
-  // PR E2 (post-review): ids match the current Codex UI / pi-ai's
-  // live registry — not a stale subset. Codex itself surfaces 5.5 /
-  // 5.4 / 5.3-codex / 5.2 as its current chat tier, so showing the
-  // older 5.1 entries as the primary picker would be confusing.
+  // Codex (ChatGPT OAuth) entries. Live runtime since PR E2; vision
+  // wired in PR E3a. Ids match the current Codex UI / pi-ai's live
+  // registry. Codex itself surfaces 5.5 / 5.4 / 5.3-codex / 5.2 as its
+  // current chat tier.
   //
   // Older ids (gpt-5.1, gpt-5.1-codex-mini) stay as hidden migration
   // aliases in LEGACY_BARE_ID_ALIASES below — anyone who configured
