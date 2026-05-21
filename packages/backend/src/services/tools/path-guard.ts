@@ -84,15 +84,36 @@ export async function assertPathInScope(
   // against its canonical target, not the input string.
   const resolvedScope = await realpath(scopeRoot);
 
-  // resolve() turns relative `target` into absolute against
-  // resolvedScope. Absolute `target` is passed through unchanged.
-  // Then realpath unwinds any symlinks along the path.
-  const resolvedTarget = await realpath(resolve(resolvedScope, target));
+  // STEP 1 — Lexical pre-check (no fs touch at the target).
+  // `path.resolve` handles `..` traversal and absolute-path passthrough
+  // without touching the filesystem. If the lexical result is clearly
+  // outside the resolved scope, throw immediately — this short-circuits
+  // before `realpath(target)` would otherwise produce a misleading
+  // ENOENT for non-existent files in out-of-scope directories
+  // (e.g. `../does-not-exist.txt` would surface as `not_found` rather
+  // than the actual `permission_denied` truth). Without this step,
+  // a tool can't distinguish "file missing inside scope" (legitimate
+  // ENOENT to surface to the model) from "permission boundary
+  // violation" (the path is out of scope; should surface as the
+  // permission error class).
+  // (E3b/2 review catch — caught by the read_file ../outside.txt test.)
+  const lexicalTarget = resolve(resolvedScope, target);
+  if (
+    lexicalTarget !== resolvedScope &&
+    !lexicalTarget.startsWith(resolvedScope + sep)
+  ) {
+    throw new CovenantToolPermissionError(
+      `Path "${target}" escapes the tool scope`,
+    );
+  }
 
-  // Equality is allowed (the scope root itself), prefix-with-separator
-  // means proper descendant. Without the separator check, a sibling
-  // directory whose name shares a prefix (e.g. `/scope-evil` against
-  // `/scope`) would falsely match.
+  // STEP 2 — Realpath unwind. Symlinks INSIDE the scope might still
+  // point to files outside it — the whole reason we use realpath
+  // here instead of relying on the lexical check alone. Realpath
+  // resolves the full chain, then we re-verify the resolved location
+  // is still in scope.
+  const resolvedTarget = await realpath(lexicalTarget);
+
   if (
     resolvedTarget !== resolvedScope &&
     !resolvedTarget.startsWith(resolvedScope + sep)
