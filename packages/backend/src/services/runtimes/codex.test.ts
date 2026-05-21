@@ -208,16 +208,35 @@ describe('translatePiEvent — pi-ai → AgentRuntimeEvent', () => {
     expect(translated).toEqual({ type: 'thinking_delta', text: 'reasoning...' });
   });
 
-  it('surfaces unexpected tool events as provider_diagnostic (E2 ships no tools)', () => {
-    const translated = translatePiEvent({
-      type: 'toolcall_start',
-      contentIndex: 0,
-      partial: fakePartial,
-    });
-    expect(translated?.type).toBe('provider_diagnostic');
-    if (translated?.type === 'provider_diagnostic') {
-      expect(translated.code).toBe('unexpected_tool_event');
-    }
+  it('drops streaming tool events (loop driver dispatches from final.content, not from these)', () => {
+    // PR E3b: tool calls are sourced from `final.content`'s ToolCall
+    // blocks as the authoritative list. The streaming events are
+    // best-effort UI surfaces and can drop on transport hiccup;
+    // surfacing them as diagnostics or tool_start shells here would
+    // duplicate what the outer loop emits before dispatch.
+    expect(
+      translatePiEvent({
+        type: 'toolcall_start',
+        contentIndex: 0,
+        partial: fakePartial,
+      }),
+    ).toBeNull();
+    expect(
+      translatePiEvent({
+        type: 'toolcall_delta',
+        contentIndex: 0,
+        delta: { name: 'read_file' },
+        partial: fakePartial,
+      } as unknown as AssistantMessageEvent),
+    ).toBeNull();
+    expect(
+      translatePiEvent({
+        type: 'toolcall_end',
+        contentIndex: 0,
+        content: { type: 'toolCall', id: 't1', name: 'read_file', arguments: {} },
+        partial: fakePartial,
+      } as unknown as AssistantMessageEvent),
+    ).toBeNull();
   });
 
   it('drops the streaming done event (final usage/sessionId comes via stream.result() in runTurn)', () => {

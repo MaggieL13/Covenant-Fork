@@ -44,7 +44,15 @@
  */
 
 import { streamOpenAICodexResponses } from '@earendil-works/pi-ai/openai-codex-responses';
-import { getModel, type Message as PiMessage, type AssistantMessageEvent, type StopReason as PiStopReason, type Model } from '@earendil-works/pi-ai';
+import {
+  getModel,
+  type Message as PiMessage,
+  type AssistantMessageEvent,
+  type AssistantMessage,
+  type StopReason as PiStopReason,
+  type Model,
+  type ToolCall,
+} from '@earendil-works/pi-ai';
 import type { ModelRef, ProviderId, RuntimeId } from '@resonant/shared';
 import {
   getCodexAccessToken,
@@ -54,6 +62,7 @@ import {
   getProviderSession,
   setProviderSession,
 } from '../db/provider-sessions.js';
+import { toolRegistry } from '../tools/registry.js';
 import type {
   AgentRuntime,
   AgentRuntimeEvent,
@@ -334,6 +343,21 @@ export class CodexRuntime implements AgentRuntime {
    */
   private activeAbortController: AbortController | null = null;
 
+  /**
+   * Tool registry the loop driver consults for available tools +
+   * dispatch. Defaults to the module-level `toolRegistry` singleton in
+   * production; tests inject their own `ToolRegistry` instance for
+   * isolation (matching the DI pattern used for sessions / onNativeEvent
+   * in the lab branch).
+   */
+  private readonly registry: import('../tools/registry.js').ToolRegistry;
+
+  constructor(opts: {
+    registry?: import('../tools/registry.js').ToolRegistry;
+  } = {}) {
+    this.registry = opts.registry ?? toolRegistry;
+  }
+
   resumeSessionId(thread: ThreadHandle, modelRef: ModelRef): string | undefined {
     const row = getProviderSession({
       threadId: thread.id,
@@ -428,12 +452,6 @@ export class CodexRuntime implements AgentRuntime {
         })()
       : '';
 
-    const context = {
-      systemPrompt: handoffNote + systemText,
-      messages: toPiMessages(input.messages),
-      tools: undefined,  // E2: no tool support for Codex
-    };
-
     // Hook the runtime's abort controller to the input's abort signal.
     // Both can fire — `input.abortSignal` is wired to the per-turn
     // timeout + the user's stop button; `this.activeAbortController` is
@@ -454,143 +472,301 @@ export class CodexRuntime implements AgentRuntime {
     const priorResponseId = input.sessionId
       ?? this.resumeSessionId(input.thread, input.modelRef);
 
-    console.log(
-      `[CodexRuntime] turn start: model=${input.modelRef.model}, ` +
-      `messages=${context.messages.length}, ` +
-      `effort=${reasoningEffort ?? 'default'}, ` +
-      `cacheKey=${priorResponseId ?? 'fresh'}`,
-    );
+    // PR E3b — tool-calling loop state. The loop iterates per-turn
+    // refresh of pi-ai's `messages` array. Each iteration appends the
+    // assistant's reply + any tool results so the next request shows
+    // the model what it just said and the tool outputs it requested.
+    const piMessages: PiMessage[] = toPiMessages(input.messages);
+    const toolList = this.registry.toCodexFormat();
+    const hasTools = toolList.length > 0;
+    const fullSystemPrompt = handoffNote + systemText;
+    const toolCtx = { scopeRoot: input.cwd ?? '.', abortSignal: runtimeController.signal };
 
-    // Kick off the stream. pi-ai's StreamFunction returns an
-    // AssistantMessageEventStream synchronously; iteration awaits each
-    // event. Errors during request setup are thrown synchronously here;
-    // errors mid-stream surface as `{ type: 'error' }` events.
-    let stream;
+    // Safety caps for the loop. Numbers per the spec §4 (PR E3b/4).
+    const MAX_ITER = 20;
+    const MAX_PARALLEL = 5;
+    const MAX_OUTPUT_BYTES = 200 * 1024;
+    const MAX_SINGLE_OUTPUT_BYTES = 50 * 1024;
+    let iteration = 0;
+    let totalOutputBytes = 0;
+
     try {
-      stream = streamOpenAICodexResponses(piModel, context, {
-        apiKey: accessToken,
-        signal: runtimeController.signal,
-        sessionId: priorResponseId,
-        reasoningEffort,
-        reasoningSummary: 'auto',
-      });
-    } catch (err) {
-      input.abortSignal?.removeEventListener('abort', inputAbortHandler);
-      const msg = err instanceof Error ? err.message : String(err);
-      // Auth failures during request setup (rare — token already
-      // validated by getCodexAccessToken's refresh) get the
-      // auth_required treatment.
-      if (/401|unauthor/i.test(msg)) {
-        yield {
-          type: 'auth_required',
-          provider: this.providerId,
-          message: `Codex auth rejected: ${msg}. Log in again via Settings.`,
-        };
-      } else {
-        yield { type: 'error', message: msg, recoverable: false };
-      }
-      yield { type: 'done', finishReason: 'error' };
-      return;
-    }
+      while (iteration < MAX_ITER) {
+        console.log(
+          `[CodexRuntime] turn ${iteration === 0 ? 'start' : `iter ${iteration}`}: ` +
+          `model=${input.modelRef.model}, messages=${piMessages.length}, ` +
+          `effort=${reasoningEffort ?? 'default'}, ` +
+          `cacheKey=${priorResponseId ?? 'fresh'}, ` +
+          `tools=${hasTools ? toolList.length : 0}`,
+        );
 
-    // Stream consumer — translate each pi-ai event into our normalized
-    // shape. text_delta events pass through 1:1 (pi-ai gives true
-    // deltas already), but thinking_* events get BUFFERED here:
-    // pi-ai sends one thinking_delta per token, which would render as
-    // ~hundreds of micro-blocks in the UI (one card per word). We
-    // accumulate inside a thinking_start/thinking_end pair and emit a
-    // single consolidated thinking_delta when the block closes — that
-    // gives one card per logical reasoning chunk, matching the Claude
-    // path's per-block shape that the UI was tuned for.
-    let thinkingBuffer: string | null = null;
-    let debugDeltaBatch: CodexDebugDeltaBatch | null = null;
-    try {
-      for await (const event of stream) {
-        debugDeltaBatch = logCodexPiEvent(event, debugDeltaBatch);
+        // Kick off the per-iteration stream. pi-ai's StreamFunction
+        // returns an AssistantMessageEventStream synchronously;
+        // iteration awaits each event. Errors during request setup
+        // throw synchronously; errors mid-stream surface inside the
+        // stream's done event.
+        let stream;
+        try {
+          stream = streamOpenAICodexResponses(piModel, {
+            systemPrompt: fullSystemPrompt,
+            messages: piMessages,
+            tools: hasTools ? toolList : undefined,
+          }, {
+            apiKey: accessToken,
+            signal: runtimeController.signal,
+            sessionId: priorResponseId,
+            reasoningEffort,
+            reasoningSummary: 'auto',
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/401|unauthor/i.test(msg)) {
+            yield {
+              type: 'auth_required',
+              provider: this.providerId,
+              message: `Codex auth rejected: ${msg}. Log in again via Settings.`,
+            };
+          } else {
+            yield { type: 'error', message: msg, recoverable: false };
+          }
+          yield { type: 'done', finishReason: 'error' };
+          return;
+        }
 
-        // Per-block thinking buffering (Codex-specific; pure passthrough
-        // would flood the UI with single-token cards).
-        if (event.type === 'thinking_start') {
-          thinkingBuffer = '';
-          continue;
-        }
-        if (event.type === 'thinking_delta' && thinkingBuffer !== null) {
-          thinkingBuffer += event.delta;
-          continue;
-        }
-        if (event.type === 'thinking_end') {
+        // Stream consumer — same per-iteration logic as the pre-E3b
+        // chat-only path. text_delta passes through; thinking_* gets
+        // buffered into one consolidated chunk per block so the UI
+        // sees one reasoning card per logical chunk rather than one
+        // card per token. Tool events from the stream are silenced
+        // (see translatePiEvent's toolcall_* case) — tool dispatch
+        // sources from `final.content` after the stream drains.
+        let thinkingBuffer: string | null = null;
+        let producedText = false;
+        let debugDeltaBatch: CodexDebugDeltaBatch | null = null;
+        let final: AssistantMessage;
+        try {
+          for await (const event of stream) {
+            debugDeltaBatch = logCodexPiEvent(event, debugDeltaBatch);
+
+            if (event.type === 'text_delta') producedText = true;
+
+            if (event.type === 'thinking_start') {
+              thinkingBuffer = '';
+              continue;
+            }
+            if (event.type === 'thinking_delta' && thinkingBuffer !== null) {
+              thinkingBuffer += event.delta;
+              continue;
+            }
+            if (event.type === 'thinking_end') {
+              if (thinkingBuffer && thinkingBuffer.length > 0) {
+                yield { type: 'thinking_delta', text: thinkingBuffer };
+              }
+              thinkingBuffer = null;
+              continue;
+            }
+
+            const translated = translatePiEvent(event);
+            if (translated) yield translated;
+          }
+          flushCodexPiEventDebugBatch(debugDeltaBatch);
+          debugDeltaBatch = null;
+          // Defensive flush: stream ended mid-thinking-block (rare).
           if (thinkingBuffer && thinkingBuffer.length > 0) {
             yield { type: 'thinking_delta', text: thinkingBuffer };
           }
-          thinkingBuffer = null;
-          continue;
+
+          final = await stream.result();
+          logCodexFinalMessage(final);
+        } catch (err) {
+          flushCodexPiEventDebugBatch(debugDeltaBatch);
+          debugDeltaBatch = null;
+          const msg = err instanceof Error ? err.message : String(err);
+          if (runtimeController.signal.aborted) {
+            yield { type: 'done', finishReason: 'aborted' };
+            return;
+          }
+          if (/401|unauthor/i.test(msg)) {
+            yield {
+              type: 'auth_required',
+              provider: this.providerId,
+              message: `Codex auth expired during request: ${msg}. Log in again via Settings.`,
+            };
+            yield { type: 'done', finishReason: 'error' };
+            return;
+          }
+          if (/429|rate.?limit/i.test(msg)) {
+            const retryAfterMs = parseRetryAfter(msg);
+            yield { type: 'rate_limit', retryAfterMs };
+            yield { type: 'done', finishReason: 'error' };
+            return;
+          }
+          yield { type: 'error', message: msg, recoverable: false };
+          yield { type: 'done', finishReason: 'error' };
+          return;
         }
 
-        const translated = translatePiEvent(event);
-        if (translated) {
-          yield translated;
+        // SOURCE OF TRUTH for tool calls: the captured AssistantMessage's
+        // ToolCall content blocks. The streaming toolcall_* events
+        // were silenced above — those are best-effort UI surfaces and
+        // can drop on transport hiccup. `final.content` is what pi-ai
+        // committed as the model's output for this turn.
+        const toolCalls: ToolCall[] = final.content.filter(
+          (c): c is ToolCall => c.type === 'toolCall',
+        );
+
+        // Capture the assistant turn in the growing context so the next
+        // iteration's request shows the model what it just said + what
+        // tools it called.
+        piMessages.push(final);
+
+        if (toolCalls.length === 0) {
+          // Normal completion path. Stuck-detection: an empty turn
+          // (no text, no tools) AFTER a previous tool iteration is a
+          // model bug — terminate rather than loop forever.
+          if (!producedText && iteration > 0) {
+            yield {
+              type: 'error',
+              message: 'Codex produced an empty turn during tool loop (no text, no tool calls). Terminating.',
+              recoverable: true,
+            };
+          }
+          if (final.responseId) {
+            yield { type: 'session', sessionId: final.responseId };
+            this.persistSessionId(input.thread, input.modelRef, final.responseId);
+          }
+          if (final.usage) {
+            yield {
+              type: 'usage',
+              input: final.usage.input,
+              output: final.usage.output,
+              cacheRead: final.usage.cacheRead,
+              cacheWrite: final.usage.cacheWrite,
+              cost: final.usage.cost?.total,
+            };
+          }
+          yield { type: 'done', finishReason: mapStopReasonForDone(final.stopReason) };
+          return;
         }
-      }
-      // Safety: if the stream ended mid-thinking-block (rare; defensive),
-      // flush the buffer so the user sees what was reasoned so far.
-      flushCodexPiEventDebugBatch(debugDeltaBatch);
-      debugDeltaBatch = null;
-      if (thinkingBuffer && thinkingBuffer.length > 0) {
-        yield { type: 'thinking_delta', text: thinkingBuffer };
+
+        // Tool dispatch path. Cap parallel calls per iteration.
+        const batch = toolCalls.slice(0, MAX_PARALLEL);
+        if (toolCalls.length > MAX_PARALLEL) {
+          console.warn(
+            `[CodexRuntime] capping ${toolCalls.length} parallel tool calls to ${MAX_PARALLEL}`,
+          );
+        }
+
+        // (a) tool_start events — emitted from the outer loop BEFORE
+        //     dispatch. Async-generator rule: `yield` cannot live
+        //     inside the Promise.all map callback.
+        for (const call of batch) {
+          yield {
+            type: 'tool_start',
+            id: call.id,
+            name: call.name,
+            input: call.arguments,
+          };
+        }
+
+        // (b) Execute in parallel, collecting plain return values.
+        const executions = await Promise.all(
+          batch.map(async (call) => {
+            try {
+              const tool = this.registry.get(call.name);
+              if (!tool) {
+                return {
+                  call,
+                  outputText: JSON.stringify({
+                    error: {
+                      code: 'unknown_tool',
+                      message: `Unknown tool: ${call.name}`,
+                    },
+                  }),
+                  isError: true,
+                };
+              }
+              let outputText = await tool.execute(call.arguments, toolCtx);
+              // Safety net — tools self-cap at 50KB already via
+              // applyOutputBudget, but defense-in-depth catches any
+              // future tool that forgot to wrap. Same cap as
+              // MAX_SINGLE_OUTPUT_BYTES on the loop side.
+              if (outputText.length > MAX_SINGLE_OUTPUT_BYTES) {
+                outputText =
+                  outputText.slice(0, MAX_SINGLE_OUTPUT_BYTES) +
+                  '\n[... truncated by loop driver ...]';
+              }
+              return { call, outputText, isError: false };
+            } catch (err) {
+              return {
+                call,
+                outputText: JSON.stringify({
+                  error: {
+                    code: 'tool_threw',
+                    message: err instanceof Error ? err.message : String(err),
+                  },
+                }),
+                isError: true,
+              };
+            }
+          }),
+        );
+
+        // (c) tool_result events from the outer loop after dispatch.
+        for (const { call, outputText, isError } of executions) {
+          totalOutputBytes += outputText.length;
+          yield {
+            type: 'tool_result',
+            id: call.id,
+            name: call.name,
+            output: outputText,
+            isError,
+          };
+        }
+
+        // (d) Append pi-ai ToolResultMessage entries to the growing
+        //     context for the next iteration. NOT raw OpenAI
+        //     function_call_output — pi-ai's openai-codex-responses
+        //     provider converts to the wire shape internally.
+        for (const { call, outputText, isError } of executions) {
+          piMessages.push({
+            role: 'toolResult',
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [{ type: 'text', text: outputText }],
+            isError,
+            timestamp: Date.now(),
+          });
+        }
+
+        if (totalOutputBytes > MAX_OUTPUT_BYTES) {
+          yield {
+            type: 'error',
+            message: `Codex tool output budget exceeded (${totalOutputBytes} / ${MAX_OUTPUT_BYTES} bytes). Ending turn.`,
+            recoverable: true,
+          };
+          yield { type: 'done', finishReason: 'length' };
+          return;
+        }
+
+        if (runtimeController.signal.aborted) {
+          yield { type: 'done', finishReason: 'aborted' };
+          return;
+        }
+
+        iteration++;
       }
 
-      // After the stream drains, the result() promise carries the final
-      // AssistantMessage with usage + responseId + stopReason. Capture
-      // session id for sidecar persistence + emit our usage event.
-      const final = await stream.result();
-      logCodexFinalMessage(final);
-      if (final.responseId) {
-        yield { type: 'session', sessionId: final.responseId };
-        // Persist for next turn's prompt-cache affinity.
-        this.persistSessionId(input.thread, input.modelRef, final.responseId);
-      }
-      if (final.usage) {
-        yield {
-          type: 'usage',
-          input: final.usage.input,
-          output: final.usage.output,
-          cacheRead: final.usage.cacheRead,
-          cacheWrite: final.usage.cacheWrite,
-          cost: final.usage.cost?.total,
-        };
-      }
-      yield { type: 'done', finishReason: mapStopReasonForDone(final.stopReason) };
-    } catch (err) {
-      flushCodexPiEventDebugBatch(debugDeltaBatch);
-      debugDeltaBatch = null;
-      const msg = err instanceof Error ? err.message : String(err);
-      // Abort path — `signal: aborted` throws inside the iteration.
-      if (runtimeController.signal.aborted) {
-        yield { type: 'done', finishReason: 'aborted' };
-        return;
-      }
-      // Auth failures mid-stream (token expired between getCodexAccessToken
-      // and the actual request) — surface as auth_required so the UI
-      // routes the user to re-login.
-      if (/401|unauthor/i.test(msg)) {
-        yield {
-          type: 'auth_required',
-          provider: this.providerId,
-          message: `Codex auth expired during request: ${msg}. Log in again via Settings.`,
-        };
-        yield { type: 'done', finishReason: 'error' };
-        return;
-      }
-      // Rate-limit signal — surface separately so UI can show the
-      // banner instead of a generic error.
-      if (/429|rate.?limit/i.test(msg)) {
-        const retryAfterMs = parseRetryAfter(msg);
-        yield { type: 'rate_limit', retryAfterMs };
-        yield { type: 'done', finishReason: 'error' };
-        return;
-      }
-      yield { type: 'error', message: msg, recoverable: false };
-      yield { type: 'done', finishReason: 'error' };
+      // Iteration ceiling hit — model is still requesting tools after
+      // 20 turns. Stop here rather than loop forever; let the user see
+      // what we have and re-prompt with a tighter task if they want
+      // to continue.
+      yield {
+        type: 'error',
+        message: `Codex reached the tool-loop ceiling (${MAX_ITER} iterations) and was still requesting tools. Ending turn.`,
+        recoverable: true,
+      };
+      yield { type: 'done', finishReason: 'length' };
     } finally {
       input.abortSignal?.removeEventListener('abort', inputAbortHandler);
       // Clear the active controller only if it's still the one we created
@@ -626,14 +802,13 @@ export function translatePiEvent(event: AssistantMessageEvent): AgentRuntimeEven
     case 'toolcall_start':
     case 'toolcall_delta':
     case 'toolcall_end':
-      // E2 ships with no tools sent to Codex; if a tool event ever
-      // arrives despite that, surface as a diagnostic rather than
-      // crashing or pretending to consume it.
-      return {
-        type: 'provider_diagnostic',
-        code: 'unexpected_tool_event',
-        message: `Codex emitted ${event.type} but tools are not enabled in E2`,
-      };
+      // PR E3b: tool calls are sourced from `final.content` (the
+      // captured AssistantMessage) as the authoritative list, NOT
+      // from these streaming events. The runTurn outer loop emits
+      // `tool_start` shells from the final-message ToolCall blocks
+      // BEFORE dispatch — surfacing them here too would duplicate.
+      // See the loop driver's `for (const call of batch)` block.
+      return null;
     case 'done':
       // The outer iterator handles done via stream.result() to get
       // the full final message (usage, responseId). Drop this event;
