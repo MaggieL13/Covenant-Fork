@@ -25,8 +25,6 @@
  * permission policy.
  */
 
-import type { AbortSignal as NodeAbortSignal } from 'node:stream/web';
-
 /**
  * Per-call context passed to a tool's `execute()`. The runtime
  * assembles this fresh for every invocation; tools should not retain
@@ -40,8 +38,10 @@ export interface ToolContext {
   /** Aborts the in-flight tool call. Tools that issue async work
    *  (spawning processes, large file reads) should check / propagate
    *  this so the loop driver's abort signal reaches all the way
-   *  through to interruptible work. */
-  abortSignal?: AbortSignal | NodeAbortSignal;
+   *  through to interruptible work. Uses the global `AbortSignal`
+   *  type — same one the rest of the runtime code base passes
+   *  through (e.g. `AgentTurnInput.abortSignal`). */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -85,16 +85,47 @@ export interface CovenantTool {
  * (path-confinement, output budgets, ceiling iterations) lives in the
  * tools themselves and in the loop driver. Registry is pure catalogue.
  */
+/**
+ * OpenAI's function-name rule. pi-ai forwards `name` straight into
+ * the `tools[].function.name` slot on the Responses API request;
+ * anything outside this character set fails at API time with an
+ * opaque 400 response. Enforce here so the failure surfaces at
+ * registration, where the offending tool is identifiable, not 30
+ * minutes later when the model first tries to call it.
+ *
+ * Pattern + length match the documented OpenAI constraint (1-64
+ * chars, alphanumerics + underscore + hyphen).
+ */
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const TOOL_NAME_MAX_LENGTH = 64;
+
 export class ToolRegistry {
   private readonly tools = new Map<string, CovenantTool>();
 
   /**
-   * Add a tool to the registry. Throws if a tool with the same name
-   * is already registered — silent override would hide bootstrap-order
-   * bugs (two modules both register `read_file` with subtly different
-   * behavior, second one wins). Loud failure forces resolution.
+   * Add a tool to the registry. Validates the name against OpenAI's
+   * tool-name rules (`[a-zA-Z0-9_-]{1,64}`) and rejects duplicates.
+   * Both checks throw with descriptive messages so bootstrap-order
+   * bugs and bad tool definitions surface at the registration site,
+   * not later as opaque 400s from the provider or silent overrides.
+   * (Codex E3b/1 review catch.)
    */
   register(tool: CovenantTool): void {
+    if (typeof tool.name !== 'string' || tool.name.length === 0) {
+      throw new Error(
+        'ToolRegistry: tool name must be a non-empty string',
+      );
+    }
+    if (tool.name.length > TOOL_NAME_MAX_LENGTH) {
+      throw new Error(
+        `ToolRegistry: tool name "${tool.name}" exceeds ${TOOL_NAME_MAX_LENGTH} characters`,
+      );
+    }
+    if (!TOOL_NAME_PATTERN.test(tool.name)) {
+      throw new Error(
+        `ToolRegistry: tool name "${tool.name}" must match ${TOOL_NAME_PATTERN.source} (alphanumerics, underscore, hyphen)`,
+      );
+    }
     if (this.tools.has(tool.name)) {
       throw new Error(
         `ToolRegistry: tool "${tool.name}" is already registered`,

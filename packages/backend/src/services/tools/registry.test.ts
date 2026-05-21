@@ -52,6 +52,56 @@ describe('ToolRegistry', () => {
     expect(registry.size()).toBe(1);
   });
 
+  // E3b/1 review catch (Codex): the comment documented OpenAI's
+  // `[a-zA-Z0-9_-]{1,64}` rule but register() didn't actually enforce
+  // it. A bad name would register fine locally then 400 at provider
+  // call time with no obvious culprit. Enforce at registration so the
+  // throw points at the offending tool.
+  describe('name validation', () => {
+    it('rejects empty names', () => {
+      expect(() => registry.register(makeTool(''))).toThrow(
+        /non-empty string/,
+      );
+    });
+
+    it('rejects names over 64 chars', () => {
+      const longName = 'a'.repeat(65);
+      expect(() => registry.register(makeTool(longName))).toThrow(
+        /exceeds 64 characters/,
+      );
+    });
+
+    it('accepts names exactly at the 64-char boundary', () => {
+      const boundary = 'a'.repeat(64);
+      expect(() => registry.register(makeTool(boundary))).not.toThrow();
+    });
+
+    it('rejects names with spaces', () => {
+      expect(() => registry.register(makeTool('read file'))).toThrow(
+        /must match/,
+      );
+    });
+
+    it('rejects names with dots (no `tool.name` for namespacing)', () => {
+      expect(() => registry.register(makeTool('tool.name'))).toThrow(
+        /must match/,
+      );
+    });
+
+    it('rejects names with non-ASCII characters (emoji)', () => {
+      expect(() => registry.register(makeTool('🔥'))).toThrow(/must match/);
+    });
+
+    it('accepts underscore and hyphen (both in OpenAI pattern)', () => {
+      expect(() => registry.register(makeTool('read_file'))).not.toThrow();
+      expect(() => registry.register(makeTool('read-file'))).not.toThrow();
+    });
+
+    it('accepts alphanumerics across cases', () => {
+      expect(() => registry.register(makeTool('Read123File'))).not.toThrow();
+    });
+  });
+
   it('get() returns undefined for unknown names (no throw — loop driver expects this)', () => {
     expect(registry.get('not_a_tool')).toBeUndefined();
   });
