@@ -99,13 +99,82 @@ function formatFallback(notice: ImageFallback): string {
   return `[image not attached — ${label}: ${notice.reason}]`;
 }
 
+function attachmentFileIds(msg: Message): Set<string> {
+  const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+  const rawAttachments = meta.attachments;
+  const ids = new Set<string>();
+  if (!Array.isArray(rawAttachments)) return ids;
+  for (const raw of rawAttachments) {
+    const att = raw as { fileId?: unknown };
+    if (typeof att.fileId === 'string') ids.add(att.fileId);
+  }
+  return ids;
+}
+
+function messageFileId(msg: Message): string | undefined {
+  const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+  const fileId = meta.fileId ?? meta.photoFileId;
+  return typeof fileId === 'string' ? fileId : undefined;
+}
+
+function currentInvocationOwnerIds(dbMessages: Message[], isAutonomous: boolean): Set<string> {
+  const ids = new Set<string>();
+  if (isAutonomous) return ids;
+
+  let i = dbMessages.length - 1;
+  while (i >= 0 && dbMessages[i].role !== 'user') i--;
+  if (i < 0) return ids;
+
+  const last = dbMessages[i];
+  ids.add(last.id);
+
+  // Batched web uploads write one parent text row, then one child row per
+  // attachment. If the newest row is a child file message, walk backward
+  // through sibling file rows until the matching parent attachments row.
+  if (last.content_type === 'image' || last.content_type === 'audio' || last.content_type === 'file') {
+    const childFileIds = new Set<string>();
+    const firstChildIndex = i;
+    for (; i >= 0; i--) {
+      const msg = dbMessages[i];
+      if (msg.role !== 'user') break;
+      if (msg.content_type !== 'image' && msg.content_type !== 'audio' && msg.content_type !== 'file') break;
+      ids.add(msg.id);
+      const fileId = messageFileId(msg);
+      if (fileId) childFileIds.add(fileId);
+    }
+
+    if (i >= 0 && dbMessages[i].role === 'user') {
+      const parentIds = attachmentFileIds(dbMessages[i]);
+      const allChildrenBelongToParent =
+        childFileIds.size > 0
+        && [...childFileIds].every((fileId) => parentIds.has(fileId));
+      if (allChildrenBelongToParent) {
+        ids.add(dbMessages[i].id);
+      } else {
+        // The newest file row is a single-attachment message, not a
+        // batched-upload child. Keep only that newest owner.
+        ids.clear();
+        ids.add(dbMessages[firstChildIndex].id);
+      }
+    } else {
+      // Reached the start of history (or a non-user boundary) without a
+      // batched-upload parent. Treat the newest file row as a standalone
+      // single attachment and leave older stacked user files alone.
+      ids.clear();
+      ids.add(dbMessages[firstChildIndex].id);
+    }
+  }
+
+  return ids;
+}
+
 export function buildCodexNormalizedMessages(
   opts: BuildCodexNormalizedOptions,
 ): BuildCodexNormalizedResult {
   const { dbMessages, currentContent, nowIso, isAutonomous } = opts;
   const { imagesByMessageId, fallbackNotices } = extractImagesFromMessages(dbMessages);
 
-  const messages: NormalizedMessage[] = dbMessages
+  const replayEntries: Array<{ ownerMessageId: string; message: NormalizedMessage }> = dbMessages
     .filter((m) => m.role === 'user' || m.role === 'companion')
     .map((m) => {
       const role: 'user' | 'assistant' =
@@ -117,28 +186,22 @@ export function buildCodexNormalizedMessages(
         createdAt: m.created_at,
       };
       if (images && images.length > 0) out.images = images;
-      return out;
+      return { ownerMessageId: m.id, message: out };
     });
+  const messages: NormalizedMessage[] = replayEntries.map((entry) => entry.message);
 
-  // In-flight turn = the contiguous user-role tail of the original
-  // dbMessages list (NOT the filtered `messages` array — we walk
-  // dbMessages so a stray `system` role between turns is treated as
-  // a boundary). These are the DB rows the channel handler just
-  // wrote for the current invocation.
+  // In-flight owners = DB rows the channel handler just wrote for this
+  // invocation. This is intentionally narrower than "all contiguous
+  // trailing user rows": two user sends can stack before an assistant
+  // reply, and an older trailing image must not be stolen onto the new
+  // synthetic prompt.
   //
   // For autonomous turns the tail does NOT represent the in-flight
   // turn — the synthetic is a pulse/wake prompt, not a synthesized
   // form of any user message. Treat the in-flight set as empty so
   // neither images nor fallback annotations leak from the tail onto
   // the autonomous synthetic.
-  const inFlightOwnerIds = new Set<string>();
-  if (!isAutonomous) {
-    for (let i = dbMessages.length - 1; i >= 0; i--) {
-      const m = dbMessages[i];
-      if (m.role !== 'user') break;
-      inFlightOwnerIds.add(m.id);
-    }
-  }
+  const inFlightOwnerIds = currentInvocationOwnerIds(dbMessages, isAutonomous);
   const currentTurnFallbacks = fallbackNotices.filter((f) =>
     inFlightOwnerIds.has(f.ownerMessageId),
   );
@@ -150,10 +213,11 @@ export function buildCodexNormalizedMessages(
   let appendedSynthetic = false;
 
   if (!currentPromptPresent) {
-    // Image bridge: walk backward through `messages`, collect images
-    // from contiguous user-role tail entries, and detach them. The
-    // synthetic about to be appended will carry the union — so pi-ai
-    // sees the descriptive text + bytes on the same message.
+    // Image bridge: walk backward through the replay entries, collect
+    // images ONLY from DB owners identified as in-flight for this
+    // invocation, and detach them. The synthetic about to be appended
+    // will carry the union — so pi-ai sees the descriptive text + bytes
+    // on the same message without stealing older trailing user images.
     //
     // Autonomous suppresses this entirely (see comment on the in-flight
     // set above). The tail images stay attached to their original
@@ -161,9 +225,10 @@ export function buildCodexNormalizedMessages(
     // place; they just don't get duplicated onto the wake prompt.
     const transferredImages: NormalizedImage[] = [];
     if (!isAutonomous) {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const nm = messages[i];
+      for (let i = replayEntries.length - 1; i >= 0; i--) {
+        const { ownerMessageId, message: nm } = replayEntries[i];
         if (nm.role !== 'user') break;
+        if (!inFlightOwnerIds.has(ownerMessageId)) continue;
         if (nm.images && nm.images.length > 0) {
           transferredImages.unshift(...nm.images);
           nm.images = undefined;

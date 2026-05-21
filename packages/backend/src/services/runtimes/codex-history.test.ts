@@ -647,6 +647,106 @@ describe('buildCodexNormalizedMessages — autonomous bridge suppression', () =>
     expect(synthetic.images).toHaveLength(1);
   });
 
+  it('does NOT move older trailing user images onto a new interactive synthetic prompt', () => {
+    // Two user messages are stacked with no assistant boundary. The
+    // newest turn gets a synthetic prompt (for example, prosody was
+    // prepended), but only the newest DB owner belongs to this invocation.
+    registerImageFile('old-img', { binarySize: 1024, mimeType: 'image/png' });
+    registerImageFile('new-img', { binarySize: 1024, mimeType: 'image/png' });
+
+    const dbMessages: Message[] = [
+      makeMessage({
+        id: 'older-photo',
+        created_at: '2026-05-20T00:00:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] earlier image',
+        metadata: { fileId: 'old-img', photoFileId: 'old-img', mimeType: 'image/png' },
+      }),
+      makeMessage({
+        id: 'new-photo',
+        created_at: '2026-05-20T00:01:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] check this one',
+        metadata: { fileId: 'new-img', photoFileId: 'new-img', mimeType: 'image/png' },
+      }),
+    ];
+
+    const result = buildCodexNormalizedMessages({
+      dbMessages,
+      currentContent: '[Voice tone - excited: 0.7]\n[Photo from Maggie] check this one',
+      nowIso: '2026-05-20T00:01:01.000Z',
+      isAutonomous: false,
+    });
+
+    expect(result.appendedSynthetic).toBe(true);
+    const synthetic = result.messages[result.messages.length - 1];
+    expect(synthetic.images).toHaveLength(1);
+    expect(synthetic.images?.[0].base64).toBe(Buffer.alloc(1024, 0xab).toString('base64'));
+
+    const older = result.messages.find((m) => m.createdAt === '2026-05-20T00:00:00.000Z');
+    expect(older?.images).toHaveLength(1);
+  });
+
+  it('bridges the batched-upload parent without stealing an older user image before it', () => {
+    registerImageFile('old-img', { binarySize: 512, mimeType: 'image/png' });
+    registerImageFile('batch-img', { binarySize: 1024, mimeType: 'image/png' });
+
+    const synthesized =
+      'Maggie sent an image (batch.png). You can view it at: /data/files/batch-img.png\n\nTheir message: describe this';
+
+    const dbMessages: Message[] = [
+      makeMessage({
+        id: 'older-photo',
+        created_at: '2026-05-20T00:00:00.000Z',
+        content_type: 'image',
+        content: '[Photo from Maggie] earlier image',
+        metadata: { fileId: 'old-img', photoFileId: 'old-img', mimeType: 'image/png' },
+      }),
+      makeMessage({
+        id: 'batch-parent',
+        created_at: '2026-05-20T00:01:00.000Z',
+        content_type: 'text',
+        content: 'describe this',
+        metadata: {
+          attachments: [
+            {
+              fileId: 'batch-img',
+              filename: 'batch.png',
+              mimeType: 'image/png',
+              size: 1024,
+              url: '/files/batch-img',
+              contentType: 'image',
+            },
+          ],
+        },
+      }),
+      makeMessage({
+        id: 'batch-child',
+        created_at: '2026-05-20T00:01:00.100Z',
+        content_type: 'image',
+        content: '/files/batch-img',
+        metadata: { fileId: 'batch-img', filename: 'batch.png', mimeType: 'image/png' },
+      }),
+    ];
+
+    const result = buildCodexNormalizedMessages({
+      dbMessages,
+      currentContent: synthesized,
+      nowIso: '2026-05-20T00:01:01.000Z',
+      isAutonomous: false,
+    });
+
+    expect(result.appendedSynthetic).toBe(true);
+    const synthetic = result.messages[result.messages.length - 1];
+    expect(synthetic.images).toHaveLength(1);
+
+    const older = result.messages.find((m) => m.createdAt === '2026-05-20T00:00:00.000Z');
+    expect(older?.images).toHaveLength(1);
+
+    const parent = result.messages.find((m) => m.createdAt === '2026-05-20T00:01:00.000Z');
+    expect(parent?.images).toBeUndefined();
+  });
+
   it('does NOT append synthetic when last user content matches verbatim', () => {
     const dbMessages: Message[] = [
       makeMessage({ id: 'm', content: 'hello' }),
