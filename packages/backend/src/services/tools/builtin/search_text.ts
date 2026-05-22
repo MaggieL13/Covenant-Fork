@@ -82,6 +82,11 @@ interface WalkResult {
   skippedTooLarge: string[];
   skippedBinary: string[];
   truncated: boolean;
+  /** True when the recursive walk bailed early because the runtime's
+   *  abort signal fired (user hit the stop button mid-search). The
+   *  partial results above are still meaningful; the tool surfaces a
+   *  notice line so the model knows the listing isn't exhaustive. */
+  aborted: boolean;
 }
 
 async function walk(
@@ -90,8 +95,18 @@ async function walk(
   filter: RegExp | null,
   pattern: RegExp,
   result: WalkResult,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
-  if (result.truncated) return;
+  if (result.truncated || result.aborted) return;
+  // PR E3b/4 second-pass Codex review (P2 catch): on Windows a
+  // search across the whole repo can spend seconds on readdir +
+  // readFile before the model's stop button reaches us. Check the
+  // abort signal at every loop / fs boundary so the walk bails
+  // promptly with partial results intact.
+  if (signal?.aborted) {
+    result.aborted = true;
+    return;
+  }
 
   let entries;
   try {
@@ -99,12 +114,20 @@ async function walk(
   } catch {
     return; // unreadable subdir — skip silently
   }
+  if (signal?.aborted) {
+    result.aborted = true;
+    return;
+  }
 
   for (const entry of entries) {
-    if (result.truncated) return;
+    if (result.truncated || result.aborted) return;
+    if (signal?.aborted) {
+      result.aborted = true;
+      return;
+    }
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
-      await walk(join(dir, entry.name), scopeRoot, filter, pattern, result);
+      await walk(join(dir, entry.name), scopeRoot, filter, pattern, result, signal);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -123,12 +146,20 @@ async function walk(
       result.skippedTooLarge.push(relPath);
       continue;
     }
+    if (signal?.aborted) {
+      result.aborted = true;
+      return;
+    }
 
     let content: string;
     try {
       content = await readFile(fullPath, 'utf8');
     } catch {
       continue;
+    }
+    if (signal?.aborted) {
+      result.aborted = true;
+      return;
     }
 
     if (content.includes('\x00')) {
@@ -138,6 +169,12 @@ async function walk(
 
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
+      // Inner-loop abort check — long files with thousands of lines
+      // could otherwise grind for hundreds of ms after stop is pressed.
+      if (signal?.aborted) {
+        result.aborted = true;
+        return;
+      }
       if (pattern.test(lines[i])) {
         // Per-match-line cap — see comment on MAX_MATCH_LINE_CHARS.
         const line =
@@ -207,8 +244,15 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     skippedTooLarge: [],
     skippedBinary: [],
     truncated: false,
+    aborted: false,
   };
-  await walk(resolvedRoot, resolvedRoot, filter, regex, result);
+  // ctx.abortSignal is sourced from the loop driver's runtime
+  // controller — same signal that aborts the pi-ai request itself.
+  // Cast through `unknown` because the registry's optional union
+  // type includes node:stream/web's AbortSignal too; at runtime
+  // they share the structural .aborted property our walk reads.
+  const signal = (ctx.abortSignal as unknown as AbortSignal | undefined);
+  await walk(resolvedRoot, resolvedRoot, filter, regex, result, signal);
 
   const header =
     result.matches.length === 0
@@ -220,6 +264,15 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   );
 
   const notes: string[] = [];
+  if (result.aborted) {
+    // Surface BEFORE other notes so the model sees the partial-state
+    // signal first. The partial matches above are still valid hits;
+    // the model can decide whether to retry with a narrower scope
+    // or accept what was found.
+    notes.push(
+      '[search aborted by user — partial results above; not exhaustive]',
+    );
+  }
   if (result.truncated) {
     notes.push(
       `[stopped at ${MAX_MATCHES} matches; narrow the pattern or use glob to refine]`,

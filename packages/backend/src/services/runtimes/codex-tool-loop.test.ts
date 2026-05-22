@@ -396,6 +396,52 @@ describe('CodexRuntime — tool loop driver (PR E3b/4)', () => {
     expect(errEvent).toBeDefined();
   });
 
+  it('budget accounting uses UTF-8 byte length, not JS char length (emoji/multibyte safe)', async () => {
+    // PR E3b/4 second-pass Codex review P1: totalOutputBytes was
+    // counting outputText.length (UTF-16 code units, ≈ JS chars).
+    // Multi-byte content (emoji, Japanese, accented text) would
+    // sneak past the 200KB cap because 1 char != 1 byte. Fixed to
+    // Buffer.byteLength(outputText, 'utf8').
+    //
+    // Probe: '😀' = 4 UTF-8 bytes / 2 JS chars per emoji. Three
+    // 30,000-char emoji strings = 90,000 chars (≪ 200K) but
+    // 180,000 bytes — still under, so a fourth pushes us over by
+    // bytes while staying well under by chars.
+    //
+    // With the OLD char counting: 4 × 30,000 = 120,000 < 204,800 →
+    // budget NEVER trips. With the NEW byte counting:
+    // 4 × 60,000 = 240,000 > 204,800 → budget trips.
+    registry.register({
+      name: 'emojibomb',
+      description: 'emojibomb',
+      parameters: { type: 'object', additionalProperties: true },
+      execute: async () => '😀'.repeat(15_000), // 30K JS chars, 60K UTF-8 bytes
+    });
+
+    enqueueStream(
+      [],
+      fakeAssistantMessage({
+        content: [
+          toolCallBlock('e1', 'emojibomb'),
+          toolCallBlock('e2', 'emojibomb'),
+          toolCallBlock('e3', 'emojibomb'),
+          toolCallBlock('e4', 'emojibomb'),
+        ],
+        stopReason: 'toolUse',
+      }),
+    );
+
+    const events = await collectEvents(runtime.runTurn(fakeTurnInput()));
+    // Budget trip path: error + done(length).
+    const last = events[events.length - 1];
+    expect(last.type).toBe('done');
+    if (last.type === 'done') expect(last.finishReason).toBe('length');
+    const budgetErr = events.find(
+      (e) => e.type === 'error' && /budget exceeded/.test(e.message),
+    );
+    expect(budgetErr).toBeDefined();
+  });
+
   it('budget tripped mid-chunk emits synthetic skipped results for remaining calls (protocol invariant)', async () => {
     // PR E3b/4 review P1 follow-up: when the budget trips between
     // chunks, the remaining calls would otherwise have no

@@ -406,6 +406,28 @@ describe('search_text', () => {
     );
     expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
   });
+
+  // PR E3b/4 second-pass Codex review (P2 catch): the recursive walk
+  // used to plow through directories + readFile calls even after the
+  // model's stop button fired. Inner walk + outer execute now check
+  // ctx.abortSignal at every fs / loop boundary.
+  it('honors ctx.abortSignal and returns partial results with an aborted notice', async () => {
+    // Pre-aborted signal — walk should bail at the very first check
+    // without reading any files.
+    const abortController = new AbortController();
+    abortController.abort();
+    const abortedCtx: ToolContext = { ...ctx, abortSignal: abortController.signal };
+
+    const out = await searchTextTool.execute(
+      { pattern: 'anything' },
+      abortedCtx,
+    );
+
+    expect(out).toContain('[search aborted by user');
+    // No matches expected since we aborted before any file was read.
+    // (We can't strictly assert zero — the abort might land after one
+    // tiny readdir — but the aborted notice MUST be present.)
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

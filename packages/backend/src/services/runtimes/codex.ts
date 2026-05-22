@@ -736,7 +736,13 @@ export class CodexRuntime implements AgentRuntime {
 
           // (c) tool_result events for this chunk, after dispatch.
           for (const { call, outputText, isError } of chunkResults) {
-            totalOutputBytes += outputText.length;
+            // Budget accounting uses actual UTF-8 byte length, NOT
+            // JS string .length (which is UTF-16 code units). For
+            // mostly-ASCII source-code output the two are equal,
+            // but emoji / Japanese / accented text takes 2-4 UTF-8
+            // bytes per char and would otherwise sneak past the
+            // 200KB cap. (E3b/4 second-pass Codex review catch.)
+            totalOutputBytes += Buffer.byteLength(outputText, 'utf8');
             yield {
               type: 'tool_result',
               id: call.id,
