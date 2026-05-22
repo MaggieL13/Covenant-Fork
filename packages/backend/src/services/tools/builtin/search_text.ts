@@ -51,6 +51,21 @@ const SKIP_DIRS = new Set(['node_modules', '.git']);
 // line so individual matches stay readable AND the total output
 // budget isn't blown by a handful of huge hits. (E3b/2 review catch.)
 const MAX_MATCH_LINE_CHARS = 500;
+// ReDoS guard (E3b second-pass review future-note, fast-tracked).
+// V8 can't preempt a running regex match — `pattern.test(line)` is
+// synchronous from our side, so a catastrophic-backtracking pattern
+// like `(a+)+b` against a long string of `a` will spin the event
+// loop until V8 returns. We can't kill it mid-match without a
+// worker-thread setup; what we CAN do is sample wall-clock time
+// AFTER each `.test()` returns and bail the rest of the walk if
+// any single match took too long or the cumulative budget tripped.
+// At worst, ONE pathological line spins for ~MAX_REGEX_MS_PER_LINE
+// before we abort; with a sane pattern, the per-line check costs
+// a single Date.now() per line which is microseconds. The deeper
+// fix (static AST rejection via safe-regex / regexp-tree) lives in
+// a chip for a later arc.
+const MAX_REGEX_MS_PER_LINE = 250;
+const MAX_TOTAL_REGEX_MS = 5_000;
 
 interface SearchTextArgs {
   pattern: string;
@@ -87,6 +102,14 @@ interface WalkResult {
    *  partial results above are still meaningful; the tool surfaces a
    *  notice line so the model knows the listing isn't exhaustive. */
   aborted: boolean;
+  /** True when a single regex match took longer than
+   *  MAX_REGEX_MS_PER_LINE or the cumulative match time exceeded
+   *  MAX_TOTAL_REGEX_MS. Indicates probable catastrophic backtracking
+   *  on the pattern; the model should retry with a simpler regex. */
+  regexTimedOut: boolean;
+  /** Cumulative milliseconds spent inside `pattern.test()` across
+   *  the entire walk. Used to enforce MAX_TOTAL_REGEX_MS. */
+  totalRegexMs: number;
 }
 
 async function walk(
@@ -175,7 +198,22 @@ async function walk(
         result.aborted = true;
         return;
       }
-      if (pattern.test(lines[i])) {
+      // ReDoS guard: sample wall time around the regex match so a
+      // catastrophic-backtracking pattern halts the walk after one
+      // pathological line instead of running the whole tree.
+      const matchStart = Date.now();
+      // Reset lastIndex on stateful regexes (RegExp with /g flag
+      // remembers position across .test() calls) so two consecutive
+      // lines don't get spuriously different results.
+      if (pattern.global) pattern.lastIndex = 0;
+      const matched = pattern.test(lines[i]);
+      const matchMs = Date.now() - matchStart;
+      result.totalRegexMs += matchMs;
+      if (matchMs > MAX_REGEX_MS_PER_LINE || result.totalRegexMs > MAX_TOTAL_REGEX_MS) {
+        result.regexTimedOut = true;
+        return;
+      }
+      if (matched) {
         // Per-match-line cap — see comment on MAX_MATCH_LINE_CHARS.
         const line =
           lines[i].length > MAX_MATCH_LINE_CHARS
@@ -245,6 +283,8 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     skippedBinary: [],
     truncated: false,
     aborted: false,
+    regexTimedOut: false,
+    totalRegexMs: 0,
   };
   // ctx.abortSignal is sourced from the loop driver's runtime
   // controller — same signal that aborts the pi-ai request itself.
@@ -264,6 +304,15 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   );
 
   const notes: string[] = [];
+  if (result.regexTimedOut) {
+    // Surface FIRST so the model knows the partial results aren't
+    // because the pattern didn't match — they're because the pattern
+    // itself is slow. Suggest the remedy.
+    notes.push(
+      '[search aborted — pattern triggered slow matching (possible catastrophic backtracking). ' +
+      'Try a simpler regex without nested quantifiers like `(a+)+`.]',
+    );
+  }
   if (result.aborted) {
     // Surface BEFORE other notes so the model sees the partial-state
     // signal first. The partial matches above are still valid hits;

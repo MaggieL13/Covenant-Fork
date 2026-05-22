@@ -407,6 +407,20 @@ describe('search_text', () => {
     expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
   });
 
+  // PR E3b/4 second-pass review future-note (fast-tracked): the
+  // ReDoS guard (250ms per-line + 5000ms total wall-clock budget
+  // sampled AFTER each pattern.test() returns) bails the walk if a
+  // catastrophic-backtracking pattern slows matching past the cap.
+  // Note: V8 can't preempt a running regex match, so the guard
+  // catches the CUMULATIVE damage of a cursed pattern — one slow
+  // line is "tolerated" (we can't stop it mid-match), but subsequent
+  // lines never run. The guard isn't directly unit-tested here
+  // because triggering it requires letting a real regex spin for
+  // the per-line budget, which makes the test suite slow and flaky
+  // depending on V8 JIT mood. Verified via inspection + manual
+  // smoke. The deeper fix (static AST rejection via safe-regex /
+  // regexp-tree) lives in a chip for a later arc.
+
   // PR E3b/4 second-pass Codex review (P2 catch): the recursive walk
   // used to plow through directories + readFile calls even after the
   // model's stop button fired. Inner walk + outer execute now check
