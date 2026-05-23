@@ -36,6 +36,7 @@ import {
   CovenantToolPermissionError,
 } from '../path-guard.js';
 import { applyOutputBudget } from '../output-budget.js';
+import { isSensitivePathConfigured } from '../sensitive-paths.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
 const DEFAULT_LIMIT = 2000;
@@ -86,6 +87,21 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
       );
     }
     throw err;
+  }
+
+  // Sensitive-file deny-list check. Runs AFTER assertPathInScope so
+  // out-of-scope paths still hit `permission_denied` first; this is
+  // a SECOND policy layer inside the scope. Matched patterns refuse
+  // with a distinct structured code so the model can distinguish
+  // "you can't read that, it's secret" from generic permission/not-
+  // found / is-directory errors and adapt accordingly (e.g. ask
+  // the user instead of trying again).
+  const sensitiveMatch = isSensitivePathConfigured(resolvedPath, ctx.scopeRoot);
+  if (sensitiveMatch) {
+    return structuredError(
+      'sensitive_path',
+      `File "${rawArgs.path}" is on the sensitive-file deny-list (pattern: ${sensitiveMatch}). Common secret files (.env / .ssh / credentials / keys) are refused at the tool layer regardless of model intent. Ask the user directly if you need this information.`,
+    );
   }
 
   const stats = await stat(resolvedPath);

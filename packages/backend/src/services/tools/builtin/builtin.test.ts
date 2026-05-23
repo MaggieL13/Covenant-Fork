@@ -225,6 +225,22 @@ describe('read_file', () => {
     expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
     expect(out).toContain('[tool output truncated');
   });
+
+  // Cleanup-1 (sensitive-file deny-list): read_file refuses files on
+  // the deny-list with a distinct structured error code so the model
+  // can adapt rather than retry.
+  it('refuses sensitive files with structured `sensitive_path` error', async () => {
+    // Need a .env-named fixture inside scope. Tear down after.
+    await writeFile(join(scopeRoot, '.env'), 'SECRET=hunter2\n');
+    try {
+      const out = await readFileTool.execute({ path: '.env' }, ctx);
+      const parsed = JSON.parse(out);
+      expect(parsed.error.code).toBe('sensitive_path');
+      expect(parsed.error.message).toContain('.env');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -280,6 +296,23 @@ describe('list_files', () => {
     expect(JSON.parse(out)).toMatchObject({
       error: { code: 'invalid_args' },
     });
+  });
+
+  // Cleanup-1: sensitive entries get redacted (not removed) so the
+  // model knows they exist without seeing size or being able to read.
+  it('redacts sensitive entries in the listing instead of refusing the whole thing', async () => {
+    await writeFile(join(scopeRoot, '.env'), 'SECRET=hunter2\n');
+    try {
+      const out = await listFilesTool.execute({ path: '.' }, ctx);
+      // .env appears, but redacted — no size, distinct marker
+      expect(out).toContain('.env [redacted');
+      // Sister-files still visible and detailed
+      expect(out).toMatch(/README\.md \(\d+ bytes\)/);
+      // Suffix notice surfaces
+      expect(out).toContain('redacted by sensitive-file deny-list');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
   });
 });
 
@@ -420,6 +453,31 @@ describe('search_text', () => {
   // depending on V8 JIT mood. Verified via inspection + manual
   // smoke. The deeper fix (static AST rejection via safe-regex /
   // regexp-tree) lives in a chip for a later arc.
+
+  // Cleanup-1: sensitive files are skipped during the walk (same
+  // pattern as node_modules + .git) and surfaced as a notice line.
+  it('skips sensitive files during the walk and surfaces a notice', async () => {
+    // Use an isolated pattern that ONLY appears in .env so we don't
+    // collide with the global fixtures (hugematches.txt etc.).
+    await writeFile(
+      join(scopeRoot, '.env'),
+      'UNIQUE_DENYTEST_SECRET=value\n',
+    );
+    try {
+      const out = await searchTextTool.execute(
+        { pattern: 'UNIQUE_DENYTEST_SECRET' },
+        ctx,
+      );
+      // No match should leak out of the .env file
+      expect(out).not.toMatch(/\.env:\d+:/);
+      expect(out).not.toContain('UNIQUE_DENYTEST_SECRET=');
+      // Notice surfaces with the .env name
+      expect(out).toContain('sensitive-file deny-list');
+      expect(out).toContain('.env');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
+  });
 
   // PR E3b/4 second-pass Codex review (P2 catch): the recursive walk
   // used to plow through directories + readFile calls even after the

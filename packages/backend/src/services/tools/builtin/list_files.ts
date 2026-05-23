@@ -36,6 +36,7 @@ import {
   CovenantToolPermissionError,
 } from '../path-guard.js';
 import { applyOutputBudget } from '../output-budget.js';
+import { isSensitivePathConfigured } from '../sensitive-paths.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
 const MAX_ENTRIES = 500;
@@ -141,15 +142,31 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   // (size of a directory entry isn't meaningful here). Symlinks
   // surface as `name -> target` style so the model knows to expect
   // a redirect on a subsequent read.
+  //
+  // Sensitive-path entries are REDACTED rather than refused — the
+  // model sees that the entry exists (e.g. `.env [redacted]`) but
+  // doesn't get the size or any other detail that could leak
+  // structural information about the secret. Refusing the entire
+  // listing would also work but would be more disruptive for the
+  // common case of listing a directory that happens to contain
+  // one secret file. Redaction is the lighter touch.
   const lines: string[] = [];
+  let redactedCount = 0;
   for (const entry of shown) {
+    const entryPath = `${resolvedPath}/${entry.name}`;
+    const sensitiveMatch = isSensitivePathConfigured(entryPath, ctx.scopeRoot);
+    if (sensitiveMatch) {
+      redactedCount++;
+      lines.push(`${entry.name} [redacted — sensitive-file deny-list]`);
+      continue;
+    }
     if (entry.isDirectory()) {
       lines.push(`${entry.name}/`);
       continue;
     }
     if (entry.isFile()) {
       try {
-        const entryStats = await stat(`${resolvedPath}/${entry.name}`);
+        const entryStats = await stat(entryPath);
         lines.push(`${entry.name} (${entryStats.size} bytes)`);
       } catch {
         lines.push(`${entry.name} (size unknown)`);
@@ -168,9 +185,18 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
       ? `(no entries in ${rawArgs.path}${rawArgs.pattern ? ` matching ${rawArgs.pattern}` : ''})`
       : `(${shown.length}${truncated ? ` of ${filtered.length}` : ''} entries in ${rawArgs.path}${rawArgs.pattern ? ` matching ${rawArgs.pattern}` : ''})`;
 
-  const suffix = truncated
-    ? `\n[... ${filtered.length - MAX_ENTRIES} more entries omitted; use pattern to narrow ...]`
-    : '';
+  const suffixParts: string[] = [];
+  if (truncated) {
+    suffixParts.push(
+      `[... ${filtered.length - MAX_ENTRIES} more entries omitted; use pattern to narrow ...]`,
+    );
+  }
+  if (redactedCount > 0) {
+    suffixParts.push(
+      `[${redactedCount} entr${redactedCount === 1 ? 'y' : 'ies'} redacted by sensitive-file deny-list — not readable via tools]`,
+    );
+  }
+  const suffix = suffixParts.length > 0 ? '\n' + suffixParts.join('\n') : '';
 
   // PR E3b/2 review — defense-in-depth output cap. The 500-entry
   // limit usually fits well under 50KB, but pathological filename
