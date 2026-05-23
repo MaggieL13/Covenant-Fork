@@ -181,6 +181,27 @@ describe('bashOrGlobTargetsSensitive', () => {
     expect(bashOrGlobTargetsSensitive('**/secrets.*')).not.toBeNull();
   });
 
+  // Cleanup-1.5 review (Codex P1, wildcard layer): the previous
+  // fragment list missed wildcards that expand to sensitive files
+  // at shell time. Looser fragments `resonant.y` and `.mcp.` now
+  // catch the partial-name wildcard cases.
+  it('matches shell-wildcard tokens that expand to sensitive files', () => {
+    expect(bashOrGlobTargetsSensitive('.env*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.netrc*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.ssh/*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.aws/credentials*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.gnupg/*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('id_rsa*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('id_ed25519*')).not.toBeNull();
+    // Partial-name wildcards — these previously slipped past because
+    // the fragment was the FULL filename. Looser `resonant.y` and
+    // `.mcp.` catch them now.
+    expect(bashOrGlobTargetsSensitive('resonant.y*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('resonant.y?')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.mcp.*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.mcp.j[so]*')).not.toBeNull();
+  });
+
   it('matches case-insensitively', () => {
     expect(bashOrGlobTargetsSensitive('**/SECRETS.JSON')).not.toBeNull();
     expect(bashOrGlobTargetsSensitive('**/.ENV')).not.toBeNull();

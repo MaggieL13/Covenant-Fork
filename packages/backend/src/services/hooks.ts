@@ -801,9 +801,21 @@ function extractBashTokens(command: string): string[] {
   return out;
 }
 
+/**
+ * True if the token contains a shell-glob metacharacter (`*`, `?`,
+ * or `[`). Used to switch the Bash token check between strict
+ * path-shape matching (concrete tokens) and fuzzy substring
+ * matching (wildcard tokens — shell expands these before the
+ * command runs, so we have to assume the worst-case expansion).
+ */
+function isGlobToken(token: string): boolean {
+  return /[*?[]/.test(token);
+}
+
 /** Exported for tests. */
 export const __HOOK_TEST_INTERNALS__ = Object.freeze({
   extractBashTokens,
+  isGlobToken,
 });
 
 // ---------------------------------------------------------------------------
@@ -1012,8 +1024,31 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
       // Tokens that aren't shaped like paths (e.g. "cat", "grep")
       // resolve to non-sensitive paths under scope, so they pass
       // isSensitivePath naturally — no need for command-name filters.
+      //
+      // (Cleanup-1.5 review P1+): wildcards. `cat .env*` tokenizes to
+      // `['cat', '.env*']`. The token `.env*` resolved as a literal
+      // path doesn't match the deny regex (which expects path-shaped
+      // characters around the marker). Shell expands the wildcard at
+      // runtime, so `.env*` IS effectively `.env`. Split the token
+      // check by shape:
+      //   - GLOB tokens (contain `*`, `?`, `[`) → fuzzy fragment check
+      //   - Concrete tokens → strict path check
+      // This way `.env*` is caught (glob fragment) but `.env-loader.ts`
+      // is not (no wildcard, no path-pattern match).
       const tokens = extractBashTokens(cmd);
       for (const tok of tokens) {
+        if (isGlobToken(tok)) {
+          const frag = bashOrGlobTargetsSensitive(tok);
+          if (frag) {
+            return denySensitive(
+              `Blocked: Bash token "${tok}" is a wildcard targeting ` +
+              `sensitive files (fragment: "${frag}"). Shell expansion ` +
+              `would resolve it to one or more secret files; refused at ` +
+              `the hook layer.`,
+            );
+          }
+          continue;
+        }
         const resolvedPath = isAbsolute(tok) ? tok : resolve(scopeRoot, tok);
         const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
         if (match) {

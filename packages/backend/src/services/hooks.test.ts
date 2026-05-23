@@ -224,6 +224,38 @@ describe('extractBashTokens (Cleanup-1.5)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// Cleanup-1.5 review (P1, wildcard layer) — isGlobToken
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('isGlobToken (Cleanup-1.5 P1)', () => {
+  const isGlob = __HOOK_TEST_INTERNALS__.isGlobToken;
+
+  it('detects asterisk wildcards', () => {
+    expect(isGlob('.env*')).toBe(true);
+    expect(isGlob('*.ts')).toBe(true);
+    expect(isGlob('**/*.env')).toBe(true);
+  });
+
+  it('detects question-mark wildcards', () => {
+    expect(isGlob('config.?')).toBe(true);
+    expect(isGlob('resonant.y?ml')).toBe(true);
+  });
+
+  it('detects character-class brackets', () => {
+    expect(isGlob('[Aa]bc')).toBe(true);
+    expect(isGlob('.env.[lp]*')).toBe(true);
+  });
+
+  it('returns false for concrete tokens (no metachars)', () => {
+    expect(isGlob('.env')).toBe(false);
+    expect(isGlob('.env-loader.ts')).toBe(false);
+    expect(isGlob('packages/backend/src/server.ts')).toBe(false);
+    expect(isGlob('cat')).toBe(false);
+    expect(isGlob('')).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // Cleanup-1.5 review (P1) — Recursive-search Bash patterns. Closes the
 // gap where `grep -R DISCORD_TOKEN .` would pass the per-token deny
 // check (no individual token is path-shaped) but scan the entire tree

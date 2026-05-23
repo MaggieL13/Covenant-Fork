@@ -251,6 +251,12 @@ const SENSITIVE_FRAGMENTS = [
   'id_dsa',
   'secrets.',
   'credentials.',
+  // Looser variants catch wildcard tokens like `resonant.y*` and
+  // `.mcp.*` (shell would expand them to `resonant.yaml` / `.mcp.json`
+  // at runtime). The original `resonant.yaml` / `.mcp.json` entries
+  // are subsumed but kept for clarity.
+  'resonant.y',
+  '.mcp.',
   'resonant.yaml',
   'resonant.yml',
   '.mcp.json',
