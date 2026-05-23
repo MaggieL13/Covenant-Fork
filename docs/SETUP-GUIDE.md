@@ -37,7 +37,7 @@ npm start
 | Start the app | `npm start` |
 | Stop the app | `Ctrl + C` in the terminal |
 | Restart after config changes | `Ctrl + C` then `npm start` |
-| Dev mode (auto-reload on code changes) | `npm run dev:all` |
+| Dev mode (auto-reload on code changes) | `npm run dev` (or the legacy `npm run dev:all` alias) |
 
 ## Where Things Live:
 
