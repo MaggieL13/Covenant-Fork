@@ -50,9 +50,13 @@
  *
  * `cfg.agent.tool_deny_patterns` (an optional `string[]` of regex
  * patterns) is ADDITIVE — caller-supplied patterns extend the
- * built-in defaults, never replace them. Defaults are the universal
- * cases; project-specific additions (this repo's `resonant.yaml`
- * plain-text password file) go in config.
+ * built-in defaults, never replace them. Defaults cover universal
+ * cases (`.env`, `.ssh/`, SSH keys, PEM/key/p12/pfx, .netrc) plus
+ * Covenant-native config files that hold secrets (`resonant.yaml`'s
+ * plain-text auth password; `.mcp.json`'s MCP-server env values).
+ * Use `tool_deny_patterns` for deployment-specific additions a
+ * downstream Covenant fork might need (e.g. an org-specific secrets
+ * directory layout).
  */
 
 import { relative, sep, basename } from 'path';
