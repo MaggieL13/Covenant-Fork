@@ -31,7 +31,7 @@
  * - `invalid_regex` — pattern doesn't compile
  */
 
-import { readFile, readdir, stat } from 'fs/promises';
+import { readFile, readdir, realpath, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import {
   assertPathInScope,
@@ -316,7 +316,19 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   // type includes node:stream/web's AbortSignal too; at runtime
   // they share the structural .aborted property our walk reads.
   const signal = (ctx.abortSignal as unknown as AbortSignal | undefined);
-  await walk(resolvedRoot, resolvedRoot, filter, regex, result, signal);
+  // Cleanup-1 review (Codex P1 catch): the WALK needs to know its
+  // start directory (`resolvedRoot`, the narrowed search root) AND
+  // the POLICY root (the project scope root, `ctx.scopeRoot`'s
+  // realpath) SEPARATELY. The deny-list patterns are written against
+  // paths-from-scope-root (e.g. `(^|\/)\.ssh(\/|$)`). If the model
+  // narrows the search root to `.ssh` and we use that as the policy
+  // root, every entry's relative-path inside the walker looks like
+  // `config` instead of `.ssh/config` — pattern doesn't match, the
+  // deny-list is bypassed. Pass realpath(ctx.scopeRoot) as the
+  // policy root so paths are computed/checked against the actual
+  // project scope, NOT the narrowed search root.
+  const resolvedScopeRoot = await realpath(ctx.scopeRoot);
+  await walk(resolvedRoot, resolvedScopeRoot, filter, regex, result, signal);
 
   const header =
     result.matches.length === 0

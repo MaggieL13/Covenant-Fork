@@ -479,6 +479,62 @@ describe('search_text', () => {
     }
   });
 
+  // Cleanup-1 review (Codex P1 catch — the bypass): when the model
+  // narrows the search root to a sensitive directory like `.ssh`,
+  // the walker MUST still apply the deny-list — otherwise paths
+  // inside the narrowed root look like `config` (not `.ssh/config`),
+  // pattern doesn't match, the deny-list is silently bypassed. Fix:
+  // pass realpath(ctx.scopeRoot) as the policy root so checks are
+  // computed against the project scope, NOT the narrowed search root.
+  it('still skips .ssh/ when the model narrows the search root TO .ssh (no bypass)', async () => {
+    const sshDir = join(scopeRoot, '.ssh');
+    await mkdir(sshDir, { recursive: true });
+    // Pattern and value are deliberately DIFFERENT — the search
+    // pattern echoes in the result's header, so testing the leak
+    // means checking that the VALUE bytes never appear, not the
+    // pattern string.
+    await writeFile(
+      join(sshDir, 'config'),
+      'PRIVATE_KEY=ssss-leak-marker-3791\n',
+    );
+    try {
+      const out = await searchTextTool.execute(
+        { pattern: 'PRIVATE_KEY', path: '.ssh' },
+        ctx,
+      );
+      // The actual secret value MUST NOT appear. Without the bypass
+      // fix, the walk would descend into .ssh and emit a match line
+      // like `config:1: PRIVATE_KEY=ssss-leak-marker-3791`.
+      expect(out).not.toContain('ssss-leak-marker-3791');
+      // The walk should have reported .ssh as a skipped sensitive entry.
+      expect(out).toContain('sensitive-file deny-list');
+    } finally {
+      await rm(sshDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still skips resonant.yaml when searched via narrowed root (no bypass)', async () => {
+    const yamlPath = join(scopeRoot, 'resonant.yaml');
+    await writeFile(
+      yamlPath,
+      'auth:\n  password: yyyy-leak-marker-8442\n',
+    );
+    try {
+      // Use a glob that targets ONLY resonant.yaml so we can prove the
+      // file-level deny check fires even when the search is otherwise
+      // scoped to allow this single match.
+      const out = await searchTextTool.execute(
+        { pattern: 'password', glob: 'resonant.yaml' },
+        ctx,
+      );
+      // The actual password value MUST NOT appear.
+      expect(out).not.toContain('yyyy-leak-marker-8442');
+      expect(out).toContain('sensitive-file deny-list');
+    } finally {
+      await rm(yamlPath, { force: true });
+    }
+  });
+
   // PR E3b/4 second-pass Codex review (P2 catch): the recursive walk
   // used to plow through directories + readFile calls even after the
   // model's stop button fired. Inner walk + outer execute now check
