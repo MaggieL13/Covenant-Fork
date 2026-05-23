@@ -812,11 +812,67 @@ function isGlobToken(token: string): boolean {
   return /[*?[]/.test(token);
 }
 
+// True if the glob narrows the file set to a specific extension (or
+// a brace-expansion set of extensions). Used by the Claude Grep
+// deny-check to refuse over-broad scans that effectively scan
+// everything including secrets.
+//
+//   Narrow (allowed): `*.ts`, `*.md`, `*.svelte`, `**/*.ts`,
+//                     `src/**/*.svelte`, `*.{ts,tsx}`,
+//                     `**/*.{js,jsx}`, or a literal file path
+//                     like `src/server.ts`.
+//
+//   Broad (denied):   `*`, `**`, `**/*` (no extension constraint),
+//                     `*.*`, `**/*.*` (any-extension), `src/**`
+//                     (directory-only), empty.
+function isNarrowGlob(glob: string): boolean {
+  const trimmed = (glob ?? '').trim();
+  if (trimmed.length === 0) return false;
+  // Explicitly-broad shapes — `*`, `**`, `**/*`, `***`, `*/*`, etc.
+  if (/^[*]+(?:\/[*]+)*$/.test(trimmed)) return false;
+  // `*.*` and `**/*.*` — extension is itself a wildcard, so the
+  // glob matches every file.
+  if (/\.[*]+$/.test(trimmed)) return false;
+  // Specific extension at the end: `.ts`, `.md`, `.svelte`, etc.
+  if (/\.[a-zA-Z0-9_]+$/.test(trimmed)) return true;
+  // Brace expansion at the end: `*.{ts,tsx}`, `*.{js,jsx,mjs}`
+  if (/\.\{[a-zA-Z0-9_,]+\}$/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * True if the Grep `path` arg points at a specific file (not a
+ * directory). Lets `Grep({path:'src/server.ts'})` work without a
+ * glob — the path itself is the narrowing.
+ *
+ * Heuristic: no trailing slash + basename has a `.ext` suffix.
+ * Imperfect (a dir named `foo.bar/` would slip through if the
+ * trailing slash is missing) but conservative enough for the
+ * common case.
+ */
+function isSpecificFilePath(path: string): boolean {
+  if (!path) return false;
+  if (path.endsWith('/') || path.endsWith('\\')) return false;
+  const base = path.split(/[\\/]/).pop() ?? '';
+  if (/\.[a-zA-Z0-9_]+$/.test(base)) return true;
+  if (/\.\{[a-zA-Z0-9_,]+\}$/.test(base)) return true;
+  return false;
+}
+
 /** Exported for tests. */
-export const __HOOK_TEST_INTERNALS__ = Object.freeze({
+export const __HOOK_TEST_INTERNALS__ = {
   extractBashTokens,
   isGlobToken,
-});
+  isNarrowGlob,
+  isSpecificFilePath,
+  // buildPreToolUse exposed via getter because it's defined later
+  // in this file (after the hook helpers). Tests use this to
+  // exercise the actual PreToolUse decision path end-to-end.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  get buildPreToolUse(): any {
+    return buildPreToolUse;
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Hook builders (unexported — used by factory)
@@ -929,29 +985,29 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
         }
       }
 
-      // Broad-search deny (Cleanup-1.5 review catch). Without this,
-      // Grep({pattern:'DISCORD_TOKEN', path:'.'}) walks the entire
-      // tree and may print matching lines from `.env`, `resonant.yaml`,
-      // or any other committed-but-secret file. Refuse broad scans
-      // unless the call narrows scope via either a glob OR a path
-      // that isn't the scope root.
+      // Broad-search deny (Cleanup-1.5 review evolved through three
+      // rounds):
+      //   v1: deny if path is root AND no glob → missed narrow paths
+      //       that contain secrets (`packages/backend/.env`)
+      //   v2 (now): require either a NARROW glob (specific extension)
+      //       OR a SPECIFIC FILE path. Subtree paths without glob
+      //       are denied because the walk would still hit `.env` in
+      //       any subdirectory that has one. Broad globs like `*`,
+      //       `**/*`, `*.*` are denied because they match all files.
       const glob = typeof toolInput?.glob === 'string' ? toolInput.glob : '';
       const path = typeof toolInput?.path === 'string' ? toolInput.path : '';
-      const isBroadPath =
-        path === '' ||
-        path === '.' ||
-        path === scopeRoot ||
-        (isAbsolute(path)
-          ? path === scopeRoot
-          : resolve(scopeRoot, path) === scopeRoot);
-      const hasGlob = glob.trim().length > 0;
-      if (isBroadPath && !hasGlob) {
+      const narrowGlob = isNarrowGlob(glob);
+      const specificFilePath = isSpecificFilePath(path);
+      if (!narrowGlob && !specificFilePath) {
         return denySensitive(
-          `Blocked: Grep without a \`glob\` filter against the project root ` +
-          `would scan every file including committed-but-secret config ` +
-          `(resonant.yaml, etc.). Add a \`glob\` like "*.ts" / "*.md" / ` +
-          `"**/*.svelte" to narrow the scan, OR pass a non-root \`path\` ` +
-          `like "packages/backend/src" to constrain the subtree.`,
+          `Blocked: Grep without a narrow filter could walk into ` +
+          `committed-but-secret files. Either:\n` +
+          `  - Add a \`glob\` with a specific extension like ` +
+          `"*.ts", "*.md", "**/*.svelte", "*.{ts,tsx}".\n` +
+          `  - Or pass a \`path\` that points at a single file ` +
+          `(e.g. "src/server.ts"). Broad globs like "*", "**/*", ` +
+          `"*.*" are refused — they match every file regardless of ` +
+          `extension.`,
         );
       }
     }

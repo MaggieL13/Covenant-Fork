@@ -227,6 +227,74 @@ describe('extractBashTokens (Cleanup-1.5)', () => {
 // Cleanup-1.5 review (P1, wildcard layer) — isGlobToken
 // ─────────────────────────────────────────────────────────────────────────
 
+describe('isNarrowGlob (Cleanup-1.5 review v2)', () => {
+  const isNarrow = __HOOK_TEST_INTERNALS__.isNarrowGlob;
+
+  it('accepts globs with a specific extension', () => {
+    expect(isNarrow('*.ts')).toBe(true);
+    expect(isNarrow('*.md')).toBe(true);
+    expect(isNarrow('*.svelte')).toBe(true);
+    expect(isNarrow('**/*.ts')).toBe(true);
+    expect(isNarrow('src/**/*.svelte')).toBe(true);
+  });
+
+  it('accepts brace-expansion extension sets', () => {
+    expect(isNarrow('*.{ts,tsx}')).toBe(true);
+    expect(isNarrow('*.{js,jsx,mjs}')).toBe(true);
+    expect(isNarrow('**/*.{ts,tsx}')).toBe(true);
+  });
+
+  it('accepts a literal file path with extension', () => {
+    expect(isNarrow('src/server.ts')).toBe(true);
+    expect(isNarrow('packages/backend/src/agent.ts')).toBe(true);
+  });
+
+  it('rejects broad globs that match everything', () => {
+    expect(isNarrow('*')).toBe(false);
+    expect(isNarrow('**')).toBe(false);
+    expect(isNarrow('**/*')).toBe(false);
+    expect(isNarrow('***')).toBe(false);
+  });
+
+  it('rejects any-extension globs that match every file', () => {
+    expect(isNarrow('*.*')).toBe(false);
+    expect(isNarrow('**/*.*')).toBe(false);
+  });
+
+  it('rejects directory-only globs (no extension constraint)', () => {
+    expect(isNarrow('src/**')).toBe(false);
+    expect(isNarrow('packages/backend')).toBe(false);
+  });
+
+  it('rejects empty / whitespace globs', () => {
+    expect(isNarrow('')).toBe(false);
+    expect(isNarrow('   ')).toBe(false);
+    expect(isNarrow(undefined as unknown as string)).toBe(false);
+  });
+});
+
+describe('isSpecificFilePath (Cleanup-1.5 review v2)', () => {
+  const isFile = __HOOK_TEST_INTERNALS__.isSpecificFilePath;
+
+  it('accepts paths ending in a specific extension', () => {
+    expect(isFile('src/server.ts')).toBe(true);
+    expect(isFile('packages/backend/src/agent.ts')).toBe(true);
+    expect(isFile('README.md')).toBe(true);
+    expect(isFile('/abs/path/file.json')).toBe(true);
+  });
+
+  it('rejects directory-shaped paths', () => {
+    expect(isFile('src')).toBe(false);
+    expect(isFile('packages/backend')).toBe(false);
+    expect(isFile('src/')).toBe(false);
+    expect(isFile('packages\\backend\\')).toBe(false);
+  });
+
+  it('rejects empty input', () => {
+    expect(isFile('')).toBe(false);
+  });
+});
+
 describe('isGlobToken (Cleanup-1.5 P1)', () => {
   const isGlob = __HOOK_TEST_INTERNALS__.isGlobToken;
 
@@ -252,6 +320,185 @@ describe('isGlobToken (Cleanup-1.5 P1)', () => {
     expect(isGlob('packages/backend/src/server.ts')).toBe(false);
     expect(isGlob('cat')).toBe(false);
     expect(isGlob('')).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cleanup-1.5 review v2 — End-to-end PreToolUse decision tests.
+// Drives the actual hook callback with realistic HookInput shapes and
+// asserts the deny/allow outcome. Closes the gap where only helper
+// functions had coverage; the full integration path is now pinned.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('buildPreToolUse — PreToolUse decisions (Cleanup-1.5)', () => {
+  // Minimal HookContext stub. Only the fields the deny-path checks
+  // read are populated; everything else (registry.broadcast, audit
+  // logging, etc.) is satisfied by no-op spies.
+  const minimalCtx = () => ({
+    threadId: 'thread-1',
+    threadName: 'Test',
+    threadType: 'daily' as const,
+    streamMsgId: 'stream-1',
+    isAutonomous: false,
+    registry: { broadcast: vi.fn() } as unknown as Parameters<
+      typeof __HOOK_TEST_INTERNALS__.buildPreToolUse
+    >[0]['registry'],
+    sessionId: null,
+    platform: 'web' as const,
+    toolInsertions: [],
+    getTextLength: () => 0,
+  });
+
+  type HookOutcome = {
+    continue?: boolean;
+    hookSpecificOutput?: {
+      hookEventName: 'PreToolUse';
+      permissionDecision?: 'allow' | 'deny';
+      permissionDecisionReason?: string;
+    };
+  };
+
+  async function decide(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): Promise<HookOutcome> {
+    const callback = __HOOK_TEST_INTERNALS__.buildPreToolUse(minimalCtx());
+    const input = {
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: 'test-1',
+      hook_event_name: 'PreToolUse' as const,
+    };
+    return await callback(input);
+  }
+
+  function isDeny(out: HookOutcome): boolean {
+    return out.hookSpecificOutput?.permissionDecision === 'deny';
+  }
+
+  describe('Read', () => {
+    it('denies Read on .env at scope root', async () => {
+      const out = await decide('Read', { file_path: '.env' });
+      expect(isDeny(out)).toBe(true);
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toMatch(/sensitive file/i);
+    });
+
+    it('denies Read on resonant.yaml', async () => {
+      const out = await decide('Read', { file_path: 'resonant.yaml' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies Read on .ssh/config', async () => {
+      const out = await decide('Read', { file_path: '.ssh/config' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('allows Read on normal source files', async () => {
+      const out = await decide('Read', { file_path: 'packages/backend/src/server.ts' });
+      expect(isDeny(out)).toBe(false);
+    });
+
+    it('allows Read on README.md', async () => {
+      const out = await decide('Read', { file_path: 'README.md' });
+      expect(isDeny(out)).toBe(false);
+    });
+  });
+
+  describe('Grep', () => {
+    it('denies Grep with no glob against project root (".")', async () => {
+      const out = await decide('Grep', { pattern: 'TOKEN', path: '.' });
+      expect(isDeny(out)).toBe(true);
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toMatch(/narrow filter/i);
+    });
+
+    it('denies Grep with no glob against a non-root subtree (could contain .env)', async () => {
+      const out = await decide('Grep', { pattern: 'TOKEN', path: 'packages/backend' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies Grep with broad glob "**/*"', async () => {
+      const out = await decide('Grep', { pattern: 'TOKEN', glob: '**/*' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies Grep with broad glob "*.*"', async () => {
+      const out = await decide('Grep', { pattern: 'TOKEN', glob: '*.*' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies Grep with sensitive-targeting glob', async () => {
+      const out = await decide('Grep', { pattern: 'X', glob: '**/.env' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('allows Grep with narrow glob "*.ts"', async () => {
+      const out = await decide('Grep', { pattern: 'TOKEN', glob: '*.ts' });
+      expect(isDeny(out)).toBe(false);
+    });
+
+    it('allows Grep with brace-extension glob', async () => {
+      const out = await decide('Grep', { pattern: 'X', glob: '*.{ts,tsx}' });
+      expect(isDeny(out)).toBe(false);
+    });
+
+    it('allows Grep on a specific file path (no glob needed)', async () => {
+      const out = await decide('Grep', { pattern: 'X', path: 'src/server.ts' });
+      expect(isDeny(out)).toBe(false);
+    });
+  });
+
+  describe('Glob', () => {
+    it('denies Glob targeting .env', async () => {
+      const out = await decide('Glob', { pattern: '**/.env' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies Glob targeting .ssh/', async () => {
+      const out = await decide('Glob', { pattern: '.ssh/**' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('allows Glob with safe pattern', async () => {
+      const out = await decide('Glob', { pattern: '**/*.ts' });
+      expect(isDeny(out)).toBe(false);
+    });
+  });
+
+  describe('Bash', () => {
+    it('denies cat .env', async () => {
+      const out = await decide('Bash', { command: 'cat .env' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies cat .env* (wildcard)', async () => {
+      const out = await decide('Bash', { command: 'cat .env*' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies grep -R TOKEN . (recursive search)', async () => {
+      const out = await decide('Bash', { command: 'grep -R TOKEN .' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies rg TOKEN (ripgrep recursive by default)', async () => {
+      const out = await decide('Bash', { command: 'rg TOKEN packages/' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('denies cat resonant.y*', async () => {
+      const out = await decide('Bash', { command: 'cat resonant.y*' });
+      expect(isDeny(out)).toBe(true);
+    });
+
+    it('allows normal `cat README.md`', async () => {
+      const out = await decide('Bash', { command: 'cat README.md' });
+      expect(isDeny(out)).toBe(false);
+    });
+
+    it('allows normal `ls packages/`', async () => {
+      const out = await decide('Bash', { command: 'ls packages/' });
+      expect(isDeny(out)).toBe(false);
+    });
   });
 });
 
