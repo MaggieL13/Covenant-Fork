@@ -420,11 +420,18 @@ describe('Codex (openai-codex) entries (PR E2: runtime wired)', () => {
     }
   });
 
-  it('Codex entries declare mcp: false + tools: false + fileCheckpointing: false (Claude-SDK-only features)', () => {
+  it('Codex entries declare tools: true (E3b) and mcp/fileCheckpointing: false (Claude-SDK-only)', () => {
     const codexModels = MODELS.filter((m) => m.provider === 'openai-codex');
     for (const m of codexModels) {
+      // PR E3b — Covenant-owned tool-calling loop is live. Codex
+      // turns can call read_file / list_files / search_text via the
+      // ToolRegistry; capabilities flag now reflects that.
+      expect(m.capabilities.tools).toBe(true);
+      // MCP bridging is deferred to E3c; Covenant doesn't currently
+      // run an MCP client outside the Claude SDK context.
       expect(m.capabilities.mcp).toBe(false);
-      expect(m.capabilities.tools).toBe(false);
+      // File checkpointing is Claude-SDK-specific (TodoWrite-style
+      // session rewind). No Codex equivalent.
       expect(m.capabilities.fileCheckpointing).toBe(false);
     }
   });

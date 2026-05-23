@@ -199,7 +199,15 @@ function claudeEntry(
 const CODEX_AUTH: ModelAuth = { type: 'codex-oauth' };
 
 const CODEX_CHAT_CAPABILITIES: ModelCapabilities = {
-  tools: false,
+  // PR E3b — Covenant-owned tool-calling loop is live. CodexRuntime's
+  // runTurn iterates streamOpenAICodexResponses calls, dispatches tool
+  // calls via the ToolRegistry singleton (built-in tools: read_file,
+  // list_files, search_text), and appends pi-ai ToolResultMessage
+  // entries to the growing context. Safety caps: MAX_ITER=20,
+  // MAX_PARALLEL=5 (chunked, no dropped calls), per-result 50KB,
+  // per-turn total 200KB. See shared/codex-tools-vision-spec-2026-05-18.md
+  // §4 (PR E3b) for the loop-driver design.
+  tools: true,
   // PR E3a — vision wired end-to-end. NormalizedMessage carries
   // `images?: NormalizedImage[]`; `buildCodexNormalizedMessages`
   // extracts image bytes from Covenant's dual-shape attachment storage
@@ -210,6 +218,8 @@ const CODEX_CHAT_CAPABILITIES: ModelCapabilities = {
   // See shared/codex-tools-vision-spec-2026-05-18.md (PR E3a).
   vision: true,
   reasoning: false,
+  // PR E3c — MCP bridging for Codex (deferred; runs after E3b proves
+  // the loop in production). E3b ships Covenant-owned tools only.
   mcp: false,
   sessionResume: true,
   fileCheckpointing: false,

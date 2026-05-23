@@ -1627,6 +1627,86 @@ export class AgentService {
               console.log(`[Codex diagnostic ${event.code}] ${event.message}`);
               continue;
             }
+            if (event.type === 'tool_start') {
+              // PR E3b/5: Codex loop driver emits tool_start before
+              // dispatch. Mirror the Claude path's PreToolUse-hook
+              // pattern: capture insertion at current text offset
+              // (interleaves the tool card inline with model text in
+              // the rendered transcript) AND broadcast a `tool_use`
+              // WS frame so the live UI shows "calling tool..." right
+              // away. Input is JSON-stringified to a compact summary —
+              // matches the shape the Claude-path tool insertions use.
+              const textOffset = fullResponse.length;
+              let inputSummary: string;
+              try {
+                inputSummary = JSON.stringify(event.input);
+              } catch {
+                inputSummary = String(event.input);
+              }
+              toolInsertions.push({
+                textOffset,
+                toolId: event.id,
+                toolName: event.name,
+                input: inputSummary,
+              });
+              // Same cap as the Claude path (hooks.ts MAX_TOOL_INSERTIONS).
+              if (toolInsertions.length > 50) {
+                toolInsertions.splice(0, toolInsertions.length - 50);
+              }
+              registry.broadcast({
+                type: 'tool_use',
+                toolId: event.id,
+                toolName: event.name,
+                input: inputSummary,
+                isComplete: false,
+                textOffset,
+              });
+              continue;
+            }
+            if (event.type === 'tool_result') {
+              // Mirror the Claude path's PostToolUse-hook pattern:
+              // find the matching insertion by toolId and complete it
+              // with output + isError so buildSegments renders the
+              // full call/result pair at the right offset. Broadcast
+              // a `tool_result` frame so the live UI updates the
+              // card from "calling..." to its final state.
+              const insertion = toolInsertions.find(
+                (t) => t.toolId === event.id,
+              );
+              if (insertion) {
+                const outputStr =
+                  typeof event.output === 'string'
+                    ? event.output
+                    : (() => {
+                        try { return JSON.stringify(event.output); }
+                        catch { return String(event.output); }
+                      })();
+                insertion.output = outputStr;
+                insertion.isError = event.isError ?? false;
+              }
+              registry.broadcast({
+                type: 'tool_result',
+                toolId: event.id,
+                output:
+                  typeof event.output === 'string'
+                    ? event.output
+                    : (() => {
+                        try { return JSON.stringify(event.output); }
+                        catch { return String(event.output); }
+                      })(),
+                isError: event.isError ?? false,
+              });
+              continue;
+            }
+            if (event.type === 'tool_progress') {
+              registry.broadcast({
+                type: 'tool_progress',
+                toolId: event.toolId,
+                toolName: event.toolName,
+                elapsed: event.elapsedSeconds,
+              });
+              continue;
+            }
             if (event.type === 'done') {
               if (event.finishReason === 'aborted') {
                 console.log('[Agent] Codex generation stopped by user');
@@ -1641,9 +1721,10 @@ export class AgentService {
               }
               continue;
             }
-            // usage, text_snapshot, tool_*, compaction_notice, suppressed —
-            // not emitted by CodexRuntime in E2 (no tools, no compaction,
-            // no snapshot mode). Quietly ignore.
+            // usage, text_snapshot, compaction_notice, suppressed —
+            // not emitted by CodexRuntime today (no compaction, no
+            // snapshot mode, usage handled via session-end path).
+            // Quietly ignore.
           }
         } catch (error) {
           // Same safety-net catch as the Claude path — runtime SHOULD
