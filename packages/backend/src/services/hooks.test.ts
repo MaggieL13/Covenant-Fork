@@ -32,7 +32,7 @@ vi.mock('./files.js', () => ({
 }));
 
 import { getActiveTriggers } from './db.js';
-import { DESTRUCTIVE_BASH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes, __HOOK_TEST_INTERNALS__ } from './hooks.js';
+import { DESTRUCTIVE_BASH_PATTERNS, BROAD_BASH_SEARCH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes, __HOOK_TEST_INTERNALS__ } from './hooks.js';
 
 describe('DESTRUCTIVE_BASH_PATTERNS', () => {
   function matchesDestructive(command: string): boolean {
@@ -220,5 +220,50 @@ describe('extractBashTokens (Cleanup-1.5)', () => {
 
   it('handles deeply nested paths like .ssh/config', () => {
     expect(extract('cat .ssh/config')).toEqual(['cat', '.ssh/config']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cleanup-1.5 review (P1) — Recursive-search Bash patterns. Closes the
+// gap where `grep -R DISCORD_TOKEN .` would pass the per-token deny
+// check (no individual token is path-shaped) but scan the entire tree
+// including committed-but-secret config like resonant.yaml.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('BROAD_BASH_SEARCH_PATTERNS', () => {
+  function matches(cmd: string): boolean {
+    return BROAD_BASH_SEARCH_PATTERNS.some((p) => p.test(cmd));
+  }
+
+  describe('catches recursive content searches', () => {
+    it('grep -R PATTERN .', () => expect(matches('grep -R PATTERN .')).toBe(true));
+    it('grep -r PATTERN .', () => expect(matches('grep -r PATTERN .')).toBe(true));
+    it('grep -rn PATTERN .', () => expect(matches('grep -rn PATTERN .')).toBe(true));
+    it('grep --recursive', () => expect(matches('grep --recursive PATTERN .')).toBe(true));
+    it('rg PATTERN', () => expect(matches('rg PATTERN')).toBe(true));
+    it('rg with flags', () => expect(matches('rg -i PATTERN packages/')).toBe(true));
+    it('Select-String -Recurse', () => expect(matches('Select-String -Pattern foo -Recurse')).toBe(true));
+    it('findstr /s', () => expect(matches('findstr /s "PATTERN" *.ts')).toBe(true));
+    it('find ... -exec cat', () => expect(matches('find . -name "*.json" -exec cat {} +')).toBe(true));
+    it('find ... -exec grep', () => expect(matches('find . -type f -exec grep PATTERN {} \\;')).toBe(true));
+    it('| xargs grep', () => expect(matches('ls | xargs grep PATTERN')).toBe(true));
+  });
+
+  describe('allows narrow / safe commands', () => {
+    it('grep PATTERN file.ts (single file, not recursive)', () => {
+      expect(matches('grep "foo" file.ts')).toBe(false);
+    });
+    it('grep -n PATTERN file (no -R)', () => {
+      expect(matches('grep -n foo file.ts')).toBe(false);
+    });
+    it('ls -R (lists names, not contents — fine)', () => {
+      expect(matches('ls -R packages/')).toBe(false);
+    });
+    it('find . -name PATTERN (no -exec content reader)', () => {
+      expect(matches('find . -name "*.ts"')).toBe(false);
+    });
+    it('Select-String without -Recurse', () => {
+      expect(matches('Select-String -Pattern foo file.txt')).toBe(false);
+    });
   });
 });

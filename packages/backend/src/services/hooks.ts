@@ -137,6 +137,42 @@ export const DESTRUCTIVE_BASH_PATTERNS = [
   /\b(?:python|node|ruby|perl)\s+-e\s+.*(?:unlink|remove|delete)/i, // scripted deletion
 ];
 
+/**
+ * Bash patterns that traverse the file tree to read or grep content.
+ * Blocked because the single-token deny check (which sees command
+ * names and standalone path arguments) can't tell that a recursive
+ * search will read sensitive files during the walk. Block as a class
+ * and direct the model to the Grep tool — that path has proper
+ * `isSensitivePathConfigured` guardrails during the recursive walk.
+ *
+ * Conservative scope: target the well-known recursive content
+ * searchers, not all directory traversal. Listing dirs (`ls -R`) is
+ * fine — it shows names, not content.
+ */
+export const BROAD_BASH_SEARCH_PATTERNS: RegExp[] = [
+  // grep -R / -r / --recursive — also -rn / -Rni / etc. (any flag
+  // combination that contains R or r anywhere in the cluster).
+  // The `[a-zA-Z]*[Rr][a-zA-Z]*` shape catches `-rn`, `-Rni`,
+  // `-vrln`, etc.; the optional middle clause lets other flags
+  // appear before the R/r cluster.
+  /\bgrep\b(?:[^|;&\n]*\s)?(-[a-zA-Z]*[Rr][a-zA-Z]*|--recursive)\b/,
+  // ripgrep — recursive by default. Block always; if the model needs
+  // ripgrep semantics they can use the Grep tool which uses rg
+  // under the hood with proper deny-list filtering.
+  /\brg\b/,
+  // PowerShell recursive search (`Select-String -Recurse`)
+  /\bSelect-String\b[^|;&]*\s-Recurse\b/i,
+  // Windows findstr with /s recursive flag
+  /\bfindstr\b[^|;&]*\s\/s\b/i,
+  // find ... -exec cat/grep/head/tail/etc — using find as a delivery
+  // mechanism for content reads
+  /\bfind\b[^|;&]+-exec\s+(cat|grep|head|tail|less|more|awk|sed)\b/,
+  // xargs piping into a reader — optional middle clause lets the
+  // reader appear immediately (`xargs grep`) OR after other args
+  // (`xargs -n 1 grep`).
+  /\|\s*xargs\s+(?:[^|;&]*\s)?(cat|grep|head|tail|less|more|awk|sed)\b/,
+];
+
 const IMAGE_GEN_TOOLS = new Set([
   'mcp__openai-image-gen__generate_image',
   'mcp__openai_image_gen__generate_image',
@@ -880,6 +916,32 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
           );
         }
       }
+
+      // Broad-search deny (Cleanup-1.5 review catch). Without this,
+      // Grep({pattern:'DISCORD_TOKEN', path:'.'}) walks the entire
+      // tree and may print matching lines from `.env`, `resonant.yaml`,
+      // or any other committed-but-secret file. Refuse broad scans
+      // unless the call narrows scope via either a glob OR a path
+      // that isn't the scope root.
+      const glob = typeof toolInput?.glob === 'string' ? toolInput.glob : '';
+      const path = typeof toolInput?.path === 'string' ? toolInput.path : '';
+      const isBroadPath =
+        path === '' ||
+        path === '.' ||
+        path === scopeRoot ||
+        (isAbsolute(path)
+          ? path === scopeRoot
+          : resolve(scopeRoot, path) === scopeRoot);
+      const hasGlob = glob.trim().length > 0;
+      if (isBroadPath && !hasGlob) {
+        return denySensitive(
+          `Blocked: Grep without a \`glob\` filter against the project root ` +
+          `would scan every file including committed-but-secret config ` +
+          `(resonant.yaml, etc.). Add a \`glob\` like "*.ts" / "*.md" / ` +
+          `"**/*.svelte" to narrow the scan, OR pass a non-root \`path\` ` +
+          `like "packages/backend/src" to constrain the subtree.`,
+        );
+      }
     }
 
     // Glob tool — `pattern` IS the file pattern (different from Grep's
@@ -920,6 +982,22 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
               permissionDecisionReason: `Blocked: destructive command pattern detected (${pattern.source})`,
             },
           };
+        }
+      }
+      // --- Security: Bash recursive content searches (Cleanup-1.5 review) ---
+      // The single-token deny check below catches `cat .env`, but not
+      // `grep -R DISCORD_TOKEN .` — the tokens are `grep`, flags, the
+      // pattern string, and `.`, none of which are sensitive-path
+      // shapes. Block recursive search commands as a class; the model
+      // has the Grep tool which has proper guardrails.
+      for (const pattern of BROAD_BASH_SEARCH_PATTERNS) {
+        if (pattern.test(cmd)) {
+          return denySensitive(
+            `Blocked: Bash recursive content search pattern (${pattern.source}) ` +
+            `could scan sensitive files. Use the Grep tool with a glob ` +
+            `filter (e.g. {pattern, glob: "*.ts"}) — it enforces the ` +
+            `sensitive-file deny-list during the walk.`,
+          );
         }
       }
       // --- Security: Bash sensitive-path reads (Cleanup-1.5) ---
