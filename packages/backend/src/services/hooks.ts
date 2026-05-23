@@ -18,9 +18,13 @@ import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
 import { todayLocal, localTimeStr, localDateStr } from './time.js';
+import {
+  isSensitivePathConfigured,
+  bashOrGlobTargetsSensitive,
+} from './tools/sensitive-paths.js';
 import crypto from 'crypto';
 import { existsSync, readFileSync } from 'fs';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, isAbsolute, join, resolve } from 'path';
 
 // Re-export ConnectionRegistry type from types
 import type { ConnectionRegistry } from '../types.js';
@@ -721,6 +725,52 @@ function getSharedDirPrefixes(): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Bash token extraction (Cleanup-1.5 — sensitive-path deny-list)
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a Bash command into tokens that might be paths, for
+ * sensitive-path deny-list checking. Aggressively splits on shell
+ * metacharacters so common bypass shapes (redirection `< .env`,
+ * subshells `$(cat .env)`, semicolon-chained `ls; cat .env`) all
+ * surface the path token for inspection.
+ *
+ * Flag tokens (-X / --flag) are dropped EXCEPT for the value part
+ * of `--flag=value` constructs, so `--config=.env` still surfaces
+ * `.env` for checking.
+ *
+ * Exported via `__TEST_INTERNALS__` so tests can pin the token
+ * extraction directly; otherwise scoped to the hooks module.
+ */
+function extractBashTokens(command: string): string[] {
+  // Split on whitespace + common shell metacharacters. Quote and
+  // backtick characters are also boundaries — anything inside them
+  // becomes its own token after the split.
+  const parts = command.split(/[\s;|&<>()$`"']+/);
+  const out: string[] = [];
+  for (const t of parts) {
+    if (t.length === 0) continue;
+    if (t.startsWith('-')) {
+      // Flag — extract the value-after-equals if present, drop the
+      // flag itself. Covers `--config=.env`, `-f=.env` shapes.
+      const eqIdx = t.indexOf('=');
+      if (eqIdx > 0) {
+        const val = t.slice(eqIdx + 1);
+        if (val.length > 0) out.push(val);
+      }
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+/** Exported for tests. */
+export const __HOOK_TEST_INTERNALS__ = Object.freeze({
+  extractBashTokens,
+});
+
+// ---------------------------------------------------------------------------
 // Hook builders (unexported — used by factory)
 // ---------------------------------------------------------------------------
 
@@ -767,6 +817,95 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
       textOffset,
     });
 
+    // --- Security: sensitive-path deny-list for Claude SDK native
+    // tools (Cleanup-1.5). Mirrors the protection on the Codex tools
+    // — `isSensitivePathConfigured` / `bashOrGlobTargetsSensitive` are
+    // the shared brain. Without this, Claude turns could Read('.env'),
+    // Grep('.ssh/'), Glob('**/secrets.*'), or Bash('cat .env') and
+    // get the contents while Codex couldn't. Same house rule, both
+    // surfaces.
+    const cfg = getResonantConfig();
+    const scopeRoot = cfg.agent.cwd;
+
+    const denySensitive = (reason: string) => {
+      console.warn(`[Hook] BLOCKED sensitive-path: ${reason}`);
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse' as const,
+          permissionDecision: 'deny' as const,
+          permissionDecisionReason: reason,
+        },
+      };
+    };
+
+    // Read tool — single file path.
+    if (rawToolName === 'Read' && typeof toolInput?.file_path === 'string') {
+      const filePath = toolInput.file_path;
+      const resolvedPath = isAbsolute(filePath) ? filePath : resolve(scopeRoot, filePath);
+      const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+      if (match) {
+        return denySensitive(
+          `Blocked: Read targets sensitive file "${filePath}" (matched deny pattern). ` +
+          `Common secret files (.env / .ssh / credentials / keys / resonant.yaml / .mcp.json) ` +
+          `are refused at the hook layer. Ask Maggie directly if you need this information.`,
+        );
+      }
+    }
+
+    // Grep tool — `path` is search root, `glob` is basename filter,
+    // `pattern` is the regex to search for (NOT checked — searching
+    // FOR the word "password" in code is legitimate; reading a
+    // password from a file isn't).
+    if (rawToolName === 'Grep') {
+      if (typeof toolInput?.path === 'string') {
+        const p = toolInput.path;
+        const resolvedPath = isAbsolute(p) ? p : resolve(scopeRoot, p);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Grep search root "${p}" is a sensitive path. ` +
+            `Narrowing into .ssh / .gnupg / etc. is refused; Grep against ` +
+            `the project root with a tight pattern instead.`,
+          );
+        }
+      }
+      if (typeof toolInput?.glob === 'string') {
+        const frag = bashOrGlobTargetsSensitive(toolInput.glob);
+        if (frag) {
+          return denySensitive(
+            `Blocked: Grep glob "${toolInput.glob}" targets sensitive files ` +
+            `(fragment: "${frag}"). Use a less-specific glob and let the ` +
+            `pattern do the filtering.`,
+          );
+        }
+      }
+    }
+
+    // Glob tool — `pattern` IS the file pattern (different from Grep's
+    // pattern). Both pattern and optional path are checked.
+    if (rawToolName === 'Glob') {
+      if (typeof toolInput?.pattern === 'string') {
+        const frag = bashOrGlobTargetsSensitive(toolInput.pattern);
+        if (frag) {
+          return denySensitive(
+            `Blocked: Glob pattern "${toolInput.pattern}" targets sensitive ` +
+            `files (fragment: "${frag}"). Use a broader pattern.`,
+          );
+        }
+      }
+      if (typeof toolInput?.path === 'string') {
+        const p = toolInput.path;
+        const resolvedPath = isAbsolute(p) ? p : resolve(scopeRoot, p);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Glob path "${p}" is a sensitive directory.`,
+          );
+        }
+      }
+    }
+
     // --- Security: Bash destructive patterns ---
     if (rawToolName === 'Bash' && toolInput?.command) {
       const cmd = String(toolInput.command);
@@ -781,6 +920,31 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
               permissionDecisionReason: `Blocked: destructive command pattern detected (${pattern.source})`,
             },
           };
+        }
+      }
+      // --- Security: Bash sensitive-path reads (Cleanup-1.5) ---
+      // Tokenize the command + check each token-as-path against the
+      // deny-list. Catches the conservative-but-meaningful cases:
+      //   cat .env / type .env / Get-Content .env
+      //   grep "pass" .env
+      //   rg "X" .ssh/config
+      //   ls .ssh / dir .ssh
+      //   < .env  (redirection — split treats '<' as boundary)
+      //   --config=.env  (flag with value extracted)
+      // Tokens that aren't shaped like paths (e.g. "cat", "grep")
+      // resolve to non-sensitive paths under scope, so they pass
+      // isSensitivePath naturally — no need for command-name filters.
+      const tokens = extractBashTokens(cmd);
+      for (const tok of tokens) {
+        const resolvedPath = isAbsolute(tok) ? tok : resolve(scopeRoot, tok);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Bash command references sensitive file "${tok}" ` +
+            `(matched deny pattern). Use the dedicated tools if you need ` +
+            `to inspect the config structure (a sanitized summary tool is ` +
+            `coming in a future arc).`,
+          );
         }
       }
     }

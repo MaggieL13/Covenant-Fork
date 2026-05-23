@@ -217,8 +217,67 @@ export function isSensitivePathConfigured(
   return isSensitivePath(resolvedPath, scopeRoot, extras);
 }
 
+/**
+ * Substring fragments that signal a glob / Bash command is targeting
+ * a sensitive file or directory. Used by `bashOrGlobTargetsSensitive`
+ * for cases where a full path can't be resolved (e.g. glob patterns
+ * like `**\/.env` or Bash one-liners that aren't path-shaped). Each
+ * fragment is matched case-INSENSITIVELY as a substring of the input.
+ *
+ * Kept in sync by hand with `BUILTIN_DENY_PATTERNS` — when a new
+ * pattern lands, add the corresponding human-readable fragment here
+ * too. Caller-supplied `tool_deny_patterns` are NOT automatically
+ * mirrored here because regex patterns don't decompose cleanly into
+ * substrings. This is a known limitation; deployments with custom
+ * deny patterns that want Bash/glob coverage should add fragments
+ * via `cfg.agent.tool_deny_fragments` (separate config; future arc).
+ *
+ * Fragments are CONSERVATIVE — they target the unambiguous markers
+ * that don't conflict with normal repo work:
+ *   - `.env` matches `.env` but not `environment.ts`
+ *   - `.ssh` matches `.ssh/config` but not the word `ssh` alone
+ *   - `secrets.` requires the trailing dot so it doesn't catch
+ *     `secrets-handler.ts` etc.
+ */
+const SENSITIVE_FRAGMENTS = [
+  '.env',
+  '.ssh',
+  '.aws/credentials',
+  '.gnupg',
+  '.netrc',
+  'id_rsa',
+  'id_ed25519',
+  'id_ecdsa',
+  'id_dsa',
+  'secrets.',
+  'credentials.',
+  'resonant.yaml',
+  'resonant.yml',
+  '.mcp.json',
+];
+
+/**
+ * Substring check for Bash commands + glob patterns that don't
+ * resolve to a single concrete path. Returns the matching fragment
+ * if the input targets a known-sensitive name, or `null` otherwise.
+ *
+ * Use this for fuzzy contexts (Bash one-liners, glob patterns).
+ * Use `isSensitivePath` / `isSensitivePathConfigured` for concrete
+ * file paths.
+ */
+export function bashOrGlobTargetsSensitive(input: string): string | null {
+  if (typeof input !== 'string' || input.length === 0) return null;
+  const lower = input.toLowerCase();
+  for (const frag of SENSITIVE_FRAGMENTS) {
+    if (lower.includes(frag)) return frag;
+  }
+  return null;
+}
+
 /** Exported for tests; otherwise the module's surface is just
- *  `isSensitivePath`. */
+ *  `isSensitivePath`, `isSensitivePathConfigured`, and
+ *  `bashOrGlobTargetsSensitive`. */
 export const __TEST_INTERNALS__ = Object.freeze({
   BUILTIN_DENY_PATTERNS,
+  SENSITIVE_FRAGMENTS,
 });

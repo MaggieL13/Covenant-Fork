@@ -32,7 +32,7 @@ vi.mock('./files.js', () => ({
 }));
 
 import { getActiveTriggers } from './db.js';
-import { DESTRUCTIVE_BASH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes } from './hooks.js';
+import { DESTRUCTIVE_BASH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes, __HOOK_TEST_INTERNALS__ } from './hooks.js';
 
 describe('DESTRUCTIVE_BASH_PATTERNS', () => {
   function matchesDestructive(command: string): boolean {
@@ -150,5 +150,75 @@ describe('buildPulseOrientationContext', () => {
     expect(context).not.toContain('TIMERS:');
     expect(context).not.toContain('Custom stickers');
     expect(Math.ceil(context.length / 4)).toBeLessThan(180);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cleanup-1.5 — Bash token extraction for sensitive-path deny-list.
+// The hook needs to break apart commands so each path-shaped token can
+// be checked against the deny-list. These tests pin the extraction
+// surface; the deny-list pattern matching itself lives in
+// `sensitive-paths.test.ts`.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('extractBashTokens (Cleanup-1.5)', () => {
+  const extract = __HOOK_TEST_INTERNALS__.extractBashTokens;
+
+  it('splits a simple `cat .env` into its tokens', () => {
+    expect(extract('cat .env')).toEqual(['cat', '.env']);
+  });
+
+  it('drops bare flags like -n and --verbose', () => {
+    expect(extract('cat -n .env')).toEqual(['cat', '.env']);
+    expect(extract('grep --verbose .env')).toEqual(['grep', '.env']);
+  });
+
+  it('extracts the value-after-equals from --flag=value', () => {
+    // The flag itself drops, but `.env` survives as a discoverable
+    // path so the deny check fires.
+    expect(extract('cmd --config=.env')).toEqual(['cmd', '.env']);
+    expect(extract('cmd -k=.env')).toEqual(['cmd', '.env']);
+  });
+
+  it('handles redirection: `< .env` surfaces the file', () => {
+    expect(extract('cat < .env')).toEqual(['cat', '.env']);
+  });
+
+  it('handles subshells: `cat $(echo .env)` surfaces the inner path', () => {
+    const tokens = extract('cat $(echo .env)');
+    expect(tokens).toContain('.env');
+  });
+
+  it('handles semicolon-chained commands', () => {
+    expect(extract('ls; cat .env')).toEqual(['ls', 'cat', '.env']);
+  });
+
+  it('handles pipe-chained commands', () => {
+    expect(extract('cat .env | grep PASSWORD')).toEqual([
+      'cat',
+      '.env',
+      'grep',
+      'PASSWORD',
+    ]);
+  });
+
+  it('handles Windows PowerShell-style: Get-Content .env', () => {
+    expect(extract('Get-Content .env')).toEqual(['Get-Content', '.env']);
+  });
+
+  it('handles quoted path tokens (treats quotes as token boundaries)', () => {
+    // The split-by-quote behavior breaks "foo bar" into ["foo", "bar"]
+    // — slightly aggressive but it means a quoted .env still surfaces.
+    const tokens = extract('cat ".env"');
+    expect(tokens).toContain('.env');
+  });
+
+  it('returns an empty array for whitespace-only input', () => {
+    expect(extract('   ')).toEqual([]);
+    expect(extract('')).toEqual([]);
+  });
+
+  it('handles deeply nested paths like .ssh/config', () => {
+    expect(extract('cat .ssh/config')).toEqual(['cat', '.ssh/config']);
   });
 });

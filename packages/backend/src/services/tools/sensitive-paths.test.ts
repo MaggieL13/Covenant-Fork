@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { isSensitivePath, __TEST_INTERNALS__ } from './sensitive-paths.js';
+import {
+  isSensitivePath,
+  bashOrGlobTargetsSensitive,
+  __TEST_INTERNALS__,
+} from './sensitive-paths.js';
 
 // Most tests work with synthetic resolved paths against a synthetic
 // scope root; we don't need a real filesystem because isSensitivePath
@@ -157,6 +161,57 @@ describe('isSensitivePath — return value diagnostics', () => {
 describe('built-in pattern list is non-empty', () => {
   it('exports the expected built-in patterns via __TEST_INTERNALS__', () => {
     expect(__TEST_INTERNALS__.BUILTIN_DENY_PATTERNS.length).toBeGreaterThan(5);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// bashOrGlobTargetsSensitive — substring check for fuzzy contexts where
+// we don't have a single resolved file path (Bash one-liners with shell
+// glob expansion, Grep/Glob `pattern` args, etc.)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('bashOrGlobTargetsSensitive', () => {
+  it('matches glob patterns targeting common secrets', () => {
+    expect(bashOrGlobTargetsSensitive('**/.env')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/.env.*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('.ssh/**')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/id_rsa*')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/resonant.yaml')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/.mcp.json')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/secrets.*')).not.toBeNull();
+  });
+
+  it('matches case-insensitively', () => {
+    expect(bashOrGlobTargetsSensitive('**/SECRETS.JSON')).not.toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/.ENV')).not.toBeNull();
+  });
+
+  it('returns null for clearly safe glob patterns', () => {
+    expect(bashOrGlobTargetsSensitive('**/*.ts')).toBeNull();
+    expect(bashOrGlobTargetsSensitive('packages/backend/**/*.test.ts')).toBeNull();
+    expect(bashOrGlobTargetsSensitive('docs/**/*.md')).toBeNull();
+    expect(bashOrGlobTargetsSensitive('**/README.md')).toBeNull();
+  });
+
+  it('does NOT false-positive on common identifier-like words', () => {
+    // These are common false-positive risks. The fragment list is
+    // conservative enough that they should NOT match:
+    expect(bashOrGlobTargetsSensitive('environment')).toBeNull();
+    expect(bashOrGlobTargetsSensitive('env.example')).toBeNull(); // no leading dot
+    expect(bashOrGlobTargetsSensitive('sshpass.ts')).toBeNull(); // ssh ≠ .ssh
+    expect(bashOrGlobTargetsSensitive('credentials-handler.ts')).toBeNull(); // no trailing dot
+    expect(bashOrGlobTargetsSensitive('idiosyncratic.txt')).toBeNull(); // id ≠ id_rsa
+  });
+
+  it('returns the matching fragment for diagnostics', () => {
+    expect(bashOrGlobTargetsSensitive('**/.env')).toBe('.env');
+    expect(bashOrGlobTargetsSensitive('**/secrets.json')).toBe('secrets.');
+  });
+
+  it('handles empty / non-string inputs gracefully', () => {
+    expect(bashOrGlobTargetsSensitive('')).toBeNull();
+    expect(bashOrGlobTargetsSensitive(undefined as unknown as string)).toBeNull();
+    expect(bashOrGlobTargetsSensitive(null as unknown as string)).toBeNull();
   });
 });
 
