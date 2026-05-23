@@ -33,6 +33,7 @@ vi.mock('./files.js', () => ({
 
 import { getActiveTriggers } from './db.js';
 import { DESTRUCTIVE_BASH_PATTERNS, BROAD_BASH_SEARCH_PATTERNS, EMOTIONAL_MARKERS, buildPulseOrientationContext, getSafeWritePrefixes, __HOOK_TEST_INTERNALS__ } from './hooks.js';
+import type { HookContext } from './hooks.js';
 
 describe('DESTRUCTIVE_BASH_PATTERNS', () => {
   function matchesDestructive(command: string): boolean {
@@ -333,18 +334,20 @@ describe('isGlobToken (Cleanup-1.5 P1)', () => {
 describe('buildPreToolUse — PreToolUse decisions (Cleanup-1.5)', () => {
   // Minimal HookContext stub. Only the fields the deny-path checks
   // read are populated; everything else (registry.broadcast, audit
-  // logging, etc.) is satisfied by no-op spies.
-  const minimalCtx = () => ({
+  // logging, etc.) is satisfied by no-op spies. Explicit HookContext
+  // return type so the cast doesn't go through the `any`-typed
+  // __HOOK_TEST_INTERNALS__.buildPreToolUse getter (Cleanup-1.5 v2
+  // post-review fix).
+  const minimalCtx = (): HookContext => ({
     threadId: 'thread-1',
     threadName: 'Test',
-    threadType: 'daily' as const,
+    threadType: 'daily',
     streamMsgId: 'stream-1',
     isAutonomous: false,
-    registry: { broadcast: vi.fn() } as unknown as Parameters<
-      typeof __HOOK_TEST_INTERNALS__.buildPreToolUse
-    >[0]['registry'],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registry: { broadcast: vi.fn() } as any,
     sessionId: null,
-    platform: 'web' as const,
+    platform: 'web',
     toolInsertions: [],
     getTextLength: () => 0,
   });
