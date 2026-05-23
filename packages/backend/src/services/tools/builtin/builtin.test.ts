@@ -225,6 +225,22 @@ describe('read_file', () => {
     expect(out.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
     expect(out).toContain('[tool output truncated');
   });
+
+  // Cleanup-1 (sensitive-file deny-list): read_file refuses files on
+  // the deny-list with a distinct structured error code so the model
+  // can adapt rather than retry.
+  it('refuses sensitive files with structured `sensitive_path` error', async () => {
+    // Need a .env-named fixture inside scope. Tear down after.
+    await writeFile(join(scopeRoot, '.env'), 'SECRET=hunter2\n');
+    try {
+      const out = await readFileTool.execute({ path: '.env' }, ctx);
+      const parsed = JSON.parse(out);
+      expect(parsed.error.code).toBe('sensitive_path');
+      expect(parsed.error.message).toContain('.env');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -280,6 +296,23 @@ describe('list_files', () => {
     expect(JSON.parse(out)).toMatchObject({
       error: { code: 'invalid_args' },
     });
+  });
+
+  // Cleanup-1: sensitive entries get redacted (not removed) so the
+  // model knows they exist without seeing size or being able to read.
+  it('redacts sensitive entries in the listing instead of refusing the whole thing', async () => {
+    await writeFile(join(scopeRoot, '.env'), 'SECRET=hunter2\n');
+    try {
+      const out = await listFilesTool.execute({ path: '.' }, ctx);
+      // .env appears, but redacted — no size, distinct marker
+      expect(out).toContain('.env [redacted');
+      // Sister-files still visible and detailed
+      expect(out).toMatch(/README\.md \(\d+ bytes\)/);
+      // Suffix notice surfaces
+      expect(out).toContain('redacted by sensitive-file deny-list');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
   });
 });
 
@@ -420,6 +453,87 @@ describe('search_text', () => {
   // depending on V8 JIT mood. Verified via inspection + manual
   // smoke. The deeper fix (static AST rejection via safe-regex /
   // regexp-tree) lives in a chip for a later arc.
+
+  // Cleanup-1: sensitive files are skipped during the walk (same
+  // pattern as node_modules + .git) and surfaced as a notice line.
+  it('skips sensitive files during the walk and surfaces a notice', async () => {
+    // Use an isolated pattern that ONLY appears in .env so we don't
+    // collide with the global fixtures (hugematches.txt etc.).
+    await writeFile(
+      join(scopeRoot, '.env'),
+      'UNIQUE_DENYTEST_SECRET=value\n',
+    );
+    try {
+      const out = await searchTextTool.execute(
+        { pattern: 'UNIQUE_DENYTEST_SECRET' },
+        ctx,
+      );
+      // No match should leak out of the .env file
+      expect(out).not.toMatch(/\.env:\d+:/);
+      expect(out).not.toContain('UNIQUE_DENYTEST_SECRET=');
+      // Notice surfaces with the .env name
+      expect(out).toContain('sensitive-file deny-list');
+      expect(out).toContain('.env');
+    } finally {
+      await rm(join(scopeRoot, '.env'), { force: true });
+    }
+  });
+
+  // Cleanup-1 review (Codex P1 catch — the bypass): when the model
+  // narrows the search root to a sensitive directory like `.ssh`,
+  // the walker MUST still apply the deny-list — otherwise paths
+  // inside the narrowed root look like `config` (not `.ssh/config`),
+  // pattern doesn't match, the deny-list is silently bypassed. Fix:
+  // pass realpath(ctx.scopeRoot) as the policy root so checks are
+  // computed against the project scope, NOT the narrowed search root.
+  it('still skips .ssh/ when the model narrows the search root TO .ssh (no bypass)', async () => {
+    const sshDir = join(scopeRoot, '.ssh');
+    await mkdir(sshDir, { recursive: true });
+    // Pattern and value are deliberately DIFFERENT — the search
+    // pattern echoes in the result's header, so testing the leak
+    // means checking that the VALUE bytes never appear, not the
+    // pattern string.
+    await writeFile(
+      join(sshDir, 'config'),
+      'PRIVATE_KEY=ssss-leak-marker-3791\n',
+    );
+    try {
+      const out = await searchTextTool.execute(
+        { pattern: 'PRIVATE_KEY', path: '.ssh' },
+        ctx,
+      );
+      // The actual secret value MUST NOT appear. Without the bypass
+      // fix, the walk would descend into .ssh and emit a match line
+      // like `config:1: PRIVATE_KEY=ssss-leak-marker-3791`.
+      expect(out).not.toContain('ssss-leak-marker-3791');
+      // The walk should have reported .ssh as a skipped sensitive entry.
+      expect(out).toContain('sensitive-file deny-list');
+    } finally {
+      await rm(sshDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still skips resonant.yaml when searched via narrowed root (no bypass)', async () => {
+    const yamlPath = join(scopeRoot, 'resonant.yaml');
+    await writeFile(
+      yamlPath,
+      'auth:\n  password: yyyy-leak-marker-8442\n',
+    );
+    try {
+      // Use a glob that targets ONLY resonant.yaml so we can prove the
+      // file-level deny check fires even when the search is otherwise
+      // scoped to allow this single match.
+      const out = await searchTextTool.execute(
+        { pattern: 'password', glob: 'resonant.yaml' },
+        ctx,
+      );
+      // The actual password value MUST NOT appear.
+      expect(out).not.toContain('yyyy-leak-marker-8442');
+      expect(out).toContain('sensitive-file deny-list');
+    } finally {
+      await rm(yamlPath, { force: true });
+    }
+  });
 
   // PR E3b/4 second-pass Codex review (P2 catch): the recursive walk
   // used to plow through directories + readFile calls even after the

@@ -31,13 +31,14 @@
  * - `invalid_regex` — pattern doesn't compile
  */
 
-import { readFile, readdir, stat } from 'fs/promises';
+import { readFile, readdir, realpath, stat } from 'fs/promises';
 import { join, relative } from 'path';
 import {
   assertPathInScope,
   CovenantToolPermissionError,
 } from '../path-guard.js';
 import { applyOutputBudget } from '../output-budget.js';
+import { isSensitivePathConfigured } from '../sensitive-paths.js';
 import { basenameGlobToRegex } from './list_files.js';
 import type { CovenantTool, ToolContext } from '../registry.js';
 
@@ -96,6 +97,10 @@ interface WalkResult {
   matches: Match[];
   skippedTooLarge: string[];
   skippedBinary: string[];
+  /** Files skipped because they match the sensitive-file deny-list
+   *  (`.env`, `.ssh/`, etc.). Same shape as the other skipped lists
+   *  so the tool can surface them as a notice. */
+  skippedSensitive: string[];
   truncated: boolean;
   /** True when the recursive walk bailed early because the runtime's
    *  abort signal fired (user hit the stop button mid-search). The
@@ -120,6 +125,16 @@ async function walk(
   result: WalkResult,
   signal: AbortSignal | undefined,
 ): Promise<void> {
+  // Sensitive-directory check at the walk entry — if the directory
+  // we're about to descend into is itself sensitive (e.g. `.ssh/`
+  // or `.gnupg/`), skip the entire subtree. Reading file CONTENTS
+  // inside a sensitive dir is exactly what we want to prevent.
+  if (dir !== scopeRoot) {
+    if (isSensitivePathConfigured(dir, scopeRoot)) {
+      result.skippedSensitive.push(relative(scopeRoot, dir));
+      return;
+    }
+  }
   if (result.truncated || result.aborted) return;
   // PR E3b/4 second-pass Codex review (P2 catch): on Windows a
   // search across the whole repo can spend seconds on readdir +
@@ -158,6 +173,14 @@ async function walk(
 
     const fullPath = join(dir, entry.name);
     const relPath = relative(scopeRoot, fullPath);
+
+    // Sensitive-file deny-list check per file (in addition to the
+    // directory-level check at walk entry, since secrets can also
+    // live as individual files at scope root e.g. `.env`).
+    if (isSensitivePathConfigured(fullPath, scopeRoot)) {
+      result.skippedSensitive.push(relPath);
+      continue;
+    }
 
     let fileStats;
     try {
@@ -281,6 +304,7 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     matches: [],
     skippedTooLarge: [],
     skippedBinary: [],
+    skippedSensitive: [],
     truncated: false,
     aborted: false,
     regexTimedOut: false,
@@ -292,7 +316,19 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   // type includes node:stream/web's AbortSignal too; at runtime
   // they share the structural .aborted property our walk reads.
   const signal = (ctx.abortSignal as unknown as AbortSignal | undefined);
-  await walk(resolvedRoot, resolvedRoot, filter, regex, result, signal);
+  // Cleanup-1 review (Codex P1 catch): the WALK needs to know its
+  // start directory (`resolvedRoot`, the narrowed search root) AND
+  // the POLICY root (the project scope root, `ctx.scopeRoot`'s
+  // realpath) SEPARATELY. The deny-list patterns are written against
+  // paths-from-scope-root (e.g. `(^|\/)\.ssh(\/|$)`). If the model
+  // narrows the search root to `.ssh` and we use that as the policy
+  // root, every entry's relative-path inside the walker looks like
+  // `config` instead of `.ssh/config` — pattern doesn't match, the
+  // deny-list is bypassed. Pass realpath(ctx.scopeRoot) as the
+  // policy root so paths are computed/checked against the actual
+  // project scope, NOT the narrowed search root.
+  const resolvedScopeRoot = await realpath(ctx.scopeRoot);
+  await walk(resolvedRoot, resolvedScopeRoot, filter, regex, result, signal);
 
   const header =
     result.matches.length === 0
@@ -335,6 +371,17 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   if (result.skippedBinary.length > 0) {
     notes.push(
       `[skipped ${result.skippedBinary.length} binary files]`,
+    );
+  }
+  if (result.skippedSensitive.length > 0) {
+    // Show the matching entries by name so the model can SEE which
+    // ones were skipped (it might want to ask the user about them
+    // rather than retry through search) without exposing contents.
+    notes.push(
+      `[skipped ${result.skippedSensitive.length} sensitive-file deny-list ` +
+      `${result.skippedSensitive.length === 1 ? 'entry' : 'entries'}: ` +
+      `${result.skippedSensitive.slice(0, 3).join(', ')}` +
+      `${result.skippedSensitive.length > 3 ? ', ...' : ''}]`,
     );
   }
 

@@ -42,6 +42,15 @@ export interface ResonantConfig {
      *  Pulse never uses thinking, so no pulse-tier counterpart exists. */
     thinking_effort_autonomous?: ThinkingEffort | string;
     query_timeout_ms: number;
+    /** Additional regex patterns appended to the built-in tools'
+     *  sensitive-file deny-list. Matched against the resolved path
+     *  + each path segment via `isSensitivePath` in
+     *  `services/tools/sensitive-paths.ts`. Always merged with the
+     *  built-in defaults (`.env`, `.ssh/`, `id_rsa`, etc.) — this is
+     *  ADDITIVE, never replaces the defaults. Use to lock down
+     *  project-specific secret locations (e.g. `^secrets\.local\.`,
+     *  `resonant\.yaml$` for this repo's plain-text auth password). */
+    tool_deny_patterns?: string[];
   };
   orchestrator: {
     enabled: boolean;
@@ -137,6 +146,10 @@ const DEFAULTS: ResonantConfig = {
     // complete while still bounding genuinely runaway sessions. User
     // can always abort manually with stop_generation.
     query_timeout_ms: 1200000,
+    // tool_deny_patterns intentionally undefined by default — the
+    // built-in deny-list in tools/sensitive-paths.ts is enough for
+    // most setups. Add entries here when a deployment has
+    // project-specific secret files (e.g. plain-text config secrets).
   },
   orchestrator: {
     enabled: true,
