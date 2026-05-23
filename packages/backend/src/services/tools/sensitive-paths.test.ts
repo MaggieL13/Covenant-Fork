@@ -82,19 +82,46 @@ describe('isSensitivePath — built-in deny patterns', () => {
     expect(isSensitivePath(p('.gnupg'), scope)).not.toBeNull();
     expect(isSensitivePath(p('.gnupg/secring.gpg'), scope)).not.toBeNull();
   });
+
+  // Cleanup-1 review (Codex P1): Covenant-native config files that
+  // commonly carry secrets are now default-protected. resonant.yaml
+  // holds `auth.password` plain-text; .mcp.json's `mcpServers.*.env`
+  // commonly carries API keys for external MCP integrations.
+  it('matches resonant.yaml (Covenant config — plain-text auth password)', () => {
+    expect(isSensitivePath(p('resonant.yaml'), scope)).not.toBeNull();
+    expect(isSensitivePath(p('resonant.yml'), scope)).not.toBeNull();
+    expect(isSensitivePath(p('config/resonant.yaml'), scope)).not.toBeNull();
+  });
+
+  it('does NOT match unrelated yaml files', () => {
+    expect(isSensitivePath(p('pulse.yaml'), scope)).toBeNull();
+    expect(isSensitivePath(p('packages/backend/tsconfig.yaml'), scope)).toBeNull();
+  });
+
+  it('matches .mcp.json (MCP servers config — env values often contain tokens)', () => {
+    expect(isSensitivePath(p('.mcp.json'), scope)).not.toBeNull();
+    expect(isSensitivePath(p('subdir/.mcp.json'), scope)).not.toBeNull();
+  });
+
+  it('does NOT match unrelated json files', () => {
+    expect(isSensitivePath(p('mcp.json'), scope)).toBeNull(); // no leading dot
+    expect(isSensitivePath(p('package.json'), scope)).toBeNull();
+    expect(isSensitivePath(p('tsconfig.json'), scope)).toBeNull();
+  });
 });
 
 describe('isSensitivePath — caller-supplied patterns', () => {
   it('extends the built-in list (additive, not replacement)', () => {
-    // resonant.yaml is project-specific — not in defaults
-    expect(isSensitivePath(p('resonant.yaml'), scope)).toBeNull();
+    // pick a file that is NOT in built-in defaults so we can prove
+    // additivity. `private-notes.txt` is project-specific by design.
+    expect(isSensitivePath(p('private-notes.txt'), scope)).toBeNull();
     // Add it via extras
     expect(
-      isSensitivePath(p('resonant.yaml'), scope, ['^resonant\\.yaml$']),
+      isSensitivePath(p('private-notes.txt'), scope, ['^private-notes\\.txt$']),
     ).not.toBeNull();
-    // Built-in defaults still fire
+    // Built-in defaults still fire alongside extras
     expect(
-      isSensitivePath(p('.env'), scope, ['^resonant\\.yaml$']),
+      isSensitivePath(p('.env'), scope, ['^private-notes\\.txt$']),
     ).not.toBeNull();
   });
 

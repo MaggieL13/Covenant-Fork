@@ -95,6 +95,17 @@ const BUILTIN_DENY_PATTERNS: RegExp[] = [
   // PEM-encoded keys + certs (often paired with private keys; the
   // model usually doesn't need to read these to function)
   /\.(pem|key|p12|pfx)$/,
+  // Covenant-native config files (Cleanup-1 review catch). Both can
+  // hold secrets:
+  //   - resonant.yaml: `auth.password` is plain-text; per config.ts
+  //     line 45.
+  //   - .mcp.json: `mcpServers.*.env.*` often carries API keys for
+  //     external MCP integrations.
+  // Refusing raw reads is the safer default. A future "safe config
+  // summary" / "safe MCP summary" tool can expose the structural
+  // shape without leaking values — spec'd as a follow-up chip.
+  /(^|\/)resonant\.ya?ml$/,
+  /(^|\/)\.mcp\.json$/,
 ];
 
 /**
@@ -102,10 +113,28 @@ const BUILTIN_DENY_PATTERNS: RegExp[] = [
  * built-in defaults + caller-supplied additions. Invalid regex
  * strings in the additions are dropped with a console.warn rather
  * than crashing — bad config shouldn't take down the runtime.
+ *
+ * ## Caching (Cleanup-1 review P3)
+ *
+ * `cfg.agent.tool_deny_patterns` is typically a stable array
+ * reference across calls — the config is loaded once at boot. But
+ * `isSensitivePath` runs on every fs op a tool does, which during
+ * a `search_text` walk can be thousands of calls per turn. The
+ * original implementation recompiled the regex AND re-issued the
+ * console.warn for every invalid pattern on every call → log spam
+ * proportional to walk size on misconfigured deployments. Cache
+ * by input array reference so we recompile + warn ONCE per
+ * config snapshot.
  */
+let compileCacheKey: readonly string[] | undefined;
+let compileCacheValue: RegExp[] = BUILTIN_DENY_PATTERNS;
+
 function compilePatterns(extraPatternStrings?: readonly string[]): RegExp[] {
   if (!extraPatternStrings || extraPatternStrings.length === 0) {
     return BUILTIN_DENY_PATTERNS;
+  }
+  if (extraPatternStrings === compileCacheKey) {
+    return compileCacheValue;
   }
   const extras: RegExp[] = [];
   for (const src of extraPatternStrings) {
@@ -117,7 +146,9 @@ function compilePatterns(extraPatternStrings?: readonly string[]): RegExp[] {
       );
     }
   }
-  return [...BUILTIN_DENY_PATTERNS, ...extras];
+  compileCacheKey = extraPatternStrings;
+  compileCacheValue = [...BUILTIN_DENY_PATTERNS, ...extras];
+  return compileCacheValue;
 }
 
 /**
