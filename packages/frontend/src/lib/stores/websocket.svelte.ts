@@ -929,6 +929,10 @@ export async function loadOlderMessages(threadId: string): Promise<boolean> {
     const older = data.messages || [];
     if (older.length === 0) return false;
     messages = [...older, ...messages];
+    // Cleanup-2: older paginated batches can also carry persisted
+    // attachment warning metadata, so hydrate pills for those rows
+    // just like initial load and sync_response do.
+    seedAttachmentWarningsFromMessages(older);
     return older.length >= 50; // If we got a full page, there might be more
   } catch (err) {
     console.error('Failed to load older messages:', err);
