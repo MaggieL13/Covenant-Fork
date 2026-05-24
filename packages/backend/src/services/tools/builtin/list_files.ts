@@ -157,7 +157,7 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     const sensitiveMatch = isSensitivePathConfigured(entryPath, ctx.scopeRoot);
     if (sensitiveMatch) {
       redactedCount++;
-      lines.push(`${entry.name} [redacted — sensitive-file deny-list]`);
+      lines.push(`${entry.name} [redacted — tool-layer deny-list]`);
       continue;
     }
     if (entry.isDirectory()) {
@@ -193,7 +193,7 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   }
   if (redactedCount > 0) {
     suffixParts.push(
-      `[${redactedCount} entr${redactedCount === 1 ? 'y' : 'ies'} redacted by sensitive-file deny-list — not readable via tools]`,
+      `[${redactedCount} entr${redactedCount === 1 ? 'y' : 'ies'} redacted by tool-layer deny-list — not readable via tools]`,
     );
   }
   const suffix = suffixParts.length > 0 ? '\n' + suffixParts.join('\n') : '';

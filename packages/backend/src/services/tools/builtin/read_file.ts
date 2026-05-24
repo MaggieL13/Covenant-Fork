@@ -100,7 +100,7 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   if (sensitiveMatch) {
     return structuredError(
       'sensitive_path',
-      `File "${rawArgs.path}" is on the sensitive-file deny-list (pattern: ${sensitiveMatch}). Common secret files (.env / .ssh / credentials / keys) are refused at the tool layer regardless of model intent. Ask the user directly if you need this information.`,
+      `File "${rawArgs.path}" is on the tool-layer deny-list (pattern: ${sensitiveMatch}). Certain paths — system secrets (.env / .ssh / credentials / keys) and binary asset stores (e.g. sticker images) — are refused regardless of model intent. For stickers use list_stickers; for secrets ask the user directly.`,
     );
   }
 

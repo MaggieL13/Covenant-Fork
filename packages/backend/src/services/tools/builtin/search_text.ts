@@ -378,7 +378,7 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
     // ones were skipped (it might want to ask the user about them
     // rather than retry through search) without exposing contents.
     notes.push(
-      `[skipped ${result.skippedSensitive.length} sensitive-file deny-list ` +
+      `[skipped ${result.skippedSensitive.length} tool-layer deny-list ` +
       `${result.skippedSensitive.length === 1 ? 'entry' : 'entries'}: ` +
       `${result.skippedSensitive.slice(0, 3).join(', ')}` +
       `${result.skippedSensitive.length > 3 ? ', ...' : ''}]`,
