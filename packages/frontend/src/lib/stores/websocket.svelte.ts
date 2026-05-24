@@ -71,6 +71,48 @@ export type AttachmentWarning = {
 };
 let attachmentWarnings = $state<Record<string, AttachmentWarning[]>>({});
 
+/**
+ * Seed `attachmentWarnings` from each message's
+ * `metadata.attachmentWarnings` array (persisted by backend in
+ * Cleanup-2). Dedupes by `fileId` per messageId so live events that
+ * arrived during this session don't double-render alongside the
+ * persisted entries.
+ *
+ * Called from `sync_response` (for newly-arrived missed messages)
+ * and from the thread-switch fetch (for the initial message load).
+ * Idempotent — safe to call repeatedly on the same message set.
+ */
+function seedAttachmentWarningsFromMessages(msgs: Message[]): void {
+  let next: Record<string, AttachmentWarning[]> | null = null;
+  for (const m of msgs) {
+    const meta = m.metadata as
+      | { attachmentWarnings?: Array<{ fileId: string; filename?: string; reason: string; receivedAt?: string }> }
+      | null
+      | undefined;
+    const persisted = meta?.attachmentWarnings;
+    if (!Array.isArray(persisted) || persisted.length === 0) continue;
+    if (!next) next = { ...attachmentWarnings };
+    const existing = next[m.id] ?? [];
+    const seenFileIds = new Set(existing.map((w) => w.fileId));
+    const merged = [...existing];
+    for (const p of persisted) {
+      if (!p || typeof p.fileId !== 'string') continue;
+      if (seenFileIds.has(p.fileId)) continue;
+      seenFileIds.add(p.fileId);
+      merged.push({
+        fileId: p.fileId,
+        filename: p.filename,
+        reason: p.reason,
+        receivedAt: p.receivedAt ?? new Date().toISOString(),
+      });
+    }
+    if (merged.length !== existing.length) {
+      next[m.id] = merged;
+    }
+  }
+  if (next) attachmentWarnings = next;
+}
+
 // Voice state
 let voiceModeEnabled = $state(false);
 let transcriptionStatus = $state<'idle' | 'processing' | 'complete' | 'error'>('idle');
@@ -499,6 +541,9 @@ function handleMessage(event: MessageEvent) {
             messages = [...messages, ...newMsgs].sort((a, b) => a.sequence - b.sequence);
             const last = newMsgs[newMsgs.length - 1];
             if (last.sequence > lastSeenSequence) lastSeenSequence = last.sequence;
+            // Cleanup-2: seed attachment warnings for the newly-arrived
+            // messages so pills persist across reconnects.
+            seedAttachmentWarningsFromMessages(newMsgs);
           }
         }
         break;
@@ -712,13 +757,18 @@ function handleMessage(event: MessageEvent) {
         // PR E3a.5 — append to per-message list. Multiple drops per
         // owner message are possible (one upload may hit per-turn cap
         // for multiple attachments), so we never replace.
+        //
+        // Cleanup-2 — dedupe by fileId so a live event for an
+        // already-persisted warning (which gets seeded on initial
+        // message load) doesn't double-render the pill.
+        const prev = attachmentWarnings[msg.messageId] ?? [];
+        if (prev.some((w) => w.fileId === msg.fileId)) break;
         const entry: AttachmentWarning = {
           fileId: msg.fileId,
           filename: msg.filename,
           reason: msg.reason,
           receivedAt: new Date().toISOString(),
         };
-        const prev = attachmentWarnings[msg.messageId] ?? [];
         attachmentWarnings = {
           ...attachmentWarnings,
           [msg.messageId]: [...prev, entry],
@@ -838,6 +888,13 @@ export function send(msg: ClientMessage) {
 
 export async function loadThread(threadId: string) {
   activeThreadId = threadId;
+  // Cleanup-2 review (Codex non-blocker): drop attachment warnings
+  // from the previous thread so the map stays bounded to the
+  // currently-loaded thread's messages. Pills are keyed by
+  // messageId so they wouldn't display in the wrong place either
+  // way, but unbounded growth across many thread switches is wasted
+  // memory. Re-seeded below from the new thread's metadata.
+  attachmentWarnings = {};
   try {
     const response = await apiFetch(`/api/threads/${threadId}/messages`);
     if (!response.ok) throw new Error('Failed to load messages');
@@ -847,6 +904,9 @@ export async function loadThread(threadId: string) {
       const last = messages[messages.length - 1];
       if (last.sequence > lastSeenSequence) lastSeenSequence = last.sequence;
     }
+    // Cleanup-2: seed attachment warnings from persisted message
+    // metadata so pills survive reload + thread switch.
+    seedAttachmentWarningsFromMessages(messages);
     // Mark as read (best-effort — don't block thread loading if WS is down)
     if (messages.length > 0) {
       try { send({ type: 'read', threadId, beforeId: messages[messages.length - 1].id }); } catch {}
