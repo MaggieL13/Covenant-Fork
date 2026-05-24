@@ -110,6 +110,16 @@ const BUILTIN_DENY_PATTERNS: RegExp[] = [
   // shape without leaking values — spec'd as a follow-up chip.
   /(^|\/)resonant\.ya?ml$/,
   /(^|\/)\.mcp\.json$/,
+  // Sticker binary store (Cleanup-3). Stickers live on disk as
+  // `.webp` / `.png` files under `data/stickers/{pack_id}/{filename}`.
+  // The LLM has no legitimate reason to read those bytes — the
+  // contract for "send a sticker" is to emit `:packname_stickername:`
+  // in the assistant text and let the frontend's markdown ref-map
+  // render the image. Catalog discovery goes through the
+  // `list_stickers` built-in tool (no raw fs). Deny matches every
+  // path under `data/stickers/` so read_file refuses, list_files
+  // redacts, and search_text skips the subtree.
+  /(^|\/)data\/stickers(\/|$)/,
 ];
 
 /**
@@ -260,6 +270,10 @@ const SENSITIVE_FRAGMENTS = [
   'resonant.yaml',
   'resonant.yml',
   '.mcp.json',
+  // Cleanup-3: sticker binary store. Mirrors the
+  // `(^|\/)data\/stickers(\/|$)` deny pattern for Bash/glob inputs
+  // like `cat data/stickers/zephyr/tea.webp` or `ls data/stickers/*`.
+  'data/stickers',
 ];
 
 /**

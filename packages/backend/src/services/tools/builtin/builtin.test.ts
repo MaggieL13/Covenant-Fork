@@ -309,7 +309,7 @@ describe('list_files', () => {
       // Sister-files still visible and detailed
       expect(out).toMatch(/README\.md \(\d+ bytes\)/);
       // Suffix notice surfaces
-      expect(out).toContain('redacted by sensitive-file deny-list');
+      expect(out).toContain('redacted by tool-layer deny-list');
     } finally {
       await rm(join(scopeRoot, '.env'), { force: true });
     }
@@ -472,7 +472,7 @@ describe('search_text', () => {
       expect(out).not.toMatch(/\.env:\d+:/);
       expect(out).not.toContain('UNIQUE_DENYTEST_SECRET=');
       // Notice surfaces with the .env name
-      expect(out).toContain('sensitive-file deny-list');
+      expect(out).toContain('tool-layer deny-list');
       expect(out).toContain('.env');
     } finally {
       await rm(join(scopeRoot, '.env'), { force: true });
@@ -507,7 +507,7 @@ describe('search_text', () => {
       // like `config:1: PRIVATE_KEY=ssss-leak-marker-3791`.
       expect(out).not.toContain('ssss-leak-marker-3791');
       // The walk should have reported .ssh as a skipped sensitive entry.
-      expect(out).toContain('sensitive-file deny-list');
+      expect(out).toContain('tool-layer deny-list');
     } finally {
       await rm(sshDir, { recursive: true, force: true });
     }
@@ -529,7 +529,7 @@ describe('search_text', () => {
       );
       // The actual password value MUST NOT appear.
       expect(out).not.toContain('yyyy-leak-marker-8442');
-      expect(out).toContain('sensitive-file deny-list');
+      expect(out).toContain('tool-layer deny-list');
     } finally {
       await rm(yamlPath, { force: true });
     }
@@ -563,13 +563,14 @@ describe('search_text', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('registerBuiltinTools', () => {
-  it('registers all three tools on a fresh registry', () => {
+  it('registers all four tools on a fresh registry', () => {
     const registry = new ToolRegistry();
     registerBuiltinTools(registry);
-    expect(registry.size()).toBe(3);
+    expect(registry.size()).toBe(4);
     expect(registry.get('read_file')).toBeDefined();
     expect(registry.get('list_files')).toBeDefined();
     expect(registry.get('search_text')).toBeDefined();
+    expect(registry.get('list_stickers')).toBeDefined();
   });
 
   it('throws on double-registration (delegates to registry.register)', () => {
