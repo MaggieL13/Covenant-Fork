@@ -18,9 +18,13 @@ import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
 import { todayLocal, localTimeStr, localDateStr } from './time.js';
+import {
+  isSensitivePathConfigured,
+  bashOrGlobTargetsSensitive,
+} from './tools/sensitive-paths.js';
 import crypto from 'crypto';
 import { existsSync, readFileSync } from 'fs';
-import { basename, dirname, join } from 'path';
+import { basename, dirname, isAbsolute, join, resolve } from 'path';
 
 // Re-export ConnectionRegistry type from types
 import type { ConnectionRegistry } from '../types.js';
@@ -131,6 +135,42 @@ export const DESTRUCTIVE_BASH_PATTERNS = [
   /git\s+push\s+.*--force.*\s+master/i,                 // force push master
   /\beval\s.*\brm\b/i,                                  // eval "rm ..."
   /\b(?:python|node|ruby|perl)\s+-e\s+.*(?:unlink|remove|delete)/i, // scripted deletion
+];
+
+/**
+ * Bash patterns that traverse the file tree to read or grep content.
+ * Blocked because the single-token deny check (which sees command
+ * names and standalone path arguments) can't tell that a recursive
+ * search will read sensitive files during the walk. Block as a class
+ * and direct the model to the Grep tool — that path has proper
+ * `isSensitivePathConfigured` guardrails during the recursive walk.
+ *
+ * Conservative scope: target the well-known recursive content
+ * searchers, not all directory traversal. Listing dirs (`ls -R`) is
+ * fine — it shows names, not content.
+ */
+export const BROAD_BASH_SEARCH_PATTERNS: RegExp[] = [
+  // grep -R / -r / --recursive — also -rn / -Rni / etc. (any flag
+  // combination that contains R or r anywhere in the cluster).
+  // The `[a-zA-Z]*[Rr][a-zA-Z]*` shape catches `-rn`, `-Rni`,
+  // `-vrln`, etc.; the optional middle clause lets other flags
+  // appear before the R/r cluster.
+  /\bgrep\b(?:[^|;&\n]*\s)?(-[a-zA-Z]*[Rr][a-zA-Z]*|--recursive)\b/,
+  // ripgrep — recursive by default. Block always; if the model needs
+  // ripgrep semantics they can use the Grep tool which uses rg
+  // under the hood with proper deny-list filtering.
+  /\brg\b/,
+  // PowerShell recursive search (`Select-String -Recurse`)
+  /\bSelect-String\b[^|;&]*\s-Recurse\b/i,
+  // Windows findstr with /s recursive flag
+  /\bfindstr\b[^|;&]*\s\/s\b/i,
+  // find ... -exec cat/grep/head/tail/etc — using find as a delivery
+  // mechanism for content reads
+  /\bfind\b[^|;&]+-exec\s+(cat|grep|head|tail|less|more|awk|sed)\b/,
+  // xargs piping into a reader — optional middle clause lets the
+  // reader appear immediately (`xargs grep`) OR after other args
+  // (`xargs -n 1 grep`).
+  /\|\s*xargs\s+(?:[^|;&]*\s)?(cat|grep|head|tail|less|more|awk|sed)\b/,
 ];
 
 const IMAGE_GEN_TOOLS = new Set([
@@ -721,6 +761,120 @@ function getSharedDirPrefixes(): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Bash token extraction (Cleanup-1.5 — sensitive-path deny-list)
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a Bash command into tokens that might be paths, for
+ * sensitive-path deny-list checking. Aggressively splits on shell
+ * metacharacters so common bypass shapes (redirection `< .env`,
+ * subshells `$(cat .env)`, semicolon-chained `ls; cat .env`) all
+ * surface the path token for inspection.
+ *
+ * Flag tokens (-X / --flag) are dropped EXCEPT for the value part
+ * of `--flag=value` constructs, so `--config=.env` still surfaces
+ * `.env` for checking.
+ *
+ * Exported via `__TEST_INTERNALS__` so tests can pin the token
+ * extraction directly; otherwise scoped to the hooks module.
+ */
+function extractBashTokens(command: string): string[] {
+  // Split on whitespace + common shell metacharacters. Quote and
+  // backtick characters are also boundaries — anything inside them
+  // becomes its own token after the split.
+  const parts = command.split(/[\s;|&<>()$`"']+/);
+  const out: string[] = [];
+  for (const t of parts) {
+    if (t.length === 0) continue;
+    if (t.startsWith('-')) {
+      // Flag — extract the value-after-equals if present, drop the
+      // flag itself. Covers `--config=.env`, `-f=.env` shapes.
+      const eqIdx = t.indexOf('=');
+      if (eqIdx > 0) {
+        const val = t.slice(eqIdx + 1);
+        if (val.length > 0) out.push(val);
+      }
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * True if the token contains a shell-glob metacharacter (`*`, `?`,
+ * or `[`). Used to switch the Bash token check between strict
+ * path-shape matching (concrete tokens) and fuzzy substring
+ * matching (wildcard tokens — shell expands these before the
+ * command runs, so we have to assume the worst-case expansion).
+ */
+function isGlobToken(token: string): boolean {
+  return /[*?[]/.test(token);
+}
+
+// True if the glob narrows the file set to a specific extension (or
+// a brace-expansion set of extensions). Used by the Claude Grep
+// deny-check to refuse over-broad scans that effectively scan
+// everything including secrets.
+//
+//   Narrow (allowed): `*.ts`, `*.md`, `*.svelte`, `**/*.ts`,
+//                     `src/**/*.svelte`, `*.{ts,tsx}`,
+//                     `**/*.{js,jsx}`, or a literal file path
+//                     like `src/server.ts`.
+//
+//   Broad (denied):   `*`, `**`, `**/*` (no extension constraint),
+//                     `*.*`, `**/*.*` (any-extension), `src/**`
+//                     (directory-only), empty.
+function isNarrowGlob(glob: string): boolean {
+  const trimmed = (glob ?? '').trim();
+  if (trimmed.length === 0) return false;
+  // Explicitly-broad shapes — `*`, `**`, `**/*`, `***`, `*/*`, etc.
+  if (/^[*]+(?:\/[*]+)*$/.test(trimmed)) return false;
+  // `*.*` and `**/*.*` — extension is itself a wildcard, so the
+  // glob matches every file.
+  if (/\.[*]+$/.test(trimmed)) return false;
+  // Specific extension at the end: `.ts`, `.md`, `.svelte`, etc.
+  if (/\.[a-zA-Z0-9_]+$/.test(trimmed)) return true;
+  // Brace expansion at the end: `*.{ts,tsx}`, `*.{js,jsx,mjs}`
+  if (/\.\{[a-zA-Z0-9_,]+\}$/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * True if the Grep `path` arg points at a specific file (not a
+ * directory). Lets `Grep({path:'src/server.ts'})` work without a
+ * glob — the path itself is the narrowing.
+ *
+ * Heuristic: no trailing slash + basename has a `.ext` suffix.
+ * Imperfect (a dir named `foo.bar/` would slip through if the
+ * trailing slash is missing) but conservative enough for the
+ * common case.
+ */
+function isSpecificFilePath(path: string): boolean {
+  if (!path) return false;
+  if (path.endsWith('/') || path.endsWith('\\')) return false;
+  const base = path.split(/[\\/]/).pop() ?? '';
+  if (/\.[a-zA-Z0-9_]+$/.test(base)) return true;
+  if (/\.\{[a-zA-Z0-9_,]+\}$/.test(base)) return true;
+  return false;
+}
+
+/** Exported for tests. */
+export const __HOOK_TEST_INTERNALS__ = {
+  extractBashTokens,
+  isGlobToken,
+  isNarrowGlob,
+  isSpecificFilePath,
+  // buildPreToolUse exposed via getter because it's defined later
+  // in this file (after the hook helpers). Tests use this to
+  // exercise the actual PreToolUse decision path end-to-end.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  get buildPreToolUse(): any {
+    return buildPreToolUse;
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Hook builders (unexported — used by factory)
 // ---------------------------------------------------------------------------
 
@@ -767,6 +921,121 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
       textOffset,
     });
 
+    // --- Security: sensitive-path deny-list for Claude SDK native
+    // tools (Cleanup-1.5). Mirrors the protection on the Codex tools
+    // — `isSensitivePathConfigured` / `bashOrGlobTargetsSensitive` are
+    // the shared brain. Without this, Claude turns could Read('.env'),
+    // Grep('.ssh/'), Glob('**/secrets.*'), or Bash('cat .env') and
+    // get the contents while Codex couldn't. Same house rule, both
+    // surfaces.
+    const cfg = getResonantConfig();
+    const scopeRoot = cfg.agent.cwd;
+
+    const denySensitive = (reason: string) => {
+      console.warn(`[Hook] BLOCKED sensitive-path: ${reason}`);
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse' as const,
+          permissionDecision: 'deny' as const,
+          permissionDecisionReason: reason,
+        },
+      };
+    };
+
+    // Read tool — single file path.
+    if (rawToolName === 'Read' && typeof toolInput?.file_path === 'string') {
+      const filePath = toolInput.file_path;
+      const resolvedPath = isAbsolute(filePath) ? filePath : resolve(scopeRoot, filePath);
+      const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+      if (match) {
+        return denySensitive(
+          `Blocked: Read targets sensitive file "${filePath}" (matched deny pattern). ` +
+          `Common secret files (.env / .ssh / credentials / keys / resonant.yaml / .mcp.json) ` +
+          `are refused at the hook layer. Ask Maggie directly if you need this information.`,
+        );
+      }
+    }
+
+    // Grep tool — `path` is search root, `glob` is basename filter,
+    // `pattern` is the regex to search for (NOT checked — searching
+    // FOR the word "password" in code is legitimate; reading a
+    // password from a file isn't).
+    if (rawToolName === 'Grep') {
+      if (typeof toolInput?.path === 'string') {
+        const p = toolInput.path;
+        const resolvedPath = isAbsolute(p) ? p : resolve(scopeRoot, p);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Grep search root "${p}" is a sensitive path. ` +
+            `Narrowing into .ssh / .gnupg / etc. is refused; Grep against ` +
+            `the project root with a tight pattern instead.`,
+          );
+        }
+      }
+      if (typeof toolInput?.glob === 'string') {
+        const frag = bashOrGlobTargetsSensitive(toolInput.glob);
+        if (frag) {
+          return denySensitive(
+            `Blocked: Grep glob "${toolInput.glob}" targets sensitive files ` +
+            `(fragment: "${frag}"). Use a less-specific glob and let the ` +
+            `pattern do the filtering.`,
+          );
+        }
+      }
+
+      // Broad-search deny (Cleanup-1.5 review evolved through three
+      // rounds):
+      //   v1: deny if path is root AND no glob → missed narrow paths
+      //       that contain secrets (`packages/backend/.env`)
+      //   v2 (now): require either a NARROW glob (specific extension)
+      //       OR a SPECIFIC FILE path. Subtree paths without glob
+      //       are denied because the walk would still hit `.env` in
+      //       any subdirectory that has one. Broad globs like `*`,
+      //       `**/*`, `*.*` are denied because they match all files.
+      const glob = typeof toolInput?.glob === 'string' ? toolInput.glob : '';
+      const path = typeof toolInput?.path === 'string' ? toolInput.path : '';
+      const narrowGlob = isNarrowGlob(glob);
+      const specificFilePath = isSpecificFilePath(path);
+      if (!narrowGlob && !specificFilePath) {
+        return denySensitive(
+          `Blocked: Grep without a narrow filter could walk into ` +
+          `committed-but-secret files. Either:\n` +
+          `  - Add a \`glob\` with a specific extension like ` +
+          `"*.ts", "*.md", "**/*.svelte", "*.{ts,tsx}".\n` +
+          `  - Or pass a \`path\` that points at a single file ` +
+          `(e.g. "src/server.ts"). Broad globs like "*", "**/*", ` +
+          `"*.*" are refused — they match every file regardless of ` +
+          `extension.`,
+        );
+      }
+    }
+
+    // Glob tool — `pattern` IS the file pattern (different from Grep's
+    // pattern). Both pattern and optional path are checked.
+    if (rawToolName === 'Glob') {
+      if (typeof toolInput?.pattern === 'string') {
+        const frag = bashOrGlobTargetsSensitive(toolInput.pattern);
+        if (frag) {
+          return denySensitive(
+            `Blocked: Glob pattern "${toolInput.pattern}" targets sensitive ` +
+            `files (fragment: "${frag}"). Use a broader pattern.`,
+          );
+        }
+      }
+      if (typeof toolInput?.path === 'string') {
+        const p = toolInput.path;
+        const resolvedPath = isAbsolute(p) ? p : resolve(scopeRoot, p);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Glob path "${p}" is a sensitive directory.`,
+          );
+        }
+      }
+    }
+
     // --- Security: Bash destructive patterns ---
     if (rawToolName === 'Bash' && toolInput?.command) {
       const cmd = String(toolInput.command);
@@ -781,6 +1050,70 @@ function buildPreToolUse(ctx: HookContext): HookCallback {
               permissionDecisionReason: `Blocked: destructive command pattern detected (${pattern.source})`,
             },
           };
+        }
+      }
+      // --- Security: Bash recursive content searches (Cleanup-1.5 review) ---
+      // The single-token deny check below catches `cat .env`, but not
+      // `grep -R DISCORD_TOKEN .` — the tokens are `grep`, flags, the
+      // pattern string, and `.`, none of which are sensitive-path
+      // shapes. Block recursive search commands as a class; the model
+      // has the Grep tool which has proper guardrails.
+      for (const pattern of BROAD_BASH_SEARCH_PATTERNS) {
+        if (pattern.test(cmd)) {
+          return denySensitive(
+            `Blocked: Bash recursive content search pattern (${pattern.source}) ` +
+            `could scan sensitive files. Use the Grep tool with a glob ` +
+            `filter (e.g. {pattern, glob: "*.ts"}) — it enforces the ` +
+            `sensitive-file deny-list during the walk.`,
+          );
+        }
+      }
+      // --- Security: Bash sensitive-path reads (Cleanup-1.5) ---
+      // Tokenize the command + check each token-as-path against the
+      // deny-list. Catches the conservative-but-meaningful cases:
+      //   cat .env / type .env / Get-Content .env
+      //   grep "pass" .env
+      //   rg "X" .ssh/config
+      //   ls .ssh / dir .ssh
+      //   < .env  (redirection — split treats '<' as boundary)
+      //   --config=.env  (flag with value extracted)
+      // Tokens that aren't shaped like paths (e.g. "cat", "grep")
+      // resolve to non-sensitive paths under scope, so they pass
+      // isSensitivePath naturally — no need for command-name filters.
+      //
+      // (Cleanup-1.5 review P1+): wildcards. `cat .env*` tokenizes to
+      // `['cat', '.env*']`. The token `.env*` resolved as a literal
+      // path doesn't match the deny regex (which expects path-shaped
+      // characters around the marker). Shell expands the wildcard at
+      // runtime, so `.env*` IS effectively `.env`. Split the token
+      // check by shape:
+      //   - GLOB tokens (contain `*`, `?`, `[`) → fuzzy fragment check
+      //   - Concrete tokens → strict path check
+      // This way `.env*` is caught (glob fragment) but `.env-loader.ts`
+      // is not (no wildcard, no path-pattern match).
+      const tokens = extractBashTokens(cmd);
+      for (const tok of tokens) {
+        if (isGlobToken(tok)) {
+          const frag = bashOrGlobTargetsSensitive(tok);
+          if (frag) {
+            return denySensitive(
+              `Blocked: Bash token "${tok}" is a wildcard targeting ` +
+              `sensitive files (fragment: "${frag}"). Shell expansion ` +
+              `would resolve it to one or more secret files; refused at ` +
+              `the hook layer.`,
+            );
+          }
+          continue;
+        }
+        const resolvedPath = isAbsolute(tok) ? tok : resolve(scopeRoot, tok);
+        const match = isSensitivePathConfigured(resolvedPath, scopeRoot);
+        if (match) {
+          return denySensitive(
+            `Blocked: Bash command references sensitive file "${tok}" ` +
+            `(matched deny pattern). Use the dedicated tools if you need ` +
+            `to inspect the config structure (a sanitized summary tool is ` +
+            `coming in a future arc).`,
+          );
         }
       }
     }
