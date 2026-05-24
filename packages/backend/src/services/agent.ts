@@ -6,7 +6,7 @@ import { CodexRuntime } from './runtimes/codex.js';
 import type { AgentRuntime, AgentTurnInput, NormalizedMessage } from './runtimes/types.js';
 import { buildCodexNormalizedMessages } from './runtimes/codex-history.js';
 import { buildProviderHandoff, renderProviderHandoffAsPrompt, type ProviderHandoff } from './handoff.js';
-import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions } from './db.js';
+import { createMessage, updateThreadSession, clearAllThreadSessions, getThread, updateThreadActivity, createSessionRecord, endSessionRecord, getConfig as getDbConfig, setConfig as setDbConfig, getMessages, getProviderSession, setProviderSession, hasProviderSessionsForThread, listProviderSessionsForThread, clearAllProviderSessions, appendAttachmentWarning } from './db.js';
 import { registry } from './registry.js';
 import { createHooks, buildOrientationContext, buildPulseOrientationContext, type HookContext, type ToolInsertion } from './hooks.js';
 import type { MessageSegment, ProviderShape, RuntimeId, MessageProvenance } from '@resonant/shared';
@@ -1499,6 +1499,11 @@ export class AgentService {
           // not just discover the silent absence after the model's
           // response lands. Frontend renders an inline pill near the
           // message keyed by `ownerMessageId`.
+          //
+          // Cleanup-2 — also persist into messages.metadata.attachmentWarnings
+          // so reload restores the pills. Live and persisted both dedupe
+          // by fileId per owner message — a retry that emits the same
+          // notices won't grow the metadata array unbounded.
           for (const notice of codexHistory.currentTurnFallbackNotices) {
             registry.broadcast({
               type: 'attachment_warning',
@@ -1507,6 +1512,21 @@ export class AgentService {
               filename: notice.filename,
               reason: notice.reason,
             });
+            try {
+              appendAttachmentWarning(notice.ownerMessageId, {
+                fileId: notice.fileId,
+                filename: notice.filename,
+                reason: notice.reason,
+              });
+            } catch (err) {
+              // Persistence failure shouldn't break the turn — the
+              // live WS pill already shipped, the user sees the
+              // warning. Just log so ops can investigate.
+              console.warn(
+                `[Codex] failed to persist attachment warning ${notice.fileId}:`,
+                err instanceof Error ? err.message : err,
+              );
+            }
           }
         }
 

@@ -45,6 +45,8 @@ export {
   listPendingPairings,
 } from './discord-pairings.js';
 export { addReaction, removeReaction } from './reactions.js';
+export type { PersistedAttachmentWarning } from './attachment-warnings.js';
+export { appendAttachmentWarning } from './attachment-warnings.js';
 export {
   saveEmbedding,
   getAllEmbeddings,
