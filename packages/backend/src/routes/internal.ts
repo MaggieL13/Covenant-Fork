@@ -17,8 +17,8 @@ import {
   listCanvases,
   updateCanvasContent,
   updateCanvasTags,
-  getStickerByRef,
-  getAllStickersWithPacks,
+  getCompanionStickerByRef,
+  getCompanionStickersWithPacks,
   createTimer,
   listPendingTimers,
   cancelTimer,
@@ -386,7 +386,10 @@ router.post('/sticker', (req, res) => {
         res.status(400).json({ error: 'packName, stickerName, and threadId are required' });
         return;
       }
-      const sticker = getStickerByRef(packName, stickerName);
+      // Companion-scoped lookup: user_only (human-private) packs return
+      // null here, so the companion gets a plain "not found" and can't
+      // send the human's private stickers via this path.
+      const sticker = getCompanionStickerByRef(packName, stickerName);
       if (!sticker) {
         res.status(404).json({ error: `Sticker not found: :${packName}_${stickerName}:` });
         return;
@@ -409,7 +412,8 @@ router.post('/sticker', (req, res) => {
       registry.broadcast({ type: 'message', message: msg });
       res.json({ success: true, message: msg });
     } else if (action === 'list') {
-      const stickers = getAllStickersWithPacks();
+      // Companion-scoped: excludes user_only (human-private) packs.
+      const stickers = getCompanionStickersWithPacks();
       const grouped: Record<string, string[]> = {};
       for (const s of stickers) {
         if (!grouped[s.pack_name]) grouped[s.pack_name] = [];

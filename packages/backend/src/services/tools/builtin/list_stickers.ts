@@ -42,7 +42,7 @@
  * see the catalog is through this tool.
  */
 
-import { getAllStickersWithPacks } from '../../db/stickers.js';
+import { getCompanionStickersWithPacks } from '../../db/stickers.js';
 import { applyOutputBudget } from '../output-budget.js';
 import type { CovenantTool } from '../registry.js';
 
@@ -65,10 +65,12 @@ interface CatalogEntry {
  * (registry, args validation, output budget).
  */
 export function buildStickerCatalog(): CatalogEntry[] {
-  const rows = getAllStickersWithPacks();
+  // getCompanionStickersWithPacks already excludes user_only packs at
+  // the query layer — the single source of truth shared with the hook
+  // catalog and `sc sticker` paths, so no inline filter needed here.
+  const rows = getCompanionStickersWithPacks();
   const catalog: CatalogEntry[] = [];
   for (const row of rows) {
-    if (row.user_only) continue;
     const packSegment = row.pack_name.toLowerCase();
     const nameSegment = row.name.toLowerCase();
     const aliasRefs = (row.aliases ?? []).map(

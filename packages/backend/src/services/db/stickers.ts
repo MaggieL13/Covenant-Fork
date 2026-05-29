@@ -76,6 +76,29 @@ export function getStickerByRef(packName: string, stickerName: string): Sticker 
   return row ? rowToSticker(row) : null;
 }
 
+/**
+ * Companion-scoped variant of `getStickerByRef`. Returns `null` when
+ * the referenced sticker belongs to a `user_only` pack — those are
+ * the human's private stickers and must never be sendable by the
+ * companion, regardless of which path requests them (Codex tool, hook
+ * catalog, `sc sticker send`).
+ *
+ * The `user_only` filter lives in SQL (`AND p.user_only = 0`) so the
+ * private row never leaves the DB on a companion path — defense in
+ * depth over a JS-side `.filter`. The user-facing HTTP routes keep
+ * using the unfiltered `getStickerByRef` / `getAllStickersWithPacks`
+ * because Maggie's own surface legitimately manages private packs.
+ */
+export function getCompanionStickerByRef(packName: string, stickerName: string): Sticker | null {
+  const row = getDb().prepare(`
+    SELECT s.* FROM stickers s
+    JOIN sticker_packs p ON p.id = s.pack_id
+    WHERE LOWER(p.name) = LOWER(?) AND LOWER(s.name) = LOWER(?)
+      AND p.user_only = 0
+  `).get(packName, stickerName);
+  return row ? rowToSticker(row) : null;
+}
+
 export function listStickers(packId?: string): Sticker[] {
   if (packId) {
     const rows = getDb().prepare('SELECT * FROM stickers WHERE pack_id = ? ORDER BY sort_order ASC').all(packId);
@@ -107,6 +130,39 @@ export function getAllStickersWithPacks(): Array<Sticker & { pack_name: string; 
   const rows = getDb().prepare(`
     SELECT s.*, p.name as pack_name, p.user_only FROM stickers s
     JOIN sticker_packs p ON p.id = s.pack_id
+    ORDER BY p.name ASC, s.sort_order ASC
+  `).all();
+  return rows.map((row) => ({
+    ...rowToSticker(row),
+    pack_name: (row as any).pack_name,
+    user_only: !!(row as any).user_only,
+  }));
+}
+
+/**
+ * Companion-visible sticker catalog — `getAllStickersWithPacks` minus
+ * every `user_only` pack. This is the SINGLE source of truth for
+ * "what stickers may a companion see or reference." Every
+ * companion-facing surface (the `list_stickers` Codex tool, the hook
+ * catalog injection, `sc sticker list`) reads from here, so a future
+ * caller is filtered by default rather than re-deriving the rule and
+ * drifting (which is exactly how the legacy paths leaked before this
+ * fix).
+ *
+ * The `user_only` rows are excluded in SQL so they never leave the
+ * DB on a companion path. User-facing HTTP routes deliberately keep
+ * the unfiltered `getAllStickersWithPacks` — the human manages their
+ * own private packs there.
+ *
+ * The returned rows still carry `user_only` (always `false` here) so
+ * the shape matches `getAllStickersWithPacks` and callers can be
+ * swapped without further changes.
+ */
+export function getCompanionStickersWithPacks(): Array<Sticker & { pack_name: string; user_only: boolean }> {
+  const rows = getDb().prepare(`
+    SELECT s.*, p.name as pack_name, p.user_only FROM stickers s
+    JOIN sticker_packs p ON p.id = s.pack_id
+    WHERE p.user_only = 0
     ORDER BY p.name ASC, s.sort_order ASC
   `).all();
   return rows.map((row) => ({
