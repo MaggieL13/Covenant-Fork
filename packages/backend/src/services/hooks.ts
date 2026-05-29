@@ -13,7 +13,7 @@ import type {
   HookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { MODELS, type Reaction } from '@resonant/shared';
-import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas, getAllStickersWithPacks } from './db.js';
+import { createMessage, updateThreadActivity, getMessages, getConfig, setConfig, getActiveTriggers, getCanvas, getCompanionStickersWithPacks } from './db.js';
 import { logToolUse } from './audit.js';
 import { saveFile, saveFileFromBase64, saveFileInternal, getContentTypeFromMime } from './files.js';
 import { getResonantConfig } from '../config.js';
@@ -1354,10 +1354,9 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   parts.push(`Time: ${timeStr} ${timezone} \u2014 ${dateStr}`);
 
   // Sticker awareness — always injected so the companion knows stickers are available
-  // Excludes user_only packs (those are for the human's use only)
+  // getCompanionStickersWithPacks excludes user_only packs (the human's private stickers)
   try {
-    const stickerData = getAllStickersWithPacks();
-    const agentStickers = stickerData.filter(s => !s.user_only);
+    const agentStickers = getCompanionStickersWithPacks();
     if (agentStickers.length > 0) {
       const packNames = [...new Set(agentStickers.map(s => s.pack_name))];
       parts.push(`Custom stickers: Packs: ${packNames.join(', ')}. Two ways to use: (1) :packname_stickername: in your text for small inline emoji, (2) \`sc sticker send <pack> <name>\` to send a big standalone sticker as its own message. Use naturally when the mood fits.`);
@@ -1543,9 +1542,10 @@ export async function buildOrientationContext(ctx: HookContext, includeStatic = 
   }
 
   // Available stickers — inject compact catalog when sticker keywords detected
+  // getCompanionStickersWithPacks excludes user_only packs (the human's private stickers)
   if (shouldInjectToolReference(ctx, userMessage)) {
     try {
-      const stickers = getAllStickersWithPacks();
+      const stickers = getCompanionStickersWithPacks();
       if (stickers.length > 0) {
         const grouped: Record<string, string[]> = {};
         for (const s of stickers) {

@@ -125,8 +125,10 @@ export {
   createSticker,
   getSticker,
   getStickerByRef,
+  getCompanionStickerByRef,
   listStickers,
   updateSticker,
   deleteSticker,
   getAllStickersWithPacks,
+  getCompanionStickersWithPacks,
 } from './stickers.js';
