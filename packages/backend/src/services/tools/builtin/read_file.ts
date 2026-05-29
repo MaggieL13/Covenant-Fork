@@ -98,9 +98,19 @@ async function execute(rawArgs: unknown, ctx: ToolContext): Promise<string> {
   // the user instead of trying again).
   const sensitiveMatch = isSensitivePathConfigured(resolvedPath, ctx.scopeRoot);
   if (sensitiveMatch) {
+    const lowerPath = rawArgs.path.toLowerCase();
+    const isConfig =
+      lowerPath.includes('.mcp.json') ||
+      lowerPath.includes('resonant.yaml') ||
+      lowerPath.includes('resonant.yml');
+    const alternative = isConfig
+      ? 'For MCP servers and resonant.yaml config use summarize_mcp_config (it shows the structure with secrets redacted).'
+      : lowerPath.includes('stickers')
+        ? 'For stickers use list_stickers.'
+        : 'Ask the user directly if you need this information.';
     return structuredError(
       'sensitive_path',
-      `File "${rawArgs.path}" is on the tool-layer deny-list (pattern: ${sensitiveMatch}). Certain paths — system secrets (.env / .ssh / credentials / keys) and binary asset stores (e.g. sticker images) — are refused regardless of model intent. For stickers use list_stickers; for secrets ask the user directly.`,
+      `File "${rawArgs.path}" is on the tool-layer deny-list (pattern: ${sensitiveMatch}). Certain paths — system secrets (.env / .ssh / credentials / keys), binary asset stores (e.g. sticker images), and config holding secrets (.mcp.json / resonant.yaml) — are refused regardless of model intent. ${alternative}`,
     );
   }
 

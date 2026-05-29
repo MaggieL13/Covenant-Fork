@@ -13,6 +13,7 @@ import type { MessageSegment, ProviderShape, RuntimeId, MessageProvenance } from
 import { normalizeThinkingSegment } from '@resonant/shared';
 import type { PushService } from './push.js';
 import { getResonantConfig } from '../config.js';
+import { loadMcpServersFromConfig } from './mcp-config.js';
 import crypto from 'crypto';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -53,27 +54,22 @@ function ensureInit() {
     }
   }
 
-  // Load .mcp.json
-  const mcpJsonPath = config.agent.mcp_json_path;
-  if (existsSync(mcpJsonPath)) {
-    try {
-      const mcpJson = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'));
-      if (mcpJson.mcpServers) {
-        for (const [name, mcpCfg] of Object.entries(mcpJson.mcpServers) as [string, any][]) {
-          if (mcpCfg.type === 'url' || mcpCfg.type === 'http') {
-            mcpServersFromConfig[name] = { type: 'http', url: mcpCfg.url, headers: mcpCfg.headers };
-          } else if (mcpCfg.type === 'sse') {
-            mcpServersFromConfig[name] = { type: 'sse', url: mcpCfg.url, headers: mcpCfg.headers };
-          } else if (!mcpCfg.type || mcpCfg.type === 'stdio') {
-            mcpServersFromConfig[name] = { command: mcpCfg.command, args: mcpCfg.args, env: mcpCfg.env };
-          }
-        }
-        console.log(`Loaded ${Object.keys(mcpServersFromConfig).length} MCP servers from .mcp.json: ${Object.keys(mcpServersFromConfig).join(', ')}`);
-      }
-    } catch (err) {
-      console.warn('Failed to load .mcp.json:', err instanceof Error ? err.message : err);
-    }
+  // Load .mcp.json — parse lives in services/mcp-config.ts (shared
+  // single source of truth with the summarize_mcp_config tool). Clear
+  // first so a reinit drops servers that were removed from the file.
+  for (const key of Object.keys(mcpServersFromConfig)) delete mcpServersFromConfig[key];
+  Object.assign(mcpServersFromConfig, loadMcpServersFromConfig());
+  const mcpNames = Object.keys(mcpServersFromConfig);
+  if (mcpNames.length > 0) {
+    console.log(`Loaded ${mcpNames.length} MCP servers from .mcp.json: ${mcpNames.join(', ')}`);
   }
+
+  // The MCP server set was just (re)loaded. Reset the cached status so
+  // it re-seeds from the new config on next access — otherwise an
+  // in-app MCP edit (which triggers reinit) would leave the status
+  // panel showing the previous server list until a live refresh.
+  mcpStatusSeeded = false;
+  cachedMcpStatus = [];
 }
 
 // ---------------------------------------------------------------------------
