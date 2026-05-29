@@ -563,14 +563,15 @@ describe('search_text', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('registerBuiltinTools', () => {
-  it('registers all four tools on a fresh registry', () => {
+  it('registers all five tools on a fresh registry', () => {
     const registry = new ToolRegistry();
     registerBuiltinTools(registry);
-    expect(registry.size()).toBe(4);
+    expect(registry.size()).toBe(5);
     expect(registry.get('read_file')).toBeDefined();
     expect(registry.get('list_files')).toBeDefined();
     expect(registry.get('search_text')).toBeDefined();
     expect(registry.get('list_stickers')).toBeDefined();
+    expect(registry.get('summarize_mcp_config')).toBeDefined();
   });
 
   it('throws on double-registration (delegates to registry.register)', () => {

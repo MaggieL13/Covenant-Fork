@@ -12,11 +12,13 @@ import { readFileTool } from './read_file.js';
 import { listFilesTool } from './list_files.js';
 import { searchTextTool } from './search_text.js';
 import { listStickersTool } from './list_stickers.js';
+import { summarizeMcpConfigTool } from './summarize_mcp_config.js';
 
 export { readFileTool } from './read_file.js';
 export { listFilesTool } from './list_files.js';
 export { searchTextTool } from './search_text.js';
 export { listStickersTool } from './list_stickers.js';
+export { summarizeMcpConfigTool } from './summarize_mcp_config.js';
 
 /**
  * Register the full E3b built-in tool set on a `ToolRegistry`.
@@ -28,4 +30,5 @@ export function registerBuiltinTools(registry: ToolRegistry): void {
   registry.register(listFilesTool);
   registry.register(searchTextTool);
   registry.register(listStickersTool);
+  registry.register(summarizeMcpConfigTool);
 }
